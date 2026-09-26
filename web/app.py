@@ -1270,7 +1270,12 @@ def api_clear_posts():
 
 @app.route("/api/posts", methods=["GET"])
 def api_get_posts():
-    return jsonify(load_posts())
+    posts = load_posts()
+    # Sắp xếp bài mới lên lịch / mới đăng lên đầu danh sách (Newest First)
+    def _sort_key(p):
+        return p.get("created_at") or p.get("scheduled_time") or ""
+    posts.sort(key=_sort_key, reverse=True)
+    return jsonify(posts)
 
 @app.route("/api/posts", methods=["POST"])
 def api_save_post():
