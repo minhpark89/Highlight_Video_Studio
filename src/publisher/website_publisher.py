@@ -2,7 +2,11 @@ import os
 import sys
 import json
 import re
-import cv2
+try:
+    import cv2
+    HAS_CV2 = True
+except Exception:
+    HAS_CV2 = False
 import subprocess
 import logging
 from pathlib import Path
@@ -260,21 +264,36 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str) -> t
 
     if video_path.exists() and sess:
         try:
-            cap = cv2.VideoCapture(str(video_path))
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            if total_frames > 10:
-                for idx, pct in enumerate([0.40, 0.80]):
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, int(total_frames * pct))
-                    ret, frame = cap.read()
-                    if ret:
-                        fpath = HVS_DIR / "temp" / f"body_frame_{Path(clip_filename).stem}_{idx}.jpg"
-                        cv2.imwrite(str(fpath), frame)
+            if HAS_CV2:
+                cap = cv2.VideoCapture(str(video_path))
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                if total_frames > 10:
+                    for idx, pct in enumerate([0.40, 0.80]):
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, int(total_frames * pct))
+                        ret, frame = cap.read()
+                        if ret:
+                            fpath = HVS_DIR / "temp" / f"body_frame_{Path(clip_filename).stem}_{idx}.jpg"
+                            cv2.imwrite(str(fpath), frame)
+                            try:
+                                cdn_link = svc._presign_and_upload(sess, str(fpath))
+                                body_imgs_cdn.append(cdn_link)
+                            except Exception:
+                                pass
+                cap.release()
+            else:
+                ffmpeg_bin = str(HVS_DIR / "bin" / "ffmpeg.exe")
+                if not os.path.exists(ffmpeg_bin):
+                    ffmpeg_bin = "ffmpeg"
+                for idx, ss in enumerate(["00:00:03", "00:00:08"]):
+                    fpath = HVS_DIR / "temp" / f"body_frame_{Path(clip_filename).stem}_{idx}.jpg"
+                    fpath.parent.mkdir(parents=True, exist_ok=True)
+                    subprocess.run([ffmpeg_bin, "-y", "-ss", ss, "-i", str(video_path), "-vframes", "1", "-q:v", "2", str(fpath)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    if fpath.exists():
                         try:
                             cdn_link = svc._presign_and_upload(sess, str(fpath))
                             body_imgs_cdn.append(cdn_link)
                         except Exception:
                             pass
-            cap.release()
         except Exception as e:
             logger.warning(f"Error extracting body frames: {e}")
 

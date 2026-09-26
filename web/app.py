@@ -29,16 +29,33 @@ if str(ROOT_DIR) not in sys.path:
 os.chdir(str(ROOT_DIR))
 
 from flask import Flask, request, jsonify, render_template, send_from_directory
-from src.pipeline import (
-    download_video_and_audio,
-    get_youtube_transcript,
-    transcribe_local_whisper,
-    ask_llm_for_highlights,
-    render_highlight_clip,
-    extract_video_id
-)
-from src.research import search_videos
-from src.content_builder import generate_viral_content, render_stylish_thumbnail, test_and_pick_active_llm
+# Lazy / safe imports for heavy processing modules
+def get_pipeline_tools():
+    from src.pipeline import (
+        download_video_and_audio,
+        get_youtube_transcript,
+        transcribe_local_whisper,
+        ask_llm_for_highlights,
+        render_highlight_clip,
+        extract_video_id
+    )
+    return download_video_and_audio, get_youtube_transcript, transcribe_local_whisper, ask_llm_for_highlights, render_highlight_clip, extract_video_id
+
+def search_videos(*args, **kwargs):
+    from src.research import search_videos as _sv
+    return _sv(*args, **kwargs)
+
+def generate_viral_content(*args, **kwargs):
+    from src.content_builder import generate_viral_content as _gvc
+    return _gvc(*args, **kwargs)
+
+def render_stylish_thumbnail(*args, **kwargs):
+    from src.content_builder import render_stylish_thumbnail as _rst
+    return _rst(*args, **kwargs)
+
+def test_and_pick_active_llm(*args, **kwargs):
+    from src.content_builder import test_and_pick_active_llm as _tpl
+    return _tpl(*args, **kwargs)
 
 from src.publisher.token_vault import TokenVault
 from src.publisher.page_manager import PageManager

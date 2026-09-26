@@ -1,0 +1,5 @@
+flask
+waitress
+requests
+yt-dlp
+pillow
