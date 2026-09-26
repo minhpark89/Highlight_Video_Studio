@@ -3568,8 +3568,8 @@
 
   
   async function rebalanceTokenPageAllocation() {
-    const inputVal = parseInt(document.getElementById('pages-per-token-input').value) || 3;
-    if (!confirm(`Xác nhận: Tự động phân bổ lại toàn bộ 100 Fanpage vào dàn Token trong Vault (Tối đa ~${inputVal} Page/Token, tự động xoay vòng cân bằng tải 100%)?`)) {
+    const inputVal = parseInt(document.getElementById('pages-per-token-input').value) || 4;
+    if (!confirm(`Xác nhận: Tự động phân bổ lại toàn bộ Fanpage vào dàn Token trong Vault theo tỷ lệ tối đa ${inputVal} Page/Token (Tự động xoay vòng bù trừ để 100% Page đều có Token)?`)) {
       return;
     }
 
@@ -3588,14 +3588,24 @@
         alert('Không có token nào trong Vault để phân bổ!');
         return;
       }
+      if (pages.length === 0) {
+        alert('Chưa có Fanpage nào để phân bổ!');
+        return;
+      }
 
-      // THUẬT TOÁN CHIA ĐỀU TỰ ĐỘNG THÔNG MINH (Cân bằng tải tuyệt đối):
-      // Dù số page không chia hết cho số token (ví dụ: 100 page / 31 token = 3.22)
-      // Hệ thống chia đều xoay vòng round-robin: 24 Token gánh 3 Page, 7 Token gánh 4 Page
-      // Đảm bảo KHÔNG CÓ BẤT KỲ PAGE NÀO BỊ THIẾU TOKEN!
+      // THUẬT TOÁN TỰ ĐỘNG CHIA THEO INPUT CỦA BOSS (BẤT KỲ SỐ LƯỢNG TOKEN & PAGE NÀO):
+      // Gán lần lượt từng token gánh tối đa inputVal page.
+      // Nếu dàn token còn dư hoặc thiếu, tự động xoay vòng (round-robin)
+      // Đảm bảo: 100/100 Page đều có Token, không có bất kỳ Page nào bị bỏ sót!
       const assignments = [];
+      const numTokens = tokens.length;
       pages.forEach((p, idx) => {
-        const tokenObj = tokens[idx % tokens.length];
+        // Nếu số token * inputVal < số page (ví dụ boss chọn 3 page/token mà có 100 page / 31 token):
+        // Xoay vòng chia đều idx % numTokens
+        const tokenObj = (numTokens * inputVal < pages.length)
+          ? tokens[idx % numTokens]
+          : tokens[Math.floor(idx / inputVal) % numTokens];
+
         assignments.push({
           page_id: p.page_id,
           token_id: tokenObj.id,
@@ -3615,8 +3625,8 @@
         alert(`✅ Đã phân bổ đều thành công 100%!
 - Tổng: ${pages.length} Fanpage
 - Dàn: ${tokens.length} Token
-- Tỷ lệ thực tế: ~${avg} Page/Token (24 Token gánh 3 trang, 7 Token gánh 4 trang).
-- Đảm bảo 100/100 Page đều có Token hoạt động!`);
+- Tỷ lệ thực tế: ~${avg} Page/Token
+- Đảm bảo 100/100 Page đều được gán Token hoạt động!`);
         loadTokensOnly();
         if (typeof loadTokensAndPages === 'function') loadTokensAndPages();
       } else {
@@ -4963,6 +4973,32 @@
   function runLoHaBatchSchedule(groupId, groupName) {
     document.getElementById('sched-conf-group-id').value = groupId;
     document.getElementById('sched-conf-group-name').innerText = groupName;
+
+    // Tìm cấu hình khung giờ của nhóm được lưu trữ trong allGroups (hoặc fetch)
+    const grp = (window.allGroupsCached || []).find(g => g.id === groupId);
+    const selectElem = document.getElementById('sched-conf-posts-per-page');
+    const noteElem = document.getElementById('sched-conf-times-preview');
+
+    let groupTimes = ['11:30', '19:30'];
+    if (grp && grp.schedule_config && grp.schedule_config.times && grp.schedule_config.times.length) {
+      groupTimes = grp.schedule_config.times;
+    }
+
+    if (selectElem) {
+      let optionsHtml = '';
+      const totalSlots = groupTimes.length;
+      for (let i = 1; i <= Math.min(totalSlots, 6); i++) {
+        const selected = (i === totalSlots || i === 2) ? 'selected' : '';
+        const slotText = groupTimes.slice(0, i).join(', ');
+        optionsHtml += `<option value="${i}" ${selected}>${i} bài / ngày / page (Khung giờ: ${slotText})</option>`;
+      }
+      selectElem.innerHTML = optionsHtml;
+    }
+
+    if (noteElem) {
+      noteElem.innerHTML = `Khung giờ cấu hình của nhóm: <strong style="color: #38bdf8;">${groupTimes.join(' | ')}</strong> (Giãn cách: ${(grp && grp.schedule_config && grp.schedule_config.stagger_minutes) || 15} phút/page)`;
+    }
+
     document.getElementById('modal-schedule-config').style.display = 'flex';
   }
 
@@ -5024,6 +5060,7 @@
       ]);
       const groupsData = await resG.json();
       const groups = Array.isArray(groupsData) ? groupsData : (groupsData.groups || []);
+      window.allGroupsCached = groups;
       const clipsData = await resC.json();
       const clips = Array.isArray(clipsData) ? clipsData : (clipsData.clips || []);
       const unpostedClips = clips.filter(c => !c.is_posted);
@@ -5994,6 +6031,9 @@ async function loadPostsTable() {
           <option value="2">2 bài / ngày / page (Trải đều 2 khung giờ)</option>
           <option value="4" selected>4 bài / ngày / page (Phủ kín 4 khung giờ: Sáng, Trưa, Chiều, Tối)</option>
         </select>
+        <div id="sched-conf-times-preview" style="font-size: 12px; color: #94a3b8; background: #0f172a; padding: 6px 10px; border-radius: 6px; border: 1px dashed #334155; margin-top: 6px;">
+          Khung giờ cấu hình: Đang tải...
+        </div>
         <div style="font-size: 11px; color: #64748b; margin-top: 4px;">
           Theo quy tắc 1 Video : 1 Page, hệ thống sẽ bốc số lượng video độc nhất từ kho tương ứng.
         </div>

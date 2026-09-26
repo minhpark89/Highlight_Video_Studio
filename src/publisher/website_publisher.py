@@ -10,7 +10,7 @@ import requests
 
 logger = logging.getLogger("website_publisher")
 
-HVS_DIR = Path(r"D:\Highlight_Video_Studio")
+HVS_DIR = Path(__file__).resolve().parent.parent.parent
 NVS_DIR = Path(r"D:\News_Video_Studio")
 sys.path.insert(0, str(HVS_DIR))
 sys.path.insert(0, str(NVS_DIR))

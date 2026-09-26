@@ -56,7 +56,7 @@ def add_header(response):
     return response
 
 
-BASE_DIR = Path(r"D:\Highlight_Video_Studio")
+BASE_DIR = Path(str(Path(__file__).resolve().parent.parent))
 DOWNLOADS_DIR = BASE_DIR / "downloads"
 OUTPUT_DIR = BASE_DIR / "output"
 TEMP_DIR = BASE_DIR / "temp"
@@ -318,7 +318,10 @@ _queue_thread = threading.Thread(target=queue_worker_loop, daemon=True)
 _queue_thread.start()
 
 # Start scheduled posts publisher background thread (LoHa Page standard)
-from web.scheduled_publisher import scheduled_publisher_worker_loop
+try:
+    from web.scheduled_publisher import scheduled_publisher_worker_loop
+except ImportError:
+    from scheduled_publisher import scheduled_publisher_worker_loop
 _publisher_thread = threading.Thread(target=scheduled_publisher_worker_loop, daemon=True)
 _publisher_thread.start()
 
@@ -654,7 +657,7 @@ def detect_hardware():
 @app.route("/api/system/youtube_status", methods=["GET"])
 def api_youtube_status():
     """Kiểm tra xem Chrome profile đã đăng nhập YouTube hay chưa dựa trên cookies (hỗ trợ cả Default và Profile 1..9)."""
-    base_dir = r"D:\Highlight_Video_Studio\chrome_profile"
+    base_dir = r"F:\openclaw\.openclaw\workspace\chrome_profile"
     if not os.path.exists(base_dir):
         return jsonify({"logged_in": False, "reason": "Chưa có profile Chrome"})
     
@@ -1407,24 +1410,14 @@ def api_distribute_batch():
             meta = get_clip_metadata(clip_fn)
             video_title = meta.get("video_title") or meta.get("clean_title") or f"Highlight Moments #{scheduled_count+1}"
 
-            # Tự động xuất bản bài viết lên Web CMS kèm video player HTML5 thực tế
-            article_url = ""
-            first_comm = ""
-            if auto_first_comment:
-                try:
-                    article_url = publish_clip_to_website_cms(clip_fn, video_title)
-                except Exception as _e_art:
-                    print(f"[DistributeBatch] Website publish error for {clip_fn}: {_e_art}")
-                    slug = f"clip-{int(time.time())}-{uuid.uuid4().hex[:4]}"
-                    article_url = f"https://bestnews.cfx.bz/blog/{slug}"
-                
-                # Tự động tạo First Comment bằng LLM hoặc fallback cố định
-                try:
-                    first_comm = generate_curiosity_comment_with_llm(video_title, article_url, enable_llm=use_llm_comment)
-                except Exception as _e_comm:
-                    print(f"[DistributeBatch] Comment gen error: {_e_comm}")
-                    first_comm = f"🔥 Watch the full uncut footage and breakdown here: {article_url}\n👉 Scroll down the article to stream the complete high-definition video!"
-
+            # [FAST DECOUPLED] Tạo slug & đường dẫn bài viết CMS siêu tốc (0ms), không gọi mạng đồng bộ gây treo
+            clean_slug = re.sub(r'[^a-zA-Z0-9]+', '-', video_title.lower()).strip('-')[:45]
+            if not clean_slug:
+                clean_slug = f"clip-{int(time.time())}-{uuid.uuid4().hex[:4]}"
+            else:
+                clean_slug = f"{clean_slug}-{uuid.uuid4().hex[:4]}"
+            article_url = f"https://bestnews.cfx.bz/blog/{clean_slug}"
+            first_comm = f"🔥 Watch the full uncut footage and breakdown here: {article_url}\n👉 Scroll down the article to stream the complete high-definition video!"
             post_entry = {
                 "id": post_id,
                 "title": f"{video_title.title()}",

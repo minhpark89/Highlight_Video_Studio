@@ -6,7 +6,7 @@ import requests
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageOps
 
-BASE_DIR = Path(r"D:\Highlight_Video_Studio")
+BASE_DIR = Path(__file__).resolve().parent.parent
 TEMP_DIR = BASE_DIR / "temp"
 OUTPUT_DIR = BASE_DIR / "output"
 
