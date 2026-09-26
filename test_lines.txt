@@ -1,0 +1,16 @@
+﻿        if (res.ok) successCount++;
+      } catch (err) {
+        console.error('Lỗi tạo job:', err);
+      }
+    }
+
+    showToast(`Đã thêm thành công ${successCount}/${count} video vào Hàng đợi Jobs!`);
+    loadJobsTable();
+    switchTab('jobs');
+  }
+
+  // ================= HARDWARE AUTO-DETECT & SETTINGS =================
+  async function loadSystemHardwareInfo() {
+    try {
+      const res = await fetch('/api/system/info');
+      if (!res.ok) return;

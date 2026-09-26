@@ -1,0 +1,48 @@
+<!-- Box 2: Tự nhiên hóa & Giới hạn an toàn -->
+          <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 16px;">
+            <div style="font-size: 13px; font-weight: 700; color: #c084fc; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+              <i class="bi bi-shield-check"></i> Giới hạn bài đăng & Cơ chế phân bổ
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+              
+        <!-- Nội dung bài đăng (Caption) -->
+        <div style="margin-bottom: 15px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <label class="form-label" style="font-size: 12px; font-weight: 700; color: #cbd5e1; margin-bottom: 0;">2. Tiêu đề & Nội dung Facebook Reel:</label>
+            <span style="font-size: 11px; color: #64748b;">Hỗ trợ Hashtags</span>
+          </div>
+          <textarea id="pub-caption" class="form-control" rows="4" style="font-size: 12.5px; line-height: 1.4; background: #0f172a; border-color: #334155;" placeholder="Nội dung status đính kèm clip Reel..."></textarea>
+        </div>
+        <!-- First Comment viral & link web -->
+        <div style="margin-bottom: 15px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <label class="form-label" style="font-size: 12px; font-weight: 700; color: #f59e0b; margin-bottom: 0;">
+              <i class="bi bi-chat-left-text-fill"></i> 3. First Comment tự động (Kèm Link website kéo traffic):
+            </label>
+            <span class="badge" style="background: rgba(34, 197, 94, 0.15); color: #22c55e; font-size: 11px;"><i class="bi bi-magic"></i> Auto sinh từ Website Bài Viết</span>
+          </div>
+          <input type="text" id="pub-first-comment" class="form-control" style="font-size: 12.5px; background: #0f172a; border-color: #334155;" placeholder="Bình luận đầu tiên tạo tò mò + link website (VD: Xem bản nét căng tại https://...)">
+        </div>
+        <!-- Chế độ Xuất bản / Lên lịch (Schedule) -->
+        <div style="background: #091124; border: 1px solid #1e293b; border-radius: 8px; padding: 14px; margin-bottom: 15px;">
+          <label class="form-label" style="font-size: 12px; font-weight: 700; color: #cbd5e1; margin-bottom: 10px;">4. Chế độ đăng bài:</label>
+          <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 10px;">
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer; color: #22c55e; font-weight: 600;">
+              <input type="radio" name="pub_mode" value="now" checked onchange="toggleScheduleOptions()"> 
+              <i class="bi bi-lightning-charge-fill"></i> Đăng ngay (Publish Now)
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer; color: #a855f7; font-weight: 600;">
+              <input type="radio" name="pub_mode" value="schedule" onchange="toggleScheduleOptions()"> 
+              <i class="bi bi-calendar-event-fill"></i> Hẹn giờ lên lịch (Meta Scheduled)
+            </label>
+          </div>
+          <!-- Schedule Options Form (Ẩn/Hiện) -->
+          <div id="pub-schedule-box" style="display: none; padding-top: 10px; border-top: 1px dashed #1e293b;">
+            <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px;">
+              <div>
+                <label style="font-size: 11px; color: #94a3b8;">Thời gian bắt đầu đăng (Giờ hệ thống):</label>
+                <input type="datetime-local" id="pub-schedule-datetime" class="form-control" style="font-size: 12px; background: #0f172a; border-color: #334155;">
+                <div style="font-size: 10.5px; color: #64748b; margin-top: 3px;">* Meta yêu cầu tối thiểu sau hiện tại 15 phút.</div>
+              </div>
+              <div>
+                

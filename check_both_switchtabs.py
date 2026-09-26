@@ -1,0 +1,15 @@
+from pathlib import Path
+
+index_path = Path(r"D:\Highlight_Video_Studio\web\templates\index.html")
+html = index_path.read_text(encoding="utf-8")
+
+# Let's inspect the body switchTab
+pos = html.find('window.switchTab = function')
+pos2 = html.find('window.switchTab = function', pos + 30)
+
+print("pos1:", pos, "pos2:", pos2)
+if pos2 != -1:
+    pos2_end = html.find('};\n', pos2)
+    if pos2_end == -1: pos2_end = html.find('};', pos2)
+    print("=== POS2 snippet ===")
+    print(html[pos2:pos2+1200])

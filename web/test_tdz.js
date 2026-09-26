@@ -1,0 +1,1 @@
+function foo() { x = 1; } foo(); let x;

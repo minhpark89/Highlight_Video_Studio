@@ -1,0 +1,12 @@
+{
+  "slots": [
+    "17:30",
+    "20:30"
+  ],
+  "stagger_min": 20,
+  "stagger_max": 20,
+  "auto_comment": true,
+  "include_website_link": true,
+  "folder_binding_mode": "1_video_1_page",
+  "updated_at": "2026-09-25 21:06:39"
+}

@@ -1,0 +1,158 @@
+<section id="pane-pages" class="pane">
+        <div class="panel-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <div>
+            <h2 style="font-size: 20px; font-weight: 800; margin: 0; display: flex; align-items: center; gap: 10px;">
+              <i class="bi bi-shield-check" style="color: #f59e0b;"></i>
+              Quản lý Token & Fanpage Facebook
+            </h2>
+            <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">
+              Tích hợp cơ chế System User Token (vĩnh viễn) & Nhóm Page theo mô hình LoHa Page
+            </div>
+          </div>
+          <div style="display: flex; gap: 10px;">
+            <button class="btn btn-secondary" onclick="loadTokensAndPages()"><i class="bi bi-arrow-repeat"></i> Làm mới</button>
+            <button class="btn btn-primary" onclick="openAddTokenModal()"><i class="bi bi-plus-lg"></i> Thêm Token Mới</button>
+            <button class="btn btn-primary" style="background: linear-gradient(135deg, #8b5cf6, #ec4899); border:none;" onclick="openAddGroupModal()"><i class="bi bi-folder-plus"></i> Tạo Nhóm Page</button>
+            <button class="btn btn-warning" onclick="openTokenAllocModal()" style="font-weight: 700; color: #0f172a;"><i class="bi bi-diagram-3-fill"></i> Tự động chia Token</button>
+          </div>
+        </div>
+        <!-- Metric Cards -->
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 24px;">
+          <div class="card" style="padding: 16px; background: #111c33; border: 1px solid #23304d; border-radius: 12px;">
+            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Tổng Tokens</div>
+            <div id="stat-total-tokens" style="font-size: 24px; font-weight: 800; color: #f59e0b; margin-top: 6px;">0</div>
+            <div style="font-size: 11px; color: #22c55e; margin-top: 4px;"><i class="bi bi-check-circle-fill"></i> Hoạt động ổn định</div>
+          </div>
+          <div class="card" style="padding: 16px; background: #111c33; border: 1px solid #23304d; border-radius: 12px;">
+            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Tổng Fanpage</div>
+            <div id="stat-total-pages" style="font-size: 24px; font-weight: 800; color: #38bdf8; margin-top: 6px;">0</div>
+            <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">Tự động sync qua Graph API</div>
+          </div>
+          <div class="card" style="padding: 16px; background: #111c33; border: 1px solid #23304d; border-radius: 12px;">
+            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Nhóm Page Vệ Tinh</div>
+            <div id="stat-total-groups" style="font-size: 24px; font-weight: 800; color: #c084fc; margin-top: 6px;">0</div>
+            <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">Map thư mục output</div>
+          </div>
+          <div class="card" style="padding: 16px; background: #111c33; border: 1px solid #23304d; border-radius: 12px;">
+            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Reels Đã Đăng</div>
+            <div id="stat-total-published" style="font-size: 24px; font-weight: 800; color: #22c55e; margin-top: 6px;">0</div>
+            <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">Kèm First Comment viral</div>
+          </div>
+        </div>
+        <div style="display: grid; grid-template-columns: 1.1fr 1fr; gap: 20px;">
+          <!-- Left: Danh sách Fanpage -->
+          <div class="card" style="background: #111c33; border: 1px solid #23304d; border-radius: 12px; padding: 20px;">
+            <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between;">
+              <span><i class="bi bi-flag-fill" style="color: #38bdf8;"></i> Danh sách Fanpage Facebook</span>
+              <span id="badge-page-count" style="font-size: 11px; background: #1e293b; color: #38bdf8; padding: 2px 8px; border-radius: 20px;">0 Trang</span>
+            </h3>
+            <div id="pages-table-container" style="max-height: 520px; overflow-y: auto;">
+              <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
+                <thead>
+                  <tr style="border-bottom: 1px solid #23304d; color: #94a3b8; text-align: left;">
+                    <th style="padding: 8px 6px;">Avatar</th>
+                    <th style="padding: 8px 6px;">Tên Trang</th>
+                    <th style="padding: 8px 6px;">Page ID</th>
+                    <th style="padding: 8px 6px;">Trạng thái</th>
+                    <th style="padding: 8px 6px; text-align: right;">Đã đăng</th>
+                  </tr>
+                </thead>
+                <tbody id="pages-tbody">
+                  <tr><td colspan="5" style="text-align: center; padding: 30px; color: #64748b;">Chưa có Fanpage nào. Vui lòng thêm System User Token để đồng bộ trang!</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <!-- Right: Token Pool & Nhóm Page -->
+          <div style="display: flex; flex-direction: column; gap: 20px;">
+            <!-- Token Vault -->
+            <div class="card" style="background: #111c33; border: 1px solid #23304d; border-radius: 12px; padding: 20px;">
+              <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between;">
+                <span><i class="bi bi-key-fill" style="color: #f59e0b;"></i> Kho Token Quản Trị (Token Vault)</span>
+                <span style="font-size: 11px; color: #22c55e;">Vĩnh viễn (System User)</span>
+              </h3>
+              <div id="tokens-list-container" style="display: flex; flex-direction: column; gap: 10px; max-height: 220px; overflow-y: auto;">
+                <div style="text-align: center; padding: 20px; color: #64748b; font-size: 12px;">Chưa có Token nào trong kho.</div>
+              </div>
+            </div>
+            <!-- Page Groups -->
+            <div class="card" style="background: #111c33; border: 1px solid #23304d; border-radius: 12px; padding: 20px;">
+              <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between;">
+                <span><i class="bi bi-collection-fill" style="color: #c084fc;"></i> Nhóm Trang & Folder Binding</span>
+                <span style="font-size: 11px; color: #94a3b8;">Xoay vòng đăng clip</span>
+              </h3>
+              <div id="groups-list-container" style="display: flex; flex-direction: column; gap: 10px; max-height: 220px; overflow-y: auto;">
+                <div style="text-align: center; padding: 20px; color: #64748b; font-size: 12px;">Chưa tạo nhóm trang nào.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      
+        <!-- QUY TẮC LÊN LỊCH & PHÂN BỔ (MÔ HÌNH LOHA PAGE) EMBEDDED -->
+        <div style="margin-top: 30px; padding-top: 20px; border-top: 1px dashed #23304d;">
+          
+          <!-- LOHA PAGE NATIVE GRADIENT BANNER -->
+          <div class="loha-schedule-banner" style="background: linear-gradient(135deg, #3B82F6 0%, #7C3AED 100%); border-radius: 14px; padding: 18px 22px; color: #ffffff; box-shadow: 0 10px 25px rgba(59, 130, 246, 0.25); margin-bottom: 22px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 15px; flex-wrap: wrap;">
+              <div style="display: flex; align-items: flex-start; gap: 14px;">
+                <div style="width: 42px; height: 42px; border-radius: 10px; background: rgba(255, 255, 255, 0.2); display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0;">
+                  <i class="bi bi-stars" style="color: #fbbf24;"></i>
+                </div>
+                <div>
+                  <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                    <span style="font-size: 15.5px; font-weight: 800; letter-spacing: -0.2px; text-shadow: 0 1px 2px rgba(0,0,0,0.2);">
+                      Hẹn lịch tự động: <span id="loha-banner-mode">Cố định</span> · <span id="loha-banner-slots">08:00 · 11:30 · 20:30</span>
+                    </span>
+                    <span style="background: rgba(255, 255, 255, 0.22); font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; text-transform: uppercase;">LoHa Core</span>
+                  </div>
+                  <div style="font-size: 13px; opacity: 0.92; margin-top: 4px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                    <span><i class="bi bi-clock-history"></i> Khung giờ hoạt động: <strong id="loha-banner-hours">08:00 – 22:00</strong></span>
+                    <span>·</span>
+                    <span><i class="bi bi-shuffle"></i> Tự nhiên hóa lịch: <strong id="loha-banner-stagger">±15 phút</strong></span>
+                    <span>·</span>
+                    <span><i class="bi bi-shield-check"></i> Tránh thuật toán spam</span>
+                  </div>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <button type="button" onclick="openScheduleRulesModal()" class="btn" style="background: rgba(255, 255, 255, 0.22); hover:background: rgba(255, 255, 255, 0.35); color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.35); font-weight: 700; font-size: 13px; padding: 9px 18px; border-radius: 9px; backdrop-filter: blur(4px); display: flex; align-items: center; gap: 7px; transition: all 0.2s;">
+                  <i class="bi bi-sliders"></i> Chỉnh sửa Quy tắc
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 1-Click Tự động phân bổ từ kho video -->
+          <div class="card" style="background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px;">
+            <h4 style="font-size: 15px; font-weight: 700; color: #22c55e; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
+              <i class="bi bi-send-check-fill"></i> 1-Click Tự Động Phân Bổ Kho Video & Lên Lịch (LoHa Auto Scheduler)
+            </h4>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+              <div>
+                <label class="form-label" style="font-size: 12px; font-weight: 600;">1. Chọn Nhóm Page vệ tinh:</label>
+                <select id="dist-select-group" class="form-select" style="background: #0f172a; border-color: #334155; font-size: 13px;"></select>
+              </div>
+              <div>
+                <label class="form-label" style="font-size: 12px; font-weight: 600;">2. Thời gian bắt đầu lên lịch:</label>
+                <input type="datetime-local" id="dist-start-time" class="form-control" style="background: #0f172a; border-color: #334155; font-size: 13px;">
+              </div>
+              <div>
+                <label class="form-label" style="font-size: 12px; font-weight: 600;">3. Giãn cách giữa các Page:</label>
+                <select id="dist-stagger" class="form-select" style="background: #0f172a; border-color: #334155; font-size: 13px;">
+                  <option value="5">Giãn cách 5 phút</option>
+                  <option value="10">Giãn cách 10 phút</option>
+                  <option value="15" selected>Giãn cách 15 phút (Khuyên dùng)</option>
+                  <option value="20">Giãn cách 20 phút</option>
+                  <option value="30">Giãn cách 30 phút</option>
+                </select>
+              </div>
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 12px;">
+              <button class="btn btn-success" onclick="executeBatchDistribute()" id="btn-batch-distribute" style="font-weight: 600; padding: 10px 22px; border-radius: 8px;">
+                <i class="bi bi-play-circle-fill"></i> Bắt đầu Tự động Phân bổ & Lên lịch
+              </button>
+            </div>
+            <div id="dist-result-banner" style="display: none; margin-top: 15px; padding: 12px; border-radius: 8px; font-size: 13px;"></div>
+          </div>
+        </div>
+</section>

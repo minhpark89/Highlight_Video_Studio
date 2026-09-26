@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "D:\Highlight_Video_Studio\run_direct.py", line 9, in <module>
+    from web.app import app
+  File "D:\Highlight_Video_Studio\web\app.py", line 844, in <module>
+    SCHEDULE_RULES_FILE = DATA_DIR / "schedule_rules.json"
+                          ^^^^^^^^
+NameError: name 'DATA_DIR' is not defined. Did you mean: 'BASE_DIR'?

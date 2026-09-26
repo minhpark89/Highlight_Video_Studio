@@ -1,0 +1,89 @@
+<section id="pane-pages" class="pane">
+        <div class="panel-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <div>
+            <h2 style="font-size: 20px; font-weight: 800; margin: 0; display: flex; align-items: center; gap: 10px;">
+              <i class="bi bi-shield-check" style="color: #f59e0b;"></i>
+              Quản lý Token & Fanpage Facebook
+            </h2>
+            <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">
+              Tích hợp cơ chế System User Token (vĩnh viễn) & Nhóm Page theo mô hình LoHa Page
+            </div>
+          </div>
+          <div style="display: flex; gap: 10px;">
+            <button class="btn btn-secondary" onclick="loadTokensAndPages()"><i class="bi bi-arrow-repeat"></i> Làm mới</button>
+            <button class="btn btn-primary" onclick="openAddTokenModal()"><i class="bi bi-plus-lg"></i> Thêm Token Mới</button>
+            <button class="btn btn-primary" style="background: linear-gradient(135deg, #8b5cf6, #ec4899); border:none;" onclick="openAddGroupModal()"><i class="bi bi-folder-plus"></i> Tạo Nhóm Page</button>
+          </div>
+        </div>
+        <!-- Metric Cards -->
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 24px;">
+          <div class="card" style="padding: 16px; background: #111c33; border: 1px solid #23304d; border-radius: 12px;">
+            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Tổng Tokens</div>
+            <div id="stat-total-tokens" style="font-size: 24px; font-weight: 800; color: #f59e0b; margin-top: 6px;">0</div>
+            <div style="font-size: 11px; color: #22c55e; margin-top: 4px;"><i class="bi bi-check-circle-fill"></i> Hoạt động ổn định</div>
+          </div>
+          <div class="card" style="padding: 16px; background: #111c33; border: 1px solid #23304d; border-radius: 12px;">
+            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Tổng Fanpage</div>
+            <div id="stat-total-pages" style="font-size: 24px; font-weight: 800; color: #38bdf8; margin-top: 6px;">0</div>
+            <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">Tự động sync qua Graph API</div>
+          </div>
+          <div class="card" style="padding: 16px; background: #111c33; border: 1px solid #23304d; border-radius: 12px;">
+            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Nhóm Page Vệ Tinh</div>
+            <div id="stat-total-groups" style="font-size: 24px; font-weight: 800; color: #c084fc; margin-top: 6px;">0</div>
+            <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">Map thư mục output</div>
+          </div>
+          <div class="card" style="padding: 16px; background: #111c33; border: 1px solid #23304d; border-radius: 12px;">
+            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Reels Đã Đăng</div>
+            <div id="stat-total-published" style="font-size: 24px; font-weight: 800; color: #22c55e; margin-top: 6px;">0</div>
+            <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">Kèm First Comment viral</div>
+          </div>
+        </div>
+        <div style="display: grid; grid-template-columns: 1.1fr 1fr; gap: 20px;">
+          <!-- Left: Danh sách Fanpage -->
+          <div class="card" style="background: #111c33; border: 1px solid #23304d; border-radius: 12px; padding: 20px;">
+            <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between;">
+              <span><i class="bi bi-flag-fill" style="color: #38bdf8;"></i> Danh sách Fanpage Facebook</span>
+              <span id="badge-page-count" style="font-size: 11px; background: #1e293b; color: #38bdf8; padding: 2px 8px; border-radius: 20px;">0 Trang</span>
+            </h3>
+            <div id="pages-table-container" style="max-height: 520px; overflow-y: auto;">
+              <table style="width: 100%; border-collapse: collapse; font-size: 12.5px;">
+                <thead>
+                  <tr style="border-bottom: 1px solid #23304d; color: #94a3b8; text-align: left;">
+                    <th style="padding: 8px 6px;">Avatar</th>
+                    <th style="padding: 8px 6px;">Tên Trang</th>
+                    <th style="padding: 8px 6px;">Page ID</th>
+                    <th style="padding: 8px 6px;">Trạng thái</th>
+                    <th style="padding: 8px 6px; text-align: right;">Đã đăng</th>
+                  </tr>
+                </thead>
+                <tbody id="pages-tbody">
+                  <tr><td colspan="5" style="text-align: center; padding: 30px; color: #64748b;">Chưa có Fanpage nào. Vui lòng thêm System User Token để đồng bộ trang!</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <!-- Right: Token Pool & Nhóm Page -->
+          <div style="display: flex; flex-direction: column; gap: 20px;">
+            <!-- Token Vault -->
+            <div class="card" style="background: #111c33; border: 1px solid #23304d; border-radius: 12px; padding: 20px;">
+              <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between;">
+                <span><i class="bi bi-key-fill" style="color: #f59e0b;"></i> Kho Token Quản Trị (Token Vault)</span>
+                <span style="font-size: 11px; color: #22c55e;">Vĩnh viễn (System User)</span>
+              </h3>
+              <div id="tokens-list-container" style="display: flex; flex-direction: column; gap: 10px; max-height: 220px; overflow-y: auto;">
+                <div style="text-align: center; padding: 20px; color: #64748b; font-size: 12px;">Chưa có Token nào trong kho.</div>
+              </div>
+            </div>
+            <!-- Page Groups -->
+            <div class="card" style="background: #111c33; border: 1px solid #23304d; border-radius: 12px; padding: 20px;">
+              <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between;">
+                <span><i class="bi bi-collection-fill" style="color: #c084fc;"></i> Nhóm Trang & Folder Binding</span>
+                <span style="font-size: 11px; color: #94a3b8;">Xoay vòng đăng clip</span>
+              </h3>
+              <div id="groups-list-container" style="display: flex; flex-direction: column; gap: 10px; max-height: 220px; overflow-y: auto;">
+                <div style="text-align: center; padding: 20px; color: #64748b; font-size: 12px;">Chưa tạo nhóm trang nào.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>

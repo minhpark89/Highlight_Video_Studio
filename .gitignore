@@ -1,0 +1,39 @@
+# Media & runtime outputs (mỗi PC tự quản lý local)
+downloads/
+output/
+temp/
+*.mp4
+*.mkv
+*.webm
+*.avi
+*.mov
+*.wav
+*.mp3
+
+# Binary tools & portable runtimes (tải qua script setup hoặc release)
+bin/
+ffmpeg.exe
+ffprobe.exe
+node.exe
+
+# Local data & logs (dữ liệu chạy của từng máy)
+jobs.json
+crawled_videos.json
+tokens_vault.json
+pages.json
+page_groups.json
+*.log
+*.bak
+*.tmp
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Credentials
+.env
+secret*.json
+token*.json
+
+# Local Chrome Profile
+chrome_profile/
+chrome_data/

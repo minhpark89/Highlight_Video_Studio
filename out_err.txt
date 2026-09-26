@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import sys; sys.path.insert(0, '.'); import traceback; f = open('D:/Highlight_Video_Studio/out_err.txt', 'w'); sys.stderr = f; sys.stdout = f; import web.app; print('ALL OK')
+                                                                                                                                                   ^^^^^^^^^^^^^^
+  File "D:\Highlight_Video_Studio\web\app.py", line 844, in <module>
+    SCHEDULE_RULES_FILE = DATA_DIR / "schedule_rules.json"
+                          ^^^^^^^^
+NameError: name 'DATA_DIR' is not defined. Did you mean: 'BASE_DIR'?
