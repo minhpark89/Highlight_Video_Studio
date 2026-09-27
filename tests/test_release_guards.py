@@ -161,6 +161,36 @@ class ReleaseGuardTests(unittest.TestCase):
         self.assertTrue(result.get_json()["success"])
         self.assertEqual(post.call_args.args[0], "https://images.test/v1/images/generations")
 
+    def test_image_model_listing_uses_independent_exact_url(self):
+        from web.app import app
+        app.config["TESTING"] = True
+        client = app.test_client()
+        listed = FakeResponse(200, {"data": [{"id": "image-model-a"}]})
+        with mock.patch("web.app.requests.get", return_value=listed) as get:
+            result = client.post("/api/image-provider/models", json={
+                "models_url": "https://router.test/catalog/image-models", "api_key": "k"
+            })
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.get_json()["models"], ["image-model-a"])
+        self.assertEqual(get.call_args.args[0], "https://router.test/catalog/image-models")
+
+    def test_image_generation_exact_chat_endpoint_is_independent_of_models(self):
+        from web.app import app
+        app.config["TESTING"] = True
+        client = app.test_client()
+        generated = FakeResponse(200, {"choices": [{"message": {"images": [{"image_url": "https://cdn.test/image.png"}]}}]})
+        with mock.patch("web.app.requests.post", return_value=generated) as post:
+            result = client.post("/api/image-provider/test", json={
+                "generation_url": "https://router.test/v9/chat/completions",
+                "models_url": "https://router.test/not-supported/models",
+                "api_key": "k",
+                "model": "image-model-a",
+            })
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.get_json()["endpoint_type"], "chat")
+        self.assertEqual(post.call_args.args[0], "https://router.test/v9/chat/completions")
+        self.assertIn("messages", post.call_args.kwargs["json"])
+
     def test_job_pipeline_resolves_all_lazy_pipeline_functions(self):
         from web import app as web_app
         with tempfile.TemporaryDirectory() as folder:

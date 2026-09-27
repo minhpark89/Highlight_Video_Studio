@@ -708,6 +708,63 @@ def _llm_model_urls(raw_base):
     return list(dict.fromkeys(urls))
 
 
+def _normalise_http_url(raw_url, field_name="Endpoint"):
+    from urllib.parse import urlsplit, urlunsplit
+
+    value = str(raw_url or "").strip()
+    if not value:
+        raise ValueError(f"Vui lòng nhập {field_name}")
+    parsed = urlsplit(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(f"{field_name} phải là URL http:// hoặc https:// hợp lệ")
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), parsed.query, ""))
+
+
+def _image_model_urls(models_url="", api_base=""):
+    if str(models_url or "").strip():
+        return [_normalise_http_url(models_url, "Endpoint lấy model ảnh")]
+    return _llm_model_urls(api_base)
+
+
+def _image_generation_candidates(generation_url="", api_base=""):
+    exact = str(generation_url or "").strip()
+    if exact:
+        url = _normalise_http_url(exact, "Endpoint tạo ảnh")
+        lower = url.lower().split("?", 1)[0]
+        if lower.endswith("/images/generations"):
+            return [(url, "images")]
+        if lower.endswith("/chat/completions"):
+            return [(url, "chat")]
+        return [(url, "auto")]
+    base = _normalise_llm_base(api_base)
+    return [
+        (f"{base}/images/generations", "images"),
+        (f"{base}/chat/completions", "chat"),
+    ]
+
+
+def _image_test_payload(model, endpoint_type):
+    prompt = "A simple blue circle on white background"
+    if endpoint_type == "chat":
+        return {"model": model, "messages": [{"role": "user", "content": prompt}]}
+    return {"model": model, "prompt": prompt, "n": 1, "size": "1024x1024"}
+
+
+def _image_response_has_output(payload):
+    if not isinstance(payload, dict):
+        return False
+    rows = payload.get("data") or []
+    if rows and isinstance(rows[0], dict) and (rows[0].get("b64_json") or rows[0].get("url")):
+        return True
+    choices = payload.get("choices") or []
+    message = choices[0].get("message", {}) if choices and isinstance(choices[0], dict) else {}
+    images = message.get("images") or []
+    if images:
+        return True
+    content = message.get("content")
+    return isinstance(content, str) and ("data:image/" in content or "http://" in content or "https://" in content)
+
+
 def _extract_llm_models(payload):
     if isinstance(payload, dict):
         rows = payload.get("data")
@@ -890,17 +947,18 @@ def api_settings():
             cfg.setdefault("llm", {}).update(llm_update)
         if "image_provider" in data:
             image_update = dict(data["image_provider"] or {})
-            if "api_base" in image_update:
-                raw_image_base = str(image_update.get("api_base") or "").strip()
-                if raw_image_base:
-                    try:
-                        image_update["api_base"] = _normalise_llm_base(raw_image_base)
-                    except ValueError as exc:
-                        return jsonify({"success": False, "error": f"Image Provider: {exc}"}), 400
-                elif str(image_update.get("model") or "") == "__video_frame__":
-                    image_update["api_base"] = ""
-                else:
-                    return jsonify({"success": False, "error": "Image Provider: vui lòng nhập endpoint khi dùng model AI ảnh"}), 400
+            frame_mode = str(image_update.get("model") or "") == "__video_frame__"
+            try:
+                if str(image_update.get("models_url") or "").strip():
+                    image_update["models_url"] = _normalise_http_url(image_update["models_url"], "Endpoint lấy model ảnh")
+                if str(image_update.get("generation_url") or "").strip():
+                    image_update["generation_url"] = _normalise_http_url(image_update["generation_url"], "Endpoint tạo ảnh")
+                if str(image_update.get("api_base") or "").strip():
+                    image_update["api_base"] = _normalise_llm_base(image_update["api_base"])
+            except ValueError as exc:
+                return jsonify({"success": False, "error": f"Image Provider: {exc}"}), 400
+            if not frame_mode and not str(image_update.get("generation_url") or image_update.get("api_base") or "").strip():
+                return jsonify({"success": False, "error": "Image Provider: vui lòng nhập endpoint tạo ảnh khi dùng AI ảnh"}), 400
             cfg.setdefault("image_provider", {}).update(image_update)
         if "video_pipeline" in data:
             cfg.setdefault("video_pipeline", {}).update(data["video_pipeline"])
@@ -959,25 +1017,26 @@ def api_image_provider_models():
     data = request.json or {}
     image_cfg = load_config().get("image_provider", {})
     raw_base = data.get("api_base") or image_cfg.get("api_base")
+    models_url = data.get("models_url") or image_cfg.get("models_url")
     api_key = data.get("api_key") or image_cfg.get("api_key", "")
     try:
-        model_urls = _llm_model_urls(raw_base)
+        model_urls = _image_model_urls(models_url, raw_base)
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
     failures = []
-    for models_url in model_urls:
+    for candidate_url in model_urls:
         try:
-            response = requests.get(models_url, headers=_llm_headers(api_key), timeout=15)
+            response = requests.get(candidate_url, headers=_llm_headers(api_key), timeout=15)
             if response.status_code != 200:
-                failures.append(f"{models_url}: HTTP {response.status_code}")
+                failures.append(f"{candidate_url}: HTTP {response.status_code}")
                 continue
             models = _extract_llm_models(response.json())
             if models:
-                return jsonify({"success": True, "api_base": models_url[:-len('/models')].rstrip('/'), "models": models, "count": len(models)})
-            failures.append(f"{models_url}: response không có danh sách model")
+                return jsonify({"success": True, "models_url": candidate_url, "models": models, "count": len(models)})
+            failures.append(f"{candidate_url}: response không có danh sách model")
         except Exception as exc:
-            failures.append(f"{models_url}: {exc}")
-    return jsonify({"success": False, "error": "Không thể lấy model ảnh. " + " | ".join(failures)}), 502
+            failures.append(f"{candidate_url}: {exc}")
+    return jsonify({"success": False, "error": "Endpoint lấy model không hoạt động; vẫn có thể nhập model thủ công và Test tạo ảnh. " + " | ".join(failures)}), 502
 
 
 @app.route("/api/image-provider/test", methods=["POST"])
@@ -985,38 +1044,37 @@ def api_image_provider_test():
     data = request.json or {}
     image_cfg = load_config().get("image_provider", {})
     raw_base = data.get("api_base") or image_cfg.get("api_base")
+    generation_url = data.get("generation_url") or image_cfg.get("generation_url")
     api_key = data.get("api_key") or image_cfg.get("api_key", "")
     model = str(data.get("model") or image_cfg.get("model") or "").strip()
     if not model or model == "__video_frame__":
-        return jsonify({"success": False, "error": "Vui lòng chọn model tạo ảnh"}), 400
+        return jsonify({"success": False, "error": "Vui lòng nhập model tạo ảnh"}), 400
     try:
-        api_base = _normalise_llm_base(raw_base)
+        candidates = _image_generation_candidates(generation_url, raw_base)
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
+    failures = []
     started = time.perf_counter()
-    try:
-        response = requests.post(
-            f"{api_base}/images/generations",
-            headers=_llm_headers(api_key),
-            json={"model": model, "prompt": "A simple blue circle on white background", "n": 1, "size": "1024x1024"},
-            timeout=120,
-        )
-        latency_ms = int((time.perf_counter() - started) * 1000)
+    for url, endpoint_type in candidates:
+        request_type = endpoint_type if endpoint_type != "auto" else ("chat" if url.lower().split("?", 1)[0].endswith("/chat/completions") else "images")
         try:
-            payload = response.json()
-        except Exception:
-            payload = {}
-        if response.status_code != 200:
+            response = requests.post(url, headers=_llm_headers(api_key), json=_image_test_payload(model, request_type), timeout=120)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            try:
+                payload = response.json()
+            except Exception:
+                payload = {}
+            if response.status_code == 200 and _image_response_has_output(payload):
+                return jsonify({"success": True, "generation_url": url, "endpoint_type": request_type, "model": model, "latency_ms": latency_ms})
             detail = payload.get("error") or payload.get("message") or response.text[:240]
             if isinstance(detail, dict):
                 detail = detail.get("message") or str(detail)
-            return jsonify({"success": False, "error": f"Gọi images/generations thất bại (HTTP {response.status_code}): {detail}", "latency_ms": latency_ms}), 502
-        rows = payload.get("data") or []
-        if not rows or not isinstance(rows[0], dict) or not (rows[0].get("b64_json") or rows[0].get("url")):
-            return jsonify({"success": False, "error": "Provider trả HTTP 200 nhưng không có dữ liệu ảnh"}), 502
-        return jsonify({"success": True, "api_base": api_base, "model": model, "latency_ms": latency_ms})
-    except requests.RequestException as exc:
-        return jsonify({"success": False, "error": f"Không kết nối được provider ảnh: {exc}"}), 502
+            if response.status_code == 200:
+                detail = "HTTP 200 nhưng response không có dữ liệu ảnh"
+            failures.append(f"{url}: HTTP {response.status_code} - {detail}")
+        except requests.RequestException as exc:
+            failures.append(f"{url}: {exc}")
+    return jsonify({"success": False, "error": "Test tạo ảnh thất bại. " + " | ".join(failures)}), 502
 
 
 @app.route("/api/llm/test", methods=["POST"])

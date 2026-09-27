@@ -1576,15 +1576,16 @@
                 <div style="margin-top:16px;padding:14px;border:1px solid rgba(236,72,153,.35);border-radius:10px;background:rgba(236,72,153,.05);">
                   <div style="font-size:12px;font-weight:800;color:#f472b6;margin-bottom:10px;"><i class="bi bi-image"></i> AI TẠO ẢNH RIÊNG (TÙY CHỌN)</div>
                   <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-                    <div style="grid-column:1/-1"><label class="lbl">Image Provider Endpoint</label><input type="text" id="cfg_image_base" class="form-control" placeholder="https://api.example.com/v1"></div>
+                    <div style="grid-column:1/-1"><label class="lbl">Endpoint tạo ảnh (bắt buộc khi dùng AI ảnh)</label><input type="text" id="cfg_image_generation_url" class="form-control" placeholder="VD: https://api.example.com/v1/images/generations hoặc .../chat/completions"></div>
+                    <div style="grid-column:1/-1"><label class="lbl">Endpoint lấy model (tùy chọn, có thể khác endpoint tạo ảnh)</label><input type="text" id="cfg_image_models_url" class="form-control" placeholder="VD: https://api.example.com/v1/models — để trống nếu provider không hỗ trợ"></div>
                     <div><label class="lbl">Image API Key</label><input type="password" id="cfg_image_key" class="form-control" placeholder="Để trống nếu endpoint không cần key"></div>
-                    <div><label class="lbl">Model tạo ảnh Hook</label><select id="cfg_image_model" class="form-select"><option value="__video_frame__">Không dùng AI ảnh — trích frame video</option></select></div>
+                    <div><label class="lbl">Model tạo ảnh Hook</label><input type="text" id="cfg_image_model" class="form-control" list="image-model-options" value="__video_frame__" placeholder="Nhập model thủ công"><datalist id="image-model-options"><option value="__video_frame__">Không dùng AI ảnh — trích frame video</option></datalist></div>
                   </div>
                   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
-                    <button type="button" class="btn btn-secondary btn-sm" id="btn-check-image" onclick="checkImageEndpoint()"><i class="bi bi-cloud-download"></i> Lấy model ảnh</button>
-                    <button type="button" class="btn btn-secondary btn-sm" id="btn-test-image" onclick="testImageProvider()"><i class="bi bi-image"></i> Test tạo ảnh</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btn-check-image" onclick="checkImageEndpoint()"><i class="bi bi-cloud-download"></i> Lấy model (tùy chọn)</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btn-test-image" onclick="testImageProvider()"><i class="bi bi-image"></i> Test endpoint tạo ảnh</button>
                   </div>
-                  <div id="image-test-result" style="font-size:12.5px;font-weight:600;margin-top:9px;min-height:18px;">Có thể để chế độ trích frame video, không tốn LLM ảnh.</div>
+                  <div id="image-test-result" style="font-size:12.5px;font-weight:600;margin-top:9px;min-height:18px;">Hai phép kiểm tra độc lập. Lỗi /models không chặn nhập model thủ công và test tạo ảnh.</div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap;">
                   <button type="button" class="btn btn-secondary btn-sm" id="btn-check-llm" onclick="checkLlmEndpoint()" style="font-weight: 700; border-color: #38bdf8;">
@@ -2661,9 +2662,10 @@
 
   function imageRequestPayload() {
     return {
-      api_base: (document.getElementById('cfg_image_base')?.value || '').trim(),
+      generation_url: (document.getElementById('cfg_image_generation_url')?.value || '').trim(),
+      models_url: (document.getElementById('cfg_image_models_url')?.value || '').trim(),
       api_key: (document.getElementById('cfg_image_key')?.value || '').trim(),
-      model: document.getElementById('cfg_image_model')?.value || '__video_frame__'
+      model: (document.getElementById('cfg_image_model')?.value || '__video_frame__').trim()
     };
   }
 
@@ -2671,20 +2673,17 @@
     const button = document.getElementById('btn-check-image');
     const result = document.getElementById('image-test-result');
     const payload = imageRequestPayload();
-    if (!payload.api_base) { result.style.color='#ef4444'; result.textContent='Vui lòng nhập Image Provider Endpoint.'; return; }
-    button.disabled = true; result.style.color='#38bdf8'; result.textContent='Đang lấy danh sách model ảnh...';
+    if (!payload.models_url) { result.style.color='#ef4444'; result.textContent='Nhập endpoint lấy model riêng. Nếu provider không có /models, hãy nhập tên model thủ công.'; return; }
+    button.disabled = true; result.style.color='#38bdf8'; result.textContent='Đang kiểm tra riêng endpoint lấy model...';
     try {
       const response = await fetch('/api/image-provider/models', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || 'Không lấy được model ảnh');
-      document.getElementById('cfg_image_base').value = data.api_base;
-      const select = document.getElementById('cfg_image_model');
-      const previous = select.value;
-      select.innerHTML = '';
-      select.add(new Option('Không dùng AI ảnh — trích frame video', '__video_frame__'));
-      data.models.forEach(model => select.add(new Option(model, model)));
-      select.value = Array.from(select.options).some(o => o.value === previous) ? previous : data.models[0];
-      result.style.color='#10b981'; result.textContent=`Đã lấy ${data.count} model. Chọn model ảnh rồi bấm Test tạo ảnh.`;
+      document.getElementById('cfg_image_models_url').value = data.models_url;
+      const list = document.getElementById('image-model-options');
+      list.innerHTML = '<option value="__video_frame__">Không dùng AI ảnh — trích frame video</option>';
+      data.models.forEach(model => list.appendChild(new Option(model, model)));
+      result.style.color='#10b981'; result.textContent=`Endpoint model hoạt động: tìm thấy ${data.count} model. Có thể chọn gợi ý hoặc nhập model thủ công.`;
     } catch (e) { result.style.color='#ef4444'; result.textContent=e.message; }
     finally { button.disabled=false; }
   }
@@ -2694,13 +2693,14 @@
     const result = document.getElementById('image-test-result');
     const payload = imageRequestPayload();
     if (payload.model === '__video_frame__') { result.style.color='#10b981'; result.textContent='Đang dùng trích frame video — không gọi AI ảnh.'; return; }
-    if (!payload.api_base) { result.style.color='#ef4444'; result.textContent='Vui lòng nhập Image Provider Endpoint.'; return; }
-    button.disabled=true; result.style.color='#38bdf8'; result.textContent='Đang gọi images/generations thật...';
+    if (!payload.generation_url) { result.style.color='#ef4444'; result.textContent='Vui lòng nhập endpoint tạo ảnh đầy đủ.'; return; }
+    button.disabled=true; result.style.color='#38bdf8'; result.textContent='Đang kiểm tra riêng endpoint tạo ảnh...';
     try {
       const response = await fetch('/api/image-provider/test', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || 'Test ảnh thất bại');
-      result.style.color='#10b981'; result.textContent=`Tạo ảnh thành công · ${data.model} · ${data.latency_ms} ms`;
+      document.getElementById('cfg_image_generation_url').value = data.generation_url;
+      result.style.color='#10b981'; result.textContent=`Tạo ảnh thành công qua ${data.endpoint_type} · ${data.model} · ${data.latency_ms} ms`;
     } catch(e) { result.style.color='#ef4444'; result.textContent=e.message; }
     finally { button.disabled=false; }
   }
@@ -2719,16 +2719,17 @@
         article: document.getElementById('cfg_llm_article_model')?.value || model,
         first_comment: document.getElementById('cfg_llm_comment_model')?.value || model
       };
-      const image_api_base = (document.getElementById('cfg_image_base')?.value || '').trim();
+      const image_generation_url = (document.getElementById('cfg_image_generation_url')?.value || '').trim();
+      const image_models_url = (document.getElementById('cfg_image_models_url')?.value || '').trim();
       const image_api_key = (document.getElementById('cfg_image_key')?.value || '').trim();
-      const image_model = document.getElementById('cfg_image_model')?.value || '__video_frame__';
+      const image_model = (document.getElementById('cfg_image_model')?.value || '__video_frame__').trim();
       const whisper_mode = document.getElementById('cfg_whisper_mode')?.value || 'youtube_first';
       const encoder = document.getElementById('cfg_encoder')?.value || 'h264_nvenc';
       const crf = parseInt(document.getElementById('cfg_crf')?.value || '22');
 
       const payload = {
         llm: { api_base, model, task_models },
-        image_provider: { api_base: image_api_base, model: image_model },
+        image_provider: { generation_url: image_generation_url, models_url: image_models_url, model: image_model },
         whisper: { prefer_youtube_transcript: whisper_mode === 'youtube_first' },
         video_pipeline: { encoder, crf }
       };
@@ -2816,9 +2817,12 @@
         Object.entries(selectedModels).forEach(([id, model]) => { if (model) ensureLlmModelOption(model, id); });
       }
       if (cfg.image_provider) {
-        const imageBase = document.getElementById('cfg_image_base');
-        if (imageBase && cfg.image_provider.api_base) imageBase.value = cfg.image_provider.api_base;
-        ensureLlmModelOption(cfg.image_provider.model || '__video_frame__', 'cfg_image_model');
+        const generationInput = document.getElementById('cfg_image_generation_url');
+        const modelsInput = document.getElementById('cfg_image_models_url');
+        const modelInput = document.getElementById('cfg_image_model');
+        if (generationInput) generationInput.value = cfg.image_provider.generation_url || (cfg.image_provider.api_base ? cfg.image_provider.api_base.replace(/\/$/, '') + '/images/generations' : '');
+        if (modelsInput) modelsInput.value = cfg.image_provider.models_url || '';
+        if (modelInput) modelInput.value = cfg.image_provider.model || '__video_frame__';
       }
     } catch (e) {
       console.warn('Could not load hardware info:', e);

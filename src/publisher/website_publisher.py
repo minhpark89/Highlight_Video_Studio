@@ -62,8 +62,12 @@ def get_image_provider_config(model_override: str = "") -> dict:
         root_cfg = {}
     image_cfg = root_cfg.get("image_provider") if isinstance(root_cfg.get("image_provider"), dict) else {}
     llm_cfg = root_cfg.get("llm") if isinstance(root_cfg.get("llm"), dict) else {}
+    api_base = str(image_cfg.get("api_base") or llm_cfg.get("api_base") or "").strip()
+    generation_url = str(image_cfg.get("generation_url") or "").strip()
     return {
-        "api_base": str(image_cfg.get("api_base") or llm_cfg.get("api_base") or "").strip(),
+        "api_base": api_base,
+        "generation_url": generation_url,
+        "models_url": str(image_cfg.get("models_url") or "").strip(),
         "api_key": str(image_cfg.get("api_key") or llm_cfg.get("api_key") or "").strip(),
         "model": str(model_override or image_cfg.get("model") or get_task_model("image", llm_cfg) or "").strip(),
     }
@@ -167,9 +171,10 @@ def generate_llm_hook_image(video_title: str, model_override: str = "") -> str:
     import base64
     image_cfg = get_image_provider_config(model_override)
     api_base = image_cfg["api_base"]
+    generation_url = image_cfg["generation_url"]
     api_key = image_cfg["api_key"]
     model = image_cfg["model"]
-    if model == "__video_frame__" or not api_base or not model:
+    if model == "__video_frame__" or (not generation_url and not api_base) or not model:
         logger.info("Use video frame fallback for article hook image")
         return ""
 
@@ -208,14 +213,17 @@ Exact required visual elements matching viral clickbait standard:
             logger.warning("Cannot save generated image response: %s", exc)
             return ""
 
-    attempts = [
-        (f"{api_base.rstrip('/')}/images/generations", {
-            "model": model, "prompt": prompt, "n": 1, "size": "1536x1024"
-        }),
-        (f"{api_base.rstrip('/')}/chat/completions", {
-            "model": model, "messages": [{"role": "user", "content": prompt}]
-        }),
-    ]
+    image_payload = {"model": model, "prompt": prompt, "n": 1, "size": "1536x1024"}
+    chat_payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+    if generation_url:
+        exact_url = generation_url.rstrip("/")
+        payload = chat_payload if exact_url.lower().split("?", 1)[0].endswith("/chat/completions") else image_payload
+        attempts = [(exact_url, payload)]
+    else:
+        attempts = [
+            (f"{api_base.rstrip('/')}/images/generations", image_payload),
+            (f"{api_base.rstrip('/')}/chat/completions", chat_payload),
+        ]
     for url, payload in attempts:
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=120)
@@ -233,6 +241,13 @@ Exact required visual elements matching viral clickbait standard:
             images = message.get("images") or []
             if images:
                 saved = save_image_value(images[0].get("image_url") if isinstance(images[0], dict) else images[0])
+                if saved:
+                    return saved
+            content = message.get("content")
+            if isinstance(content, str):
+                data_match = re.search(r"data:image/[^;]+;base64,([A-Za-z0-9+/=]+)", content)
+                url_match = re.search(r"https?://[^\s)\]>'\"]+", content)
+                saved = save_image_value(data_match.group(1) if data_match else (url_match.group(0) if url_match else ""))
                 if saved:
                     return saved
         except Exception as exc:
