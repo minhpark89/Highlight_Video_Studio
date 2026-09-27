@@ -17,7 +17,7 @@ internal sealed class InstallerForm : Form
 
     internal InstallerForm()
     {
-        Text = "Highlight Video Studio v1.0.11 — Cài đặt";
+        Text = "Highlight Video Studio v1.0.12 — Cài đặt";
         ClientSize = new Size(620, 355);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -73,6 +73,8 @@ internal sealed class InstallerForm : Form
         try
         {
             Directory.CreateDirectory(target);
+            UpdateUi("Đang đóng phiên bản Highlight Studio cũ…", 0);
+            StopRunningApplication(target);
             using (Stream payload = Assembly.GetExecutingAssembly().GetManifestResourceStream("HighlightStudio.Payload"))
             {
                 if (payload == null) throw new InvalidOperationException("Installer không chứa gói ứng dụng.");
@@ -91,7 +93,7 @@ internal sealed class InstallerForm : Form
                         if (String.IsNullOrEmpty(entry.Name)) { Directory.CreateDirectory(output); continue; }
                         Directory.CreateDirectory(Path.GetDirectoryName(output));
                         if (ShouldPreserve(relative) && File.Exists(output)) continue;
-                        entry.ExtractToFile(output, true);
+                        ExtractWithRetry(entry, output);
                     }
                 }
             }
@@ -126,6 +128,60 @@ internal sealed class InstallerForm : Form
                path == "page_groups.json" || path == "tokens_vault.json" ||
                path.StartsWith("downloads/") || path.StartsWith("output/") ||
                path.StartsWith("chrome_profile/") || path.StartsWith("data/");
+    }
+
+    private static void StopRunningApplication(string target)
+    {
+        string installRoot = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        foreach (Process process in Process.GetProcesses())
+        {
+            try
+            {
+                if (process.Id == Process.GetCurrentProcess().Id) continue;
+                string executable = process.MainModule == null ? "" : process.MainModule.FileName;
+                if (!String.IsNullOrWhiteSpace(executable) &&
+                    Path.GetFullPath(executable).StartsWith(installRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    process.CloseMainWindow();
+                    if (!process.WaitForExit(1800))
+                    {
+                        process.Kill();
+                        process.WaitForExit(5000);
+                    }
+                }
+            }
+            catch { }
+            finally { process.Dispose(); }
+        }
+        Thread.Sleep(500);
+    }
+
+    private static void ExtractWithRetry(ZipArchiveEntry entry, string output)
+    {
+        string temporary = output + ".update." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            entry.ExtractToFile(temporary, true);
+            Exception lastError = null;
+            for (int attempt = 0; attempt < 12; attempt++)
+            {
+                try
+                {
+                    File.Copy(temporary, output, true);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    Thread.Sleep(150 + attempt * 120);
+                }
+            }
+            throw new IOException("Không thể cập nhật file đang được sử dụng: " + output, lastError);
+        }
+        finally
+        {
+            try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
+        }
     }
 
     private static string DetectInstallLocation()
