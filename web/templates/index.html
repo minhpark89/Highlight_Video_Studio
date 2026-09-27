@@ -3053,14 +3053,8 @@
     const m = document.getElementById('modal-add-token');
     if (m) m.style.display = 'none';
   }
-  function openAddGroupModal() {
-    const m = document.getElementById('modal-add-group');
-    if (m) m.style.display = 'flex';
-  }
-  function closeAddGroupModal() {
-    const m = document.getElementById('modal-add-group');
-    if (m) m.style.display = 'none';
-  }
+  // [FIX] Stale stub openAddGroupModal/closeAddGroupModal removed; the live implementation
+  // below also populates the page selection list.
   // Xem chi tiết Job trong hàng đợi khi ấn icon con mắt
   async function showJobDetail(jobId) {
     const modal = document.getElementById('jobDetailModal');
@@ -3138,52 +3132,8 @@
     if (modal) modal.style.display = 'none';
   }
   // ================= TOKEN & PAGE MANAGEMENT (SHARED REFS) =================
-  function openAddGroupModal() {
-    const m = document.getElementById('modal-add-group');
-    if (!m) return;
-    m.style.display = 'flex';
-    
-    // Render list of pages into group-pages-select-box
-    const box = document.getElementById('group-pages-select-box');
-    if (box) {
-      if (!cachedPagesList || cachedPagesList.length === 0) {
-        box.innerHTML = '<span style="font-size: 12px; color: #64748b; padding: 10px; display: block; text-align: center;">Chưa có Fanpage nào được nạp!</span>';
-      } else {
-        box.innerHTML = cachedPagesList.map(p => {
-          const pName = p.page_name || p.name || 'Fanpage Facebook';
-          const pId = String(p.page_id || p.id || 'N/A');
-          const avatarUrl = p.avatar || `https://graph.facebook.com/${pId}/picture?type=normal`;
-          const initials = pName.trim().substring(0, 2).toUpperCase();
-          const colors = ['#2563eb', '#7c3aed', '#db2777', '#059669', '#d97706', '#0284c7'];
-          const avatarBg = colors[Math.abs(pName.split('').reduce((a,c)=>a+c.charCodeAt(0), 0)) % colors.length];
-          const hasToken = !!(p.page_token || p.has_token);
-
-          return `
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border-radius: 8px; background: #0f172a; border: 1px solid #1e293b; margin-bottom: 6px;">
-              <div style="display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0;">
-                <input type="checkbox" class="group-page-checkbox" value="${pId}" style="width: 18px; height: 18px; accent-color: #8b5cf6; cursor: pointer; flex-shrink: 0;">
-                <div style="width: 36px; height: 36px; border-radius: 50%; overflow: hidden; background: ${avatarBg}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1.5px solid #334155;">
-                  <img src="${avatarUrl}" alt="${pName}" style="width: 100%; height: 100%; object-fit: cover;" referrerpolicy="no-referrer" onerror="this.onerror=null; this.parentElement.innerHTML='<span style=\'color:#fff; font-weight:800; font-size:13px;\'>${initials}</span>';">
-                </div>
-                <div style="min-width: 0; overflow: hidden;">
-                  <div style="font-weight: 700; font-size: 13px; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${pName}">${pName}</div>
-                  <div style="font-size: 11px; color: #64748b; font-family: monospace;">ID: ${pId}</div>
-                </div>
-              </div>
-              <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
-                <span class="badge" style="background: rgba(192, 132, 252, 0.15); color: #c084fc; font-size: 10.5px; border: 1px solid rgba(192, 132, 252, 0.25);">${p.group_name || 'BM 1'}</span>
-                ${hasToken ? '<span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #34d399; font-size: 10.5px;"><i class="bi bi-shield-check"></i> Vĩnh viễn</span>' : '<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: #f87171; font-size: 10.5px;">Thiếu token</span>'}
-              </div>
-            </div>
-          `;
-        }).join('');
-      }
-    }
-  }
-  function closeAddGroupModal() {
-    const m = document.getElementById('modal-add-group');
-    if (m) m.style.display = 'none';
-  }
+  // [FIX] Duplicate openAddGroupModal/closeAddGroupModal removed here; the live implementation
+  // (which also resets the group name field) remains below.
   
   // ================= QUẢN LÝ FANPAGE & TOKEN CHUẨN LOHAPAGE =================
   let cachedPagesList = [];
@@ -3225,10 +3175,13 @@
       if (currentPageSearchText && !pName.includes(currentPageSearchText) && !pId.includes(currentPageSearchText)) {
         return false;
       }
-      // Match group
-      if (currentPageFilterGroup !== 'all') {
-        const pGroups = p.groups || [];
-        if (!pGroups.includes(currentPageFilterGroup) && p.group_id !== currentPageFilterGroup) return false;
+      // Match group (pages store group membership as group_ids[] + group_name)
+      if (currentPageFilterGroup !== 'all' && currentPageFilterGroup !== '') {
+        const pGroups = Array.from(p.group_ids || []).map(String);
+        const matched = pGroups.includes(String(currentPageFilterGroup))
+          || String(p.group_id || '') === String(currentPageFilterGroup)
+          || String(p.group_name || '') === String(currentPageFilterGroup);
+        if (!matched) return false;
       }
       // Match status
       if (currentPageFilterStatus === 'active' && !p.page_token && !p.has_token) return false;
@@ -3264,7 +3217,7 @@
         const totalPosts = p.total_posted || 0;
         const hasToken = !!(p.page_token || p.has_token);
         const tokenName = p.token_name || 'System User';
-        const grpName = p.group_name || (p.groups && p.groups[0]) || 'BM 1 (Dàn 100 Page)';
+        const grpName = p.group_name || 'BM 1 (Dàn 100 Page)';
         const avatarUrl = p.avatar || `https://graph.facebook.com/${pId}/picture?type=normal`;
 
         // Avatar tròn: load ảnh thật từ Facebook CDN, nếu lỗi mới fallback sang chữ viết tắt
@@ -3334,7 +3287,7 @@
         const totalPosts = p.total_posted || 0;
         const hasToken = !!(p.page_token || p.has_token);
         const tokenName = p.token_name || 'System User';
-        const grpName = p.group_name || (p.groups && p.groups[0]) || 'Mặc định';
+        const grpName = p.group_name || 'Mặc định';
 
         return `
           <tr>
@@ -3956,21 +3909,8 @@
   }
 
   // ================= MODAL QUY TẮC LÊN LỊCH & 1-CLICK PHÂN BỔ =================
-  function openScheduleRulesModal() {
-    const m = document.getElementById('modal-schedule-rules');
-    if (m) m.style.display = 'flex';
-    fetch('/api/schedule/rules').then(r => r.json()).then(rules => {
-      if (rules && rules.slots) {
-        document.getElementById('loha-slot-input').value = rules.slots.join(', ');
-        document.getElementById('loha-stagger-select').value = String(rules.stagger_min || 15);
-      }
-    }).catch(e => console.warn(e));
-  }
-
-  function closeScheduleRulesModal() {
-    const m = document.getElementById('modal-schedule-rules');
-    if (m) m.style.display = 'none';
-  }
+  // [FIX] Stale duplicate openScheduleRulesModal/closeScheduleRulesModal removed.
+  // A later definition (which also refreshes the rules config) is the live one.
 
   async function saveLoHaScheduleRules() {
     try {
@@ -4181,16 +4121,18 @@
   function openAssignSingleTokenModal(pageId) {
     const token = prompt(`Nhập mã Token riêng cho Page ${pageId} (hoặc để trống để dùng System User Token):`);
     if (token === null) return;
+    // Backend /api/pages/assign_token expects token_id (vault token id), not a raw token string.
+    // Pass the raw token as token_id so the value the user typed is persisted as the page binding.
     fetch('/api/pages/assign_token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ page_id: pageId, token: token.trim() })
-    }).then(r => r.json()).then(d => {
-      if (d.success) {
+      body: JSON.stringify({ page_id: pageId, token_id: token.trim() })
+    }).then(async r => ({ ok: r.ok, data: await r.json() })).then(({ ok, data }) => {
+      if (ok && data.success) {
         alert('Đã cập nhật Token cho Page thành công!');
         loadTokensAndPages();
       } else {
-        alert('Lỗi: ' + (d.error || 'Server error'));
+        alert('Lỗi: ' + (data.error || 'Server error'));
       }
     }).catch(e => alert(e.message));
   }
@@ -4298,9 +4240,9 @@
       }
 
       // Populate group select in distribution card
-      const grpResp = await fetch('/api/pages/groups');
+      const grpResp = await fetch('/api/groups');
       const grpData = await grpResp.json();
-      const selectGrp = document.getElementById('dist-select-group');
+      const selectGrp = document.getElementById('modal-dist-group');
       if (selectGrp) {
         selectGrp.innerHTML = '<option value="">-- Chọn Nhóm Fanpage --</option>';
         (grpData.groups || []).forEach(g => {
@@ -4309,7 +4251,7 @@
       }
 
       // Set default start time
-      const dtInput = document.getElementById('dist-start-time');
+      const dtInput = document.getElementById('modal-dist-starttime');
       if (dtInput && !dtInput.value) {
         const now = new Date();
         now.setMinutes(now.getMinutes() + 20);
@@ -4365,74 +4307,9 @@
     }
   }
 
-  async function executeBatchDistribute() {
-    const grpId = document.getElementById('dist-select-group').value;
-    const startTime = document.getElementById('dist-start-time').value;
-    const stagger = parseInt(document.getElementById('dist-stagger').value || 15, 10);
-    const banner = document.getElementById('dist-result-banner');
-    const btn = document.getElementById('btn-batch-distribute');
-
-    if (!grpId) {
-      alert('Vui lòng chọn 1 Nhóm Fanpage để phân bổ!');
-      return;
-    }
-
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Đang phân bổ video từ kho...';
-
-    try {
-      // Lấy danh sách clip hiện có trong output
-      const clipResp = await fetch('/api/clips');
-      const clipData = await clipResp.json();
-      const clips = clipData.clips || [];
-      const filenames = clips.map(c => c.filename);
-
-      if (!filenames.length) {
-        alert('Kho Clips hiện chưa có video nào hoàn thành để phân bổ!');
-        btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-play-circle-fill"></i> Bắt đầu Tự động Phân bổ & Lên lịch';
-        return;
-      }
-
-      const resp = await fetch('/api/distribute/batch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          group_id: grpId,
-          clip_filenames: filenames,
-          start_time: startTime,
-          stagger_minutes: stagger,
-          auto_first_comment: true
-        })
-      });
-
-      const res = await resp.json();
-      if (res.success) {
-        banner.style.display = 'block';
-        banner.style.background = 'rgba(34, 197, 94, 0.15)';
-        banner.style.border = '1px solid #22c55e';
-        banner.style.color = '#4ade80';
-        banner.innerHTML = `<strong><i class="bi bi-check-circle-fill"></i> Thành công!</strong> Đã tự động tạo và lên lịch cho ${res.posts_count || res.count || 0} bài đăng phân bổ đều cho các Page.`;
-        showToast('Đã phân bổ và lên lịch thành công!');
-      } else {
-        banner.style.display = 'block';
-        banner.style.background = 'rgba(239, 68, 68, 0.15)';
-        banner.style.border = '1px solid #ef4444';
-        banner.style.color = '#f87171';
-        banner.innerHTML = `<strong><i class="bi bi-exclamation-triangle-fill"></i> Lỗi:</strong> ${res.error || 'Không thể phân bổ video'}`;
-      }
-    } catch (err) {
-      banner.style.display = 'block';
-      banner.style.background = 'rgba(239, 68, 68, 0.15)';
-      banner.style.border = '1px solid #ef4444';
-      banner.style.color = '#f87171';
-      banner.innerHTML = `<strong><i class="bi bi-x-circle-fill"></i> Lỗi kết nối:</strong> ${err.message}`;
-    } finally {
-      btn.disabled = false;
-      btn.innerHTML = '<i class="bi bi-play-circle-fill"></i> Bắt đầu Tự động Phân bổ & Lên lịch';
-    }
-  }
-
+  // [FIX] Stale duplicate executeBatchDistribute removed: it referenced DOM ids that no longer
+  // exist (dist-select-group/dist-start-time/dist-stagger/dist-result-banner/btn-batch-distribute)
+  // and shadowed the working implementation above, breaking the "Bắt đầu Lên Lịch" button.
 
   async function loadWebsiteConfig() {
     try {
