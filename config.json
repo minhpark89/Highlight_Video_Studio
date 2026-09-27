@@ -6,7 +6,7 @@
   "llm": {
     "api_base": "http://100.89.167.97:8317/v1",
     "api_key": "oc_clip_904296c3e5356d9027135dd4a881d9e102bbe4c420d1d4a9ab7b133d27d548b1",
-    "model": "gpt-5.6-terra"
+    "model": "gemini-3-flash"
   },
   "whisper": {
     "prefer_youtube_transcript": true,

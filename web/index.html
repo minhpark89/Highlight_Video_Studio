@@ -3568,8 +3568,8 @@
 
   
   async function rebalanceTokenPageAllocation() {
-    const inputVal = parseInt(document.getElementById('pages-per-token-input').value) || 3;
-    if (!confirm(`Xác nhận: Tự động phân bổ lại toàn bộ 100 Fanpage vào dàn Token trong Vault (Tối đa ~${inputVal} Page/Token, tự động xoay vòng cân bằng tải 100%)?`)) {
+    const inputVal = parseInt(document.getElementById('pages-per-token-input').value) || 4;
+    if (!confirm(`Xác nhận: Tự động phân bổ lại toàn bộ Fanpage vào dàn Token trong Vault theo tỷ lệ tối đa ${inputVal} Page/Token (Tự động xoay vòng bù trừ để 100% Page đều có Token)?`)) {
       return;
     }
 
@@ -3588,14 +3588,24 @@
         alert('Không có token nào trong Vault để phân bổ!');
         return;
       }
+      if (pages.length === 0) {
+        alert('Chưa có Fanpage nào để phân bổ!');
+        return;
+      }
 
-      // THUẬT TOÁN CHIA ĐỀU TỰ ĐỘNG THÔNG MINH (Cân bằng tải tuyệt đối):
-      // Dù số page không chia hết cho số token (ví dụ: 100 page / 31 token = 3.22)
-      // Hệ thống chia đều xoay vòng round-robin: 24 Token gánh 3 Page, 7 Token gánh 4 Page
-      // Đảm bảo KHÔNG CÓ BẤT KỲ PAGE NÀO BỊ THIẾU TOKEN!
+      // THUẬT TOÁN TỰ ĐỘNG CHIA THEO INPUT CỦA BOSS (BẤT KỲ SỐ LƯỢNG TOKEN & PAGE NÀO):
+      // Gán lần lượt từng token gánh tối đa inputVal page.
+      // Nếu dàn token còn dư hoặc thiếu, tự động xoay vòng (round-robin)
+      // Đảm bảo: 100/100 Page đều có Token, không có bất kỳ Page nào bị bỏ sót!
       const assignments = [];
+      const numTokens = tokens.length;
       pages.forEach((p, idx) => {
-        const tokenObj = tokens[idx % tokens.length];
+        // Nếu số token * inputVal < số page (ví dụ boss chọn 3 page/token mà có 100 page / 31 token):
+        // Xoay vòng chia đều idx % numTokens
+        const tokenObj = (numTokens * inputVal < pages.length)
+          ? tokens[idx % numTokens]
+          : tokens[Math.floor(idx / inputVal) % numTokens];
+
         assignments.push({
           page_id: p.page_id,
           token_id: tokenObj.id,
@@ -3615,8 +3625,8 @@
         alert(`✅ Đã phân bổ đều thành công 100%!
 - Tổng: ${pages.length} Fanpage
 - Dàn: ${tokens.length} Token
-- Tỷ lệ thực tế: ~${avg} Page/Token (24 Token gánh 3 trang, 7 Token gánh 4 trang).
-- Đảm bảo 100/100 Page đều có Token hoạt động!`);
+- Tỷ lệ thực tế: ~${avg} Page/Token
+- Đảm bảo 100/100 Page đều được gán Token hoạt động!`);
         loadTokensOnly();
         if (typeof loadTokensAndPages === 'function') loadTokensAndPages();
       } else {

@@ -6,8 +6,21 @@
 # 4. Singleton lock to prevent duplicate watchdog instances
 
 $ErrorActionPreference = "Continue"
-$workDir = "D:\Highlight_Video_Studio"
-$pythonPath = "C:\Users\Admin\AppData\Local\Programs\Python\Python313\pythonw.exe"
+$workDir = $PSScriptRoot
+if (-not $workDir) { $workDir = (Get-Location).Path }
+
+# Tự động tìm Python trên mọi máy tính
+$pythonPath = "pythonw.exe"
+if (Get-Command "pythonw.exe" -ErrorAction SilentlyContinue) {
+    $pythonPath = "pythonw.exe"
+} elseif (Get-Command "python.exe" -ErrorAction SilentlyContinue) {
+    $pythonPath = "python.exe"
+} elseif (Test-Path "C:\Users\Admin\AppData\Local\Programs\Python\Python313\pythonw.exe") {
+    $pythonPath = "C:\Users\Admin\AppData\Local\Programs\Python\Python313\pythonw.exe"
+} else {
+    $foundPy = Get-ChildItem -Path "$env:LOCALAPPDATA\Programs\Python", "C:\Python*", "C:\Program Files\Python*" -Recurse -Filter "python.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($foundPy) { $pythonPath = $foundPy.FullName }
+}
 $port = 5080
 $logFile = Join-Path $workDir "watchdog.log"
 $lockFile = Join-Path $workDir "watchdog.lock"
