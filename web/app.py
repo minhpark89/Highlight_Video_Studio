@@ -60,7 +60,12 @@ def test_and_pick_active_llm(*args, **kwargs):
 
 from src.publisher.token_vault import TokenVault
 from src.publisher.page_manager import PageManager
-from src.publisher.website_publisher import publish_clip_to_website_cms, generate_curiosity_comment_with_llm, get_clip_metadata
+from src.publisher.website_publisher import (
+    publish_clip_to_website_cms,
+    generate_curiosity_comment_with_llm,
+    generate_llm_hook_image,
+    get_clip_metadata,
+)
 from src.publisher.meta_reel_poster import MetaReelPoster
 
 
@@ -670,6 +675,10 @@ def public_config(cfg):
     if isinstance(llm, dict):
         llm["has_api_key"] = bool(llm.get("api_key"))
         llm.pop("api_key", None)
+    image_provider = safe.get("image_provider")
+    if isinstance(image_provider, dict):
+        image_provider["has_api_key"] = bool(image_provider.get("api_key"))
+        image_provider.pop("api_key", None)
     return safe
 
 
@@ -879,6 +888,20 @@ def api_settings():
                 except ValueError as exc:
                     return jsonify({"success": False, "error": str(exc)}), 400
             cfg.setdefault("llm", {}).update(llm_update)
+        if "image_provider" in data:
+            image_update = dict(data["image_provider"] or {})
+            if "api_base" in image_update:
+                raw_image_base = str(image_update.get("api_base") or "").strip()
+                if raw_image_base:
+                    try:
+                        image_update["api_base"] = _normalise_llm_base(raw_image_base)
+                    except ValueError as exc:
+                        return jsonify({"success": False, "error": f"Image Provider: {exc}"}), 400
+                elif str(image_update.get("model") or "") == "__video_frame__":
+                    image_update["api_base"] = ""
+                else:
+                    return jsonify({"success": False, "error": "Image Provider: vui lòng nhập endpoint khi dùng model AI ảnh"}), 400
+            cfg.setdefault("image_provider", {}).update(image_update)
         if "video_pipeline" in data:
             cfg.setdefault("video_pipeline", {}).update(data["video_pipeline"])
         if "whisper" in data:
@@ -929,6 +952,71 @@ def api_llm_models():
         except ValueError:
             failures.append(f"{models_url}: server không trả JSON hợp lệ")
     return jsonify({"success": False, "error": "Không thể lấy danh sách model. " + " | ".join(failures)}), 502
+
+
+@app.route("/api/image-provider/models", methods=["POST"])
+def api_image_provider_models():
+    data = request.json or {}
+    image_cfg = load_config().get("image_provider", {})
+    raw_base = data.get("api_base") or image_cfg.get("api_base")
+    api_key = data.get("api_key") or image_cfg.get("api_key", "")
+    try:
+        model_urls = _llm_model_urls(raw_base)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    failures = []
+    for models_url in model_urls:
+        try:
+            response = requests.get(models_url, headers=_llm_headers(api_key), timeout=15)
+            if response.status_code != 200:
+                failures.append(f"{models_url}: HTTP {response.status_code}")
+                continue
+            models = _extract_llm_models(response.json())
+            if models:
+                return jsonify({"success": True, "api_base": models_url[:-len('/models')].rstrip('/'), "models": models, "count": len(models)})
+            failures.append(f"{models_url}: response không có danh sách model")
+        except Exception as exc:
+            failures.append(f"{models_url}: {exc}")
+    return jsonify({"success": False, "error": "Không thể lấy model ảnh. " + " | ".join(failures)}), 502
+
+
+@app.route("/api/image-provider/test", methods=["POST"])
+def api_image_provider_test():
+    data = request.json or {}
+    image_cfg = load_config().get("image_provider", {})
+    raw_base = data.get("api_base") or image_cfg.get("api_base")
+    api_key = data.get("api_key") or image_cfg.get("api_key", "")
+    model = str(data.get("model") or image_cfg.get("model") or "").strip()
+    if not model or model == "__video_frame__":
+        return jsonify({"success": False, "error": "Vui lòng chọn model tạo ảnh"}), 400
+    try:
+        api_base = _normalise_llm_base(raw_base)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    started = time.perf_counter()
+    try:
+        response = requests.post(
+            f"{api_base}/images/generations",
+            headers=_llm_headers(api_key),
+            json={"model": model, "prompt": "A simple blue circle on white background", "n": 1, "size": "1024x1024"},
+            timeout=120,
+        )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {}
+        if response.status_code != 200:
+            detail = payload.get("error") or payload.get("message") or response.text[:240]
+            if isinstance(detail, dict):
+                detail = detail.get("message") or str(detail)
+            return jsonify({"success": False, "error": f"Gọi images/generations thất bại (HTTP {response.status_code}): {detail}", "latency_ms": latency_ms}), 502
+        rows = payload.get("data") or []
+        if not rows or not isinstance(rows[0], dict) or not (rows[0].get("b64_json") or rows[0].get("url")):
+            return jsonify({"success": False, "error": "Provider trả HTTP 200 nhưng không có dữ liệu ảnh"}), 502
+        return jsonify({"success": True, "api_base": api_base, "model": model, "latency_ms": latency_ms})
+    except requests.RequestException as exc:
+        return jsonify({"success": False, "error": f"Không kết nối được provider ảnh: {exc}"}), 502
 
 
 @app.route("/api/llm/test", methods=["POST"])
@@ -995,11 +1083,18 @@ def api_generate_content():
     summary = data.get("summary", "").strip()
     hook = data.get("hook", "").strip()
     video_url = data.get("video_url", "").strip()
+    comment_model = data.get("comment_model", "").strip()
     
     if not title:
         return jsonify({"error": "Title is required"}), 400
         
-    res = generate_viral_content(title=title, summary=summary, hook=hook, video_url=video_url)
+    res = generate_viral_content(
+        title=title,
+        summary=summary,
+        hook=hook,
+        video_url=video_url,
+        comment_model=comment_model,
+    )
     return jsonify({"success": True, "data": res})
 
 @app.route("/api/content/thumbnail", methods=["POST"])
@@ -1008,6 +1103,22 @@ def api_generate_thumbnail():
     job_id = data.get("job_id", "")
     clip_index = data.get("clip_index", 1)
     banner_text = data.get("banner_text", "")
+    image_model = data.get("image_model", "").strip()
+
+    # Dùng model ảnh theo tác vụ khi được chọn; nếu provider không trả ảnh,
+    # tiếp tục fallback sang thumbnail trích từ video để luồng không bị chặn.
+    if image_model != "__video_frame__":
+        ai_thumb = generate_llm_hook_image(banner_text or "VIRAL MOMENT", model_override=image_model)
+        if ai_thumb and os.path.exists(ai_thumb):
+            ai_name = f"thumb_ai_{job_id or 'clip'}_{clip_index}_{int(time.time())}.jpg"
+            ai_target = OUTPUT_DIR / ai_name
+            shutil.copy2(ai_thumb, ai_target)
+            return jsonify({
+                "success": True,
+                "thumbnail_url": f"/api/clips/play/{ai_name}",
+                "filename": ai_name,
+                "source": "llm_image",
+            })
     
     # Tìm video file của clip hoặc source video
     target_video = None
@@ -1580,8 +1691,25 @@ def api_distribute_batch():
 
     pages = page_manager.list_pages()
     page_map = {p["page_id"]: p for p in pages}
-    available_tokens = token_vault.list_tokens()
     posts = load_posts()
+
+    resolved_page_tokens = {}
+    missing_page_tokens = []
+    for pid in page_ids:
+        p_info = page_map.get(pid, {})
+        page_token = str(p_info.get("page_token") or "").strip()
+        if not page_token and p_info.get("token_id"):
+            token_entry = token_vault.get_token_by_id(p_info.get("token_id")) or {}
+            page_token = str(token_entry.get("token") or "").strip()
+        if page_token:
+            resolved_page_tokens[pid] = page_token
+        else:
+            missing_page_tokens.append(p_info.get("page_name") or str(pid))
+
+    if missing_page_tokens:
+        return jsonify({
+            "error": "Các Page chưa có token đăng bài hợp lệ: " + ", ".join(missing_page_tokens)
+        }), 400
 
     sched_cfg = group.get("schedule_config") or {}
     group_times = sched_cfg.get("times") or ["11:30", "19:30"]
@@ -1641,10 +1769,7 @@ def api_distribute_batch():
             clip_idx += 1
 
             p_info = page_map.get(pid, {})
-            page_token = p_info.get("access_token", "")
-            if not page_token and available_tokens:
-                tok_obj = available_tokens[idx % len(available_tokens)]
-                page_token = tok_obj.get("token", "")
+            page_token = resolved_page_tokens[pid]
 
             post_id = f"post_{int(time.time())}_{uuid.uuid4().hex[:6]}"
             sched_dt = slot_base_dt + timedelta(minutes=(idx * group_stagger))
@@ -1654,14 +1779,6 @@ def api_distribute_batch():
             meta = get_clip_metadata(clip_fn)
             video_title = meta.get("video_title") or meta.get("clean_title") or f"Highlight Moments #{scheduled_count+1}"
 
-            # [FAST DECOUPLED] Tạo slug & đường dẫn bài viết CMS siêu tốc (0ms), không gọi mạng đồng bộ gây treo
-            clean_slug = re.sub(r'[^a-zA-Z0-9]+', '-', video_title.lower()).strip('-')[:45]
-            if not clean_slug:
-                clean_slug = f"clip-{int(time.time())}-{uuid.uuid4().hex[:4]}"
-            else:
-                clean_slug = f"{clean_slug}-{uuid.uuid4().hex[:4]}"
-            article_url = f"https://bestnews.cfx.bz/blog/{clean_slug}"
-            first_comm = f"🔥 Watch the full uncut footage and breakdown here: {article_url}\n👉 Scroll down the article to stream the complete high-definition video!"
             post_entry = {
                 "id": post_id,
                 "title": f"{video_title.title()}",
@@ -1673,8 +1790,10 @@ def api_distribute_batch():
                 "group_name": group.get("name", "Nhóm Fanpage"),
                 "type": "reel",
                 "media_file": clip_fn,
-                "article_url": article_url,
-                "first_comment": first_comm,
+                "article_url": "",
+                "first_comment": "",
+                "auto_first_comment": bool(auto_first_comment),
+                "use_llm_comment": bool(use_llm_comment),
                 "status": "scheduled",
                 "scheduled_time": sched_time_str,
                 "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

@@ -1,7 +1,8 @@
 param(
-    [string]$Version = "1.0.14",
-    [string]$ToolSource = "E:\OPENCLAW\BOB\Highlight_Studio_Setup.exe v1.0.8\bin",
-    [string]$IconSource = "E:\OPENCLAW\BOB\Highlight_Studio_Setup.exe v1.0.8\app.ico"
+    [string]$Version = "1.0.16",
+    [string]$ToolSource = "D:\Highlight_Video_Studio\bin",
+    [string]$IconSource = "D:\Highlight_Video_Studio\app.ico",
+    [string]$WhisperModelSource = "$env:USERPROFILE\.cache\huggingface\hub\models--Systran--faster-whisper-small"
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +16,7 @@ $payload = Join-Path $buildRoot "Highlight_Studio_Package_v$Version.zip"
 
 if (-not (Test-Path -LiteralPath $csc)) { throw "Không tìm thấy C# compiler: $csc" }
 if (-not (Test-Path -LiteralPath $IconSource)) { throw "Không tìm thấy app.ico: $IconSource" }
+if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stage, $release | Out-Null
 
 $sourceDirs = @("core", "src", "web", "research")
@@ -44,9 +46,21 @@ New-Item -ItemType Directory -Force -Path $runtime | Out-Null
 Expand-Archive -LiteralPath $pythonZip -DestinationPath $runtime -Force
 $sitePackages = Join-Path $runtime "Lib\site-packages"
 New-Item -ItemType Directory -Force -Path $sitePackages | Out-Null
-python -m pip install --disable-pip-version-check --no-compile --upgrade --target $sitePackages -r (Join-Path $root "requirements.txt")
+python -m pip --python (Join-Path $runtime "python.exe") install --disable-pip-version-check --no-compile --upgrade --target $sitePackages -r (Join-Path $root "requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "pip install runtime thất bại" }
 Set-Content -LiteralPath (Join-Path $runtime "python311._pth") -Encoding ASCII -Value @("python311.zip", ".", "..", "Lib\site-packages", "import site")
+
+# Bundle the fallback speech model so a clean PC can create subtitles even
+# when a source video has no downloadable YouTube captions.
+if (-not (Test-Path -LiteralPath $WhisperModelSource)) { throw "Thiếu Whisper model cache: $WhisperModelSource" }
+$whisperTarget = Join-Path $stage "models\faster-whisper-small"
+New-Item -ItemType Directory -Force -Path $whisperTarget | Out-Null
+$snapshot = Get-ChildItem (Join-Path $WhisperModelSource "snapshots") -Directory | Select-Object -First 1
+if (-not $snapshot) { throw "Whisper model cache không có snapshot" }
+foreach ($modelFile in Get-ChildItem $snapshot.FullName -File) {
+    # Copy-Item follows Hugging Face cache links/junctions on Windows PowerShell 5.1.
+    Copy-Item -LiteralPath $modelFile.FullName -Destination (Join-Path $whisperTarget $modelFile.Name) -Force
+}
 
 $launcherOut = "/out:" + (Join-Path $stage "Highlight_Studio.exe")
 $launcherIcon = "/win32icon:" + (Join-Path $stage "app.ico")

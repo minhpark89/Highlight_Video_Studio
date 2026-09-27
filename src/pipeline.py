@@ -43,6 +43,15 @@ if BIN_DIR.exists():
 YT_DLP_BIN = str(BIN_DIR / "yt-dlp.exe") if (BIN_DIR / "yt-dlp.exe").exists() else "yt-dlp"
 NODE_BIN = str(BIN_DIR / "node.exe") if (BIN_DIR / "node.exe").exists() else None
 COOKIES_FILE = CONFIG_DIR / "cookies.txt"
+LOCAL_WHISPER_MODEL = BASE_DIR / "models" / "faster-whisper-small"
+
+
+def get_whisper_model_source():
+    """Prefer the installer-bundled model and fall back to the public model id."""
+    required = ("config.json", "model.bin", "tokenizer.json")
+    if LOCAL_WHISPER_MODEL.exists() and all((LOCAL_WHISPER_MODEL / name).exists() for name in required):
+        return str(LOCAL_WHISPER_MODEL)
+    return "small"
 
 
 # Load config
@@ -274,10 +283,10 @@ def get_word_level_transcription(audio_path: str, start_time: float, duration: f
     words = []
     try:
         try:
-            model = WhisperModel("small", device="cuda", compute_type="float16")
+            model = WhisperModel(get_whisper_model_source(), device="cuda", compute_type="float16")
         except Exception as e:
             print(f"[Whisper CUDA fallback CPU]: {e}")
-            model = WhisperModel("small", device="cpu", compute_type="int8")
+            model = WhisperModel(get_whisper_model_source(), device="cpu", compute_type="int8")
 
         segments, _ = model.transcribe(str(clip_audio_tmp), word_timestamps=True, beam_size=1)
         for s in segments:
@@ -308,6 +317,41 @@ def format_ass_time(seconds: float) -> str:
     cs = int((s - int(s)) * 100)
     return f"{h}:{m:02d}:{int(s):02d}.{cs:02d}"
 
+def transcript_segments_to_words(segments, clip_start: float, clip_duration: float):
+    """Create clip-relative word timing from transcript segments.
+
+    YouTube captions already contain reliable segment timing. Reusing it avoids
+    loading Whisper once for every rendered clip and guarantees subtitles on a
+    clean installation whenever captions were available for highlight analysis.
+    """
+    clip_end = clip_start + clip_duration
+    words = []
+    for segment in segments or []:
+        try:
+            seg_start = float(segment.get("start", 0.0))
+            seg_end = seg_start + max(0.0, float(segment.get("duration", 0.0)))
+            text = str(segment.get("text") or "").strip()
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if not text or seg_end <= clip_start or seg_start >= clip_end:
+            continue
+
+        tokens = [token for token in re.findall(r"[^\s]+", text) if token.strip()]
+        if not tokens:
+            continue
+        visible_start = max(seg_start, clip_start)
+        visible_end = min(max(seg_end, visible_start + 0.2), clip_end)
+        step = max(0.08, (visible_end - visible_start) / len(tokens))
+        for index, token in enumerate(tokens):
+            word_start = visible_start + index * step
+            word_end = min(visible_end, word_start + step)
+            words.append({
+                "word": token,
+                "start": max(0.0, word_start - clip_start),
+                "end": max(0.1, word_end - clip_start),
+            })
+    return words
+
 def generate_karaoke_ass(words, ass_path: str, style_name="hormozi_yellow"):
     """Táº¡o file phá»¥ Ä‘á» ASS vá»›i hiá»‡u á»©ng cháº¡y chá»¯ Karaoke (Hormozi style) ná»•i báº­t"""
     active_color = "&H0022FFFF&" # VÃ ng neon ná»•i báº­t
@@ -328,7 +372,7 @@ PlayResY: 1920
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Plus Jakarta Sans,82,{inactive_color},&H0000FFFF,&H00000000,&H90000000,-1,0,0,0,100,100,1,0,1,6,3,2,60,60,440,1
+Style: Default,Arial,82,{inactive_color},&H0000FFFF,&H00000000,&H90000000,-1,0,0,0,100,100,1,0,1,6,3,2,60,60,300,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -384,10 +428,10 @@ def transcribe_local_whisper(audio_path: str, update_status=None):
             "Video không có phụ đề YouTube và bộ nhận diện giọng nói faster-whisper chưa được cài đặt."
         ) from exc
     try:
-        model = WhisperModel("small", device="cuda", compute_type="float16")
+        model = WhisperModel(get_whisper_model_source(), device="cuda", compute_type="float16")
     except Exception as e:
         print(f"[Whisper] CUDA khÃ´ng kháº£ dá»¥ng, dÃ¹ng CPU: {e}")
-        model = WhisperModel("small", device="cpu", compute_type="int8")
+        model = WhisperModel(get_whisper_model_source(), device="cpu", compute_type="int8")
 
     segments, info = model.transcribe(audio_path, beam_size=1)
     results = []
@@ -398,6 +442,74 @@ def transcribe_local_whisper(audio_path: str, update_status=None):
             "text": s.text.strip()
         })
     return results
+
+def _fallback_highlights(transcript_items, num_clips=3, target_length="auto"):
+    """Build exactly the requested number of usable clips when the LLM fails or under-returns."""
+    try:
+        requested = max(1, min(10, int(num_clips)))
+    except (TypeError, ValueError):
+        requested = 3
+
+    timeline = []
+    for item in transcript_items or []:
+        try:
+            start = max(0.0, float(item.get("start", 0.0)))
+            duration = max(0.0, float(item.get("duration", 0.0)))
+            timeline.append((start, start + duration))
+        except (TypeError, ValueError, AttributeError):
+            continue
+
+    video_end = max((end for _, end in timeline), default=0.0)
+    clip_duration = 45.0 if target_length == "short" else 55.0
+    if video_end <= 0:
+        video_end = max(clip_duration, requested * (clip_duration + 15.0))
+
+    starts = [start for start, _ in timeline]
+    clips = []
+    for index in range(requested):
+        target = video_end * ((index + 0.5) / requested)
+        if starts:
+            anchor = min(starts, key=lambda value: abs(value - target))
+        else:
+            anchor = max(0.0, target - clip_duration / 2.0)
+        start_time = max(0.0, min(anchor, max(0.0, video_end - clip_duration)))
+        end_time = min(video_end, start_time + clip_duration)
+        if end_time - start_time < 10.0:
+            start_time = max(0.0, end_time - min(clip_duration, video_end))
+        clips.append({
+            "start": round(start_time, 2),
+            "end": round(end_time, 2),
+            "start_time": round(start_time, 2),
+            "end_time": round(end_time, 2),
+            "hook_title": f"Highlight phan {index + 1}",
+            "title": f"Highlight phan {index + 1}",
+            "summary": "Doan noi dung noi bat duoc chon tu transcript",
+            "reason": "Doan noi dung noi bat duoc chon tu transcript",
+            "viral_score": max(80, 92 - index),
+        })
+    return clips
+
+
+def _ensure_highlight_count(clips, transcript_items, num_clips=3, target_length="auto"):
+    try:
+        requested = max(1, min(10, int(num_clips)))
+    except (TypeError, ValueError):
+        requested = 3
+    result = list(clips or [])[:requested]
+    if len(result) >= requested:
+        return result
+
+    candidates = _fallback_highlights(transcript_items, requested, target_length)
+    existing = {(round(float(c.get("start", 0.0)), 1), round(float(c.get("end", 0.0)), 1)) for c in result}
+    for candidate in candidates:
+        key = (round(candidate["start"], 1), round(candidate["end"], 1))
+        if key not in existing:
+            result.append(candidate)
+            existing.add(key)
+        if len(result) >= requested:
+            break
+    return result
+
 
 def ask_llm_for_highlights(transcript_items, *args, num_clips=3, target_length="auto", criteria="hook_viral", hook_duration=6, update_status=None, **kwargs):
     # Support positional args if passed as (transcript_items, duration, title, num_clips)
@@ -500,14 +612,10 @@ DÆ°á»›i Ä‘Ã¢y lÃ  transcript cÃ³ timestamp:
                 "reason": c_summary,
                 "viral_score": v_score
             })
-        return normalized_clips
+        return _ensure_highlight_count(normalized_clips, transcript_items, num_clips, target_length)
     except Exception as e:
         print(f"[LLM Error] KhÃ´ng trÃ­ch xuáº¥t Ä‘Æ°á»£c highlight tá»« LLM: {e}")
-        fallback_clips = [
-            {"start": 10.0, "end": 55.0, "start_time": 10.0, "end_time": 55.0, "hook_title": "Highlight bÃ­ áº©n pháº§n 1", "title": "Highlight bÃ­ áº©n pháº§n 1", "summary": "Clip ngáº¯n", "reason": "Clip ngáº¯n", "viral_score": 90},
-            {"start": 80.0, "end": 130.0, "start_time": 80.0, "end_time": 130.0, "hook_title": "Cao trÃ o ká»‹ch tÃ­nh pháº§n 2", "title": "Cao trÃ o ká»‹ch tÃ­nh pháº§n 2", "summary": "Clip ngáº¯n", "reason": "Clip ngáº¯n", "viral_score": 92}
-        ]
-        return fallback_clips
+        return _fallback_highlights(transcript_items, num_clips, target_length)
 
 def render_highlight_clip(source_video: str = None, audio_path: str = None, start_time: float = None, end_time: float = None, output_path: str = None, aspect_ratio="9:16", reframe_mode="face_center", subtitle_style="hormozi_yellow", update_status=None, **kwargs):
     # Support kwargs from app.py: video_path, start_sec, end_sec, job_id, clip_idx, output_dir
@@ -536,9 +644,12 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
     # 1. Táº¡o phá»¥ Ä‘á» ASS Karaoke tá»« Ä‘oáº¡n audio
     ass_path = TEMP_DIR / f"{Path(output_path).stem}.ass"
     words = []
-    if subtitle_style and subtitle_style != "none" and audio_path and Path(audio_path).exists():
-        words = get_word_level_transcription(audio_path, start_time, duration, update_status=update_status)
-        generate_karaoke_ass(words, str(ass_path), style_name=subtitle_style)
+    if subtitle_style and subtitle_style != "none":
+        words = transcript_segments_to_words(kwargs.get("all_segments"), start_time, duration)
+        if not words and audio_path and Path(audio_path).exists():
+            words = get_word_level_transcription(audio_path, start_time, duration, update_status=update_status)
+        if words:
+            generate_karaoke_ass(words, str(ass_path), style_name=subtitle_style)
 
     if update_status:
         update_status(f"Äang render video 9:16 ({duration:.1f}s) qua GPU RTX 3060...")
@@ -555,12 +666,19 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
     else:
         vf = "scale=1920:1080:force_original_aspect_ratio=decrease"
 
-    # GhÃ©p filter phá»¥ Ä‘á» ASS náº¿u cÃ³
+    pipeline_cfg = config.get("video_pipeline", {}) if isinstance(config.get("video_pipeline"), dict) else {}
+
+    # GhÃ©p filter phá»¥ Ä‘á» ASS náº¿u cÃ³. Video nguá»“n thÆ°á»ng Ä‘Ã£ burn caption sáºµn;
+    # che má» vÃ¹ng caption cá»§a nguá»“n Ä‘á»ƒ trÃ¡nh hai lá»›p chá»¯ chá»“ng nhau sau khi crop 9:16.
     if ass_path.exists() and ass_path.stat().st_size > 300:
+        if aspect_ratio == "9:16" and pipeline_cfg.get("source_caption_cleanup", True):
+            vf = f"{vf},drawbox=x=0:y=ih*0.70:w=iw:h=ih*0.22:color=black@0.90:t=fill"
         # ÄÆ°á»ng dáº«n cho FFmpeg trÃªn Windows cáº§n escape dáº¥u hai cháº¥m vÃ  gáº¡ch chÃ©o
         ass_str = str(ass_path).replace("\\", "/").replace(":", "\\:")
         vf = f"{vf},subtitles='{ass_str}'"
-
+    encoder = str(pipeline_cfg.get("encoder") or "auto").lower()
+    nvenc_preset = str(pipeline_cfg.get("nvenc_preset") or "p2")
+    crf = str(pipeline_cfg.get("crf") or 21)
     cmd = [
         "ffmpeg", "-y",
         "-ss", str(start_time),
@@ -568,15 +686,15 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
         "-i", str(source_video),
         "-vf", vf,
         "-c:v", "h264_nvenc",
-        "-preset", "p1",
-        "-cq", "23",
+        "-preset", nvenc_preset,
+        "-cq", crf,
         "-c:a", "aac",
         "-b:a", "192k",
         "-movflags", "+faststart",
         str(output_path)
     ]
     
-    p = subprocess.run(cmd, capture_output=True, text=True, creationflags=NO_WINDOW)
+    p = subprocess.run(cmd, capture_output=True, text=True, creationflags=NO_WINDOW) if encoder != "cpu" else subprocess.CompletedProcess(cmd, 1, "", "CPU encoder requested")
     if p.returncode != 0:
         print(f"[FFmpeg Warning] h264_nvenc gáº·p sá»± cá»‘, fallback sang libx264 ultrafast: {p.stderr[:200]}")
         cmd_fallback = [
@@ -586,8 +704,8 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
             "-i", str(source_video),
             "-vf", vf,
             "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-crf", "23",
+            "-preset", "veryfast",
+            "-crf", crf,
             "-c:a", "aac",
             "-b:a", "192k",
             "-movflags", "+faststart",

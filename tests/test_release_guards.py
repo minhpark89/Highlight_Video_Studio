@@ -139,6 +139,28 @@ class ReleaseGuardTests(unittest.TestCase):
         self.assertTrue(safe["llm"]["has_api_key"])
         self.assertEqual(original["llm"]["api_key"], "super-secret")
 
+
+    def test_public_config_never_returns_image_provider_api_key(self):
+        from web.app import public_config
+        original = {"image_provider": {"api_key": "image-secret", "model": "image-1"}}
+        safe = public_config(original)
+        self.assertNotIn("api_key", safe["image_provider"])
+        self.assertTrue(safe["image_provider"]["has_api_key"])
+        self.assertEqual(original["image_provider"]["api_key"], "image-secret")
+
+    def test_image_provider_probe_uses_images_generations(self):
+        from web.app import app
+        app.config["TESTING"] = True
+        client = app.test_client()
+        generated = FakeResponse(200, {"data": [{"b64_json": "aW1hZ2U="}]})
+        with mock.patch("web.app.requests.post", return_value=generated) as post:
+            result = client.post("/api/image-provider/test", json={
+                "api_base": "https://images.test/v1", "api_key": "k", "model": "image-1"
+            })
+        self.assertEqual(result.status_code, 200)
+        self.assertTrue(result.get_json()["success"])
+        self.assertEqual(post.call_args.args[0], "https://images.test/v1/images/generations")
+
     def test_job_pipeline_resolves_all_lazy_pipeline_functions(self):
         from web import app as web_app
         with tempfile.TemporaryDirectory() as folder:
@@ -181,6 +203,30 @@ class ReleaseGuardTests(unittest.TestCase):
             "duration": 2.5,
             "text": "hello world",
         }])
+
+    def test_transcript_segments_generate_clip_relative_karaoke_words(self):
+        from src.pipeline import transcript_segments_to_words
+        words = transcript_segments_to_words([
+            {"start": 9.0, "duration": 3.0, "text": "before clip starts"},
+            {"start": 12.0, "duration": 2.0, "text": "viral subtitle"},
+        ], clip_start=10.0, clip_duration=5.0)
+        self.assertEqual([item["word"] for item in words], [
+            "before", "clip", "starts", "viral", "subtitle"
+        ])
+        self.assertGreaterEqual(words[0]["start"], 0.0)
+        self.assertLessEqual(words[-1]["end"], 5.0)
+
+    def test_fallback_highlights_always_match_requested_count(self):
+        from src.pipeline import _fallback_highlights, _ensure_highlight_count
+        transcript = [
+            {"start": float(second), "duration": 5.0, "text": f"line {second}"}
+            for second in range(0, 600, 10)
+        ]
+        fallback = _fallback_highlights(transcript, num_clips=3)
+        self.assertEqual(len(fallback), 3)
+        completed = _ensure_highlight_count(fallback[:2], transcript, num_clips=3)
+        self.assertEqual(len(completed), 3)
+        self.assertTrue(all(item["end"] > item["start"] for item in completed))
 
 
 if __name__ == "__main__":

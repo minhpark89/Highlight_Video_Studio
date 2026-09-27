@@ -52,6 +52,22 @@ def get_task_model(task: str, llm_cfg: dict = None) -> str:
     task_models = cfg.get("task_models") if isinstance(cfg.get("task_models"), dict) else {}
     return str(task_models.get(task) or cfg.get("model") or "").strip()
 
+
+def get_image_provider_config(model_override: str = "") -> dict:
+    """Resolve the dedicated image provider, with legacy LLM image settings as fallback."""
+    try:
+        with open(HVS_DIR / "config.json", "r", encoding="utf-8") as f:
+            root_cfg = json.load(f)
+    except Exception:
+        root_cfg = {}
+    image_cfg = root_cfg.get("image_provider") if isinstance(root_cfg.get("image_provider"), dict) else {}
+    llm_cfg = root_cfg.get("llm") if isinstance(root_cfg.get("llm"), dict) else {}
+    return {
+        "api_base": str(image_cfg.get("api_base") or llm_cfg.get("api_base") or "").strip(),
+        "api_key": str(image_cfg.get("api_key") or llm_cfg.get("api_key") or "").strip(),
+        "model": str(model_override or image_cfg.get("model") or get_task_model("image", llm_cfg) or "").strip(),
+    }
+
 def _llm_headers(api_key: str) -> dict:
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     if api_key:
@@ -137,7 +153,7 @@ def get_clip_metadata(clip_filename: str) -> dict:
 
     return meta
 
-def generate_llm_hook_image(video_title: str) -> str:
+def generate_llm_hook_image(video_title: str, model_override: str = "") -> str:
     """
     Sinh ảnh HOOK THUMBNAIL bằng AI Gemini (gemini-3.1-flash-image)
     chuẩn 100% phong cách giật gân, tò mò tột đỉnh như hình mẫu boss gửi:
@@ -149,10 +165,10 @@ def generate_llm_hook_image(video_title: str) -> str:
     - 16:9 widescreen, cinematic, cực nét!
     """
     import base64
-    llm_cfg = get_llm_config()
-    api_base = str(llm_cfg.get("api_base") or "").strip()
-    api_key = str(llm_cfg.get("api_key") or "").strip()
-    model = get_task_model("image", llm_cfg)
+    image_cfg = get_image_provider_config(model_override)
+    api_base = image_cfg["api_base"]
+    api_key = image_cfg["api_key"]
+    model = image_cfg["model"]
     if model == "__video_frame__" or not api_base or not model:
         logger.info("Use video frame fallback for article hook image")
         return ""
@@ -167,32 +183,60 @@ Exact required visual elements matching viral clickbait standard:
 6. In top-left corner, a sleek camera viewfinder overlay icon: '● REC BODYCAM' with white corner brackets.
 7. Ultra-high resolution, photorealistic, cinematic lighting, 16:9 widescreen format."""
 
-    url = f"{api_base.rstrip('/')}/chat/completions"
     headers = _llm_headers(api_key)
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}]
-    }
-
     temp_dir = HVS_DIR / "temp"
     temp_dir.mkdir(parents=True, exist_ok=True)
     out_file = str(temp_dir / f"llm_hook_{abs(hash(video_title)) % 100000}.jpg")
 
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=90)
-        if resp.status_code == 200:
+    def save_image_value(value) -> str:
+        if not value:
+            return ""
+        if isinstance(value, dict):
+            value = value.get("url") or value.get("b64_json")
+        value = str(value)
+        try:
+            if value.startswith("http://") or value.startswith("https://"):
+                downloaded = requests.get(value, timeout=90)
+                downloaded.raise_for_status()
+                Path(out_file).write_bytes(downloaded.content)
+            else:
+                raw_b64 = value.split("base64,", 1)[1] if "base64," in value else value
+                Path(out_file).write_bytes(base64.b64decode(raw_b64))
+            logger.info("Generated image-provider Hook Image: %s", out_file)
+            return out_file
+        except Exception as exc:
+            logger.warning("Cannot save generated image response: %s", exc)
+            return ""
+
+    attempts = [
+        (f"{api_base.rstrip('/')}/images/generations", {
+            "model": model, "prompt": prompt, "n": 1, "size": "1536x1024"
+        }),
+        (f"{api_base.rstrip('/')}/chat/completions", {
+            "model": model, "messages": [{"role": "user", "content": prompt}]
+        }),
+    ]
+    for url, payload in attempts:
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=120)
+            if resp.status_code != 200:
+                logger.warning("Image provider %s returned HTTP %s", url, resp.status_code)
+                continue
             res_json = resp.json()
-            choices = res_json.get("choices", [])
-            if choices and choices[0].get("message", {}).get("images"):
-                img_url = choices[0]["message"]["images"][0]["image_url"]["url"]
-                if "base64," in img_url:
-                    raw_b64 = img_url.split("base64,")[1]
-                    with open(out_file, "wb") as f:
-                        f.write(base64.b64decode(raw_b64))
-                    logger.info(f"Generated LLM Hook Image: {out_file}")
-                    return out_file
-    except Exception as exc:
-        logger.warning(f"LLM hook image generation failed: {exc}")
+            data = res_json.get("data") or []
+            if data and isinstance(data[0], dict):
+                saved = save_image_value(data[0].get("b64_json") or data[0].get("url"))
+                if saved:
+                    return saved
+            choices = res_json.get("choices") or []
+            message = choices[0].get("message", {}) if choices and isinstance(choices[0], dict) else {}
+            images = message.get("images") or []
+            if images:
+                saved = save_image_value(images[0].get("image_url") if isinstance(images[0], dict) else images[0])
+                if saved:
+                    return saved
+        except Exception as exc:
+            logger.warning("Image provider request failed at %s: %s", url, exc)
 
     return ""
 

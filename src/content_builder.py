@@ -47,7 +47,7 @@ def get_llm_candidates():
         "configured_base": configured_base
     }
 
-def test_and_pick_active_llm():
+def test_and_pick_active_llm(model_override: str = ""):
     """Tự động kiểm tra và bắt lấy endpoint 9router đang hoạt động trên máy này hoặc máy khác"""
     data = get_llm_candidates()
     headers = {"Authorization": f"Bearer {data['api_key']}"}
@@ -59,7 +59,7 @@ def test_and_pick_active_llm():
                 return {
                     "api_base": ep,
                     "api_key": data["api_key"],
-                    "model": data["model"],
+                    "model": model_override or data["model"],
                     "status": "connected"
                 }
         except Exception:
@@ -68,16 +68,32 @@ def test_and_pick_active_llm():
     return {
         "api_base": data["configured_base"],
         "api_key": data["api_key"],
-        "model": data["model"],
+        "model": model_override or data["model"],
         "status": "fallback"
     }
 
-def generate_viral_content(title: str, summary: str = "", hook: str = "", video_url: str = ""):
+def _get_task_model(task: str) -> str:
+    """Resolve a task model from config.json, falling back to the main model."""
+    try:
+        cfg = json.loads((BASE_DIR / "config.json").read_text(encoding="utf-8"))
+        llm_cfg = cfg.get("llm") if isinstance(cfg.get("llm"), dict) else {}
+        task_models = llm_cfg.get("task_models") if isinstance(llm_cfg.get("task_models"), dict) else {}
+        return str(task_models.get(task) or llm_cfg.get("model") or "").strip()
+    except Exception:
+        return ""
+
+def generate_viral_content(
+    title: str,
+    summary: str = "",
+    hook: str = "",
+    video_url: str = "",
+    comment_model: str = "",
+):
     """
     Sử dụng LLM 9router viết bài đăng Facebook cực hay, tiêu đề viral,
     và đặc biệt FIRST COMMENT dạng gây tò mò tột độ (Curiosity Gap).
     """
-    llm = test_and_pick_active_llm()
+    llm = test_and_pick_active_llm(comment_model or _get_task_model("first_comment"))
     prompt = f"""Bạn là một chuyên gia sáng tạo nội dung viral mạng xã hội (Facebook Reels, TikTok, YouTube Shorts), am hiểu tâm lý tò mò tương tự phong cách Longform Studio.
 
 Nhiệm vụ: Dựa vào tiêu đề và nội dung video sau:

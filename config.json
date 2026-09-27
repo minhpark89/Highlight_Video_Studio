@@ -1,6 +1,6 @@
 {
   "app_name": "Highlight Video Studio",
-  "version": "1.0.14",
+  "version": "1.0.16",
   "port": 5080,
   "host": "0.0.0.0",
   "llm": {
@@ -9,8 +9,7 @@
     "model": "",
     "task_models": {
       "article": "",
-      "first_comment": "",
-      "image": "__video_frame__"
+      "first_comment": ""
     }
   },
   "whisper": {
@@ -26,5 +25,10 @@
     "nvenc_preset": "p2",
     "crf": 21,
     "subtitle_style": "hormozi_yellow"
+  },
+  "image_provider": {
+    "api_base": "",
+    "api_key": "",
+    "model": "__video_frame__"
   }
 }

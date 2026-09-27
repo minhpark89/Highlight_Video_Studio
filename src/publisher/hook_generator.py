@@ -37,7 +37,7 @@ def generate_ai_hook_thumbnail(video_title: str, output_path: str = None) -> str
 
     llm_cfg = get_llm_config()
     api_base = llm_cfg.get("api_base", "http://100.89.167.97:8317/v1")
-    api_key = ***"api_key", "")
+    api_key = llm_cfg.get("api_key", "")
     
     prompt = f"""Create a viral, high-CTR YouTube thumbnail and article hook image for a dramatic video about: "{clean_title}".
 Style and visual elements:

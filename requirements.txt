@@ -3,3 +3,5 @@ waitress
 requests
 yt-dlp
 pillow
+youtube-transcript-api==1.2.4
+faster-whisper==1.2.1

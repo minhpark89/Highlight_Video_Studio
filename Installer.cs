@@ -17,7 +17,7 @@ internal sealed class InstallerForm : Form
 
     internal InstallerForm()
     {
-        Text = "Highlight Video Studio v1.0.14 — Cài đặt";
+        Text = "Highlight Video Studio v1.0.16 — Cài đặt";
         ClientSize = new Size(620, 355);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;

@@ -700,58 +700,6 @@
 </style>
 </head>
 <body>
-<script>
-  // Robust Head Switcher: Chạy độc lập, không phụ thuộc script khác
-  window.switchTab = function(paneId, btnEl) {
-    try {
-      console.log('[Tab Direct] Switching to:', paneId);
-      document.querySelectorAll('.nav-btn').forEach(function(b) { b.classList.remove('active'); });
-      document.querySelectorAll('.pane').forEach(function(p) {
-        p.classList.remove('active');
-        p.style.display = 'none';
-      });
-
-      if (btnEl) {
-        btnEl.classList.add('active');
-      } else {
-        var mBtn = document.querySelector('.nav-btn[data-pane="' + paneId + '"]');
-        if (mBtn) mBtn.classList.add('active');
-      }
-
-      var target = document.getElementById(paneId);
-      if (target) {
-        target.classList.add('active');
-        target.style.display = 'block';
-      }
-
-      // Lazy loaders
-      try {
-        if (paneId === 'pane-jobs' && typeof loadJobsTable === 'function') loadJobsTable();
-        if (paneId === 'pane-research' && typeof loadSavedResearchVideos === 'function') loadSavedResearchVideos();
-        if (paneId === 'pane-gallery' && typeof loadClipsGallery === 'function') loadClipsGallery();
-        if (paneId === 'pane-groups' && typeof loadLoHaGroups === 'function') loadLoHaGroups();
-        if (paneId === 'pane-pages' && typeof loadTokensAndPages === 'function') loadTokensAndPages();
-        if (paneId === 'pane-tokens' && typeof loadTokensOnly === 'function') loadTokensOnly();
-        if (paneId === 'pane-posts' && typeof loadPostsTable === 'function') loadPostsTable();
-        if (paneId === 'pane-website' && typeof loadWebsiteConfig === 'function') loadWebsiteConfig();
-      } catch (err) {
-        console.warn('Lazy loader warning:', err);
-      }
-    } catch (e) {
-      console.error('[switchTab error]', e);
-    }
-  };
-
-  document.addEventListener('DOMContentLoaded', function() {
-    document.querySelectorAll('.nav-btn[data-pane]').forEach(function(btn) {
-      btn.onclick = function(e) {
-        e.preventDefault();
-        var pId = this.getAttribute('data-pane');
-        window.switchTab(pId, this);
-      };
-    });
-  });
-</script>
 
 <div id="app-shell">
   <!-- Left Sidebar Navigation -->
@@ -802,10 +750,6 @@
       <button class="nav-btn" data-pane="pane-posts" onclick="switchTab('pane-posts', this)">
         <span class="nav-icon"><i class="bi bi-calendar-check-fill" style="color: #10b981;"></i></span>
         <span>Quản lý Bài Đăng & Dọn Ổ</span>
-      </button>
-      <button class="nav-btn" data-pane="pane-website" onclick="switchTab('pane-website', this)">
-        <span class="nav-icon"><i class="bi bi-globe" style="color: #06b6d4;"></i></span>
-        <span>Kết nối Website & Bài Viết</span>
       </button>
     </div>
     <span class="nav-section">Hệ thống</span>
@@ -1628,7 +1572,19 @@
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;">
                   <div><label class="lbl">Model viết bài website</label><select id="cfg_llm_article_model" class="form-select"></select></div>
                   <div><label class="lbl">Model viết First Comment</label><select id="cfg_llm_comment_model" class="form-select"></select></div>
-                  <div style="grid-column:1/-1"><label class="lbl">Model tạo ảnh Hook</label><select id="cfg_llm_image_model" class="form-select"><option value="__video_frame__">Không dùng AI ảnh — trích frame video ổn định</option></select><div style="font-size:11px;color:#64748b;margin-top:4px;">Chọn model có khả năng tạo ảnh. Nếu provider không có model ảnh, chọn trích frame video.</div></div>
+                </div>
+                <div style="margin-top:16px;padding:14px;border:1px solid rgba(236,72,153,.35);border-radius:10px;background:rgba(236,72,153,.05);">
+                  <div style="font-size:12px;font-weight:800;color:#f472b6;margin-bottom:10px;"><i class="bi bi-image"></i> AI TẠO ẢNH RIÊNG (TÙY CHỌN)</div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                    <div style="grid-column:1/-1"><label class="lbl">Image Provider Endpoint</label><input type="text" id="cfg_image_base" class="form-control" placeholder="https://api.example.com/v1"></div>
+                    <div><label class="lbl">Image API Key</label><input type="password" id="cfg_image_key" class="form-control" placeholder="Để trống nếu endpoint không cần key"></div>
+                    <div><label class="lbl">Model tạo ảnh Hook</label><select id="cfg_image_model" class="form-select"><option value="__video_frame__">Không dùng AI ảnh — trích frame video</option></select></div>
+                  </div>
+                  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
+                    <button type="button" class="btn btn-secondary btn-sm" id="btn-check-image" onclick="checkImageEndpoint()"><i class="bi bi-cloud-download"></i> Lấy model ảnh</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btn-test-image" onclick="testImageProvider()"><i class="bi bi-image"></i> Test tạo ảnh</button>
+                  </div>
+                  <div id="image-test-result" style="font-size:12.5px;font-weight:600;margin-top:9px;min-height:18px;">Có thể để chế độ trích frame video, không tốn LLM ảnh.</div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap;">
                   <button type="button" class="btn btn-secondary btn-sm" id="btn-check-llm" onclick="checkLlmEndpoint()" style="font-weight: 700; border-color: #38bdf8;">
@@ -1710,68 +1666,6 @@
               </div>
 </section>
 
-      <!-- PANE: KẾT NỐI WEBSITE BÀI VIẾT & FIRST COMMENT -->
-      <section id="pane-website" class="pane">
-        <div class="panel">
-          <div class="panel-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <div>
-              <h2 style="font-size: 20px; font-weight: 800; margin: 0; display: flex; align-items: center; gap: 10px;">
-                <i class="bi bi-globe2" style="color: #38bdf8;"></i>
-                Kết nối website bài viết & First Comment
-              </h2>
-              <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">
-                Cấu hình Website CMS để tự động đăng bài viết kèm video player và lấy link gán vào First Comment Facebook
-              </div>
-            </div>
-            <button class="btn btn-secondary" onclick="loadWebsiteConfig()"><i class="bi bi-arrow-repeat"></i> Làm mới</button>
-          </div>
-          <form id="websiteSettingsForm" onsubmit="saveWebsiteConfig(event)" style="max-width: 700px; background: #111c33; border: 1px solid #23304d; border-radius: 12px; padding: 24px;">
-            <div style="margin-bottom: 16px;">
-              <label class="form-label" style="font-size: 12px; font-weight: 700; color: #94a3b8;">Website URL (Domain CMS):</label>
-              <input type="text" id="cfg_web_base" class="form-control" placeholder="https://yourblogdomain.com" required style="font-size: 13.5px;">
-              <div style="font-size: 11px; color: #64748b; margin-top: 4px;">Domain website CMS nhận bài viết (hỗ trợ các site cùng kiến trúc CMS).</div>
-            </div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
-              <div>
-                <label class="form-label" style="font-size: 12px; font-weight: 700; color: #94a3b8;">Username:</label>
-                <input type="text" id="cfg_web_user" class="form-control" placeholder="admin" required style="font-size: 13.5px;">
-              </div>
-              <div>
-                <label class="form-label" style="font-size: 12px; font-weight: 700; color: #94a3b8;">Password:</label>
-                <input type="password" id="cfg_web_password" class="form-control" placeholder="Nhập mật khẩu (lưu bảo mật DPAPI)" style="font-size: 13.5px;">
-              </div>
-            </div>
-            <div id="cfg_web_status" style="font-size: 12px; color: #94a3b8; margin-bottom: 16px;">
-              <i class="bi bi-shield-lock"></i> Để trống mật khẩu nếu không muốn thay đổi giá trị đang lưu.
-            </div>
-            <div style="border-top:1px solid #23304d; margin:20px 0 16px; padding-top:18px;">
-              <div style="font-weight:800; margin-bottom:12px;"><i class="bi bi-camera-video"></i> Máy chủ phát video công khai</div>
-              <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-                <div><label class="form-label">Phương thức upload</label><select id="cfg_video_method" class="form-control"><option value="scp">SCP/SFTP (khuyến nghị)</option><option value="cms">CMS presigned upload</option></select></div>
-                <div><label class="form-label">SSH Host</label><input id="cfg_video_host" class="form-control" placeholder="157.173.116.71"></div>
-                <div><label class="form-label">SSH Port</label><input id="cfg_video_port" type="number" class="form-control" value="22" min="1" max="65535"></div>
-                <div><label class="form-label">SSH Username</label><input id="cfg_video_user" class="form-control" placeholder="root"></div>
-                <div style="grid-column:1/-1"><label class="form-label">Đường dẫn private key trên máy</label><input id="cfg_video_key" class="form-control" placeholder="C:\Users\Bạn\.ssh\id_ed25519"></div>
-                <div style="grid-column:1/-1"><label class="form-label">Thư mục video trên server</label><input id="cfg_video_remote" class="form-control" placeholder="/var/www/portfolio/videos"></div>
-                <div style="grid-column:1/-1"><label class="form-label">Public video URL</label><input id="cfg_video_public" class="form-control" placeholder="https://studio.example.com/videos"></div>
-              </div>
-              <div id="cfg_video_status" style="font-size:12px;color:#94a3b8;margin-top:10px;">Chưa kiểm tra máy chủ video.</div>
-            </div>
-            <div style="display: flex; align-items: center; gap: 12px;">
-              <button type="submit" class="btn btn-primary" style="font-weight: 700; padding: 10px 20px;">
-                <i class="bi bi-save2-fill"></i> Lưu cấu hình Website
-              </button>
-              <button type="button" class="btn btn-secondary" onclick="testWebsiteConnection()" style="font-weight: 600;">
-                <i class="bi bi-broadcast"></i> Kiểm tra kết nối
-              </button>
-              <button type="button" class="btn btn-secondary" onclick="testVideoUploader()" style="font-weight: 600;">
-                <i class="bi bi-cloud-arrow-up"></i> Kiểm tra upload video
-              </button>
-              <span id="website-save-msg" style="font-size: 12.5px; font-weight: 600;"></span>
-            </div>
-          </form>
-        </div>
-      </section>
     </div><!-- end content-area -->
 
 
@@ -1823,7 +1717,6 @@
         if (paneId === 'pane-pages' && typeof loadTokensAndPages === 'function') loadTokensAndPages();
         if (paneId === 'pane-tokens' && typeof loadTokensOnly === 'function') loadTokensOnly();
         if (paneId === 'pane-posts' && typeof loadPostsTable === 'function') loadPostsTable();
-        if (paneId === 'pane-website' && typeof loadWebsiteConfig === 'function') loadWebsiteConfig();
       } catch (e) { console.warn('Lazy loader err:', e); }
     } catch (err) {
       console.error('[switchTab error]', err);
@@ -2660,7 +2553,7 @@
   // ================= HARDWARE AUTO-DETECT & SETTINGS =================
   
   // ================= SAVE SETTINGS =================
-  const llmModelSelectIds = ['cfg_llm_model', 'cfg_llm_article_model', 'cfg_llm_comment_model', 'cfg_llm_image_model'];
+  const llmModelSelectIds = ['cfg_llm_model', 'cfg_llm_article_model', 'cfg_llm_comment_model'];
 
   function ensureLlmModelOption(modelId, selectId = 'cfg_llm_model') {
     const select = document.getElementById(selectId);
@@ -2710,10 +2603,9 @@
         const select = document.getElementById(id);
         if (!select) return;
         select.innerHTML = '';
-        if (id === 'cfg_llm_image_model') select.add(new Option('Không dùng AI ảnh — trích frame video ổn định', '__video_frame__'));
         data.models.forEach(model => select.add(new Option(model, model)));
         const available = Array.from(select.options).map(option => option.value);
-        select.value = available.includes(previousModels[id]) ? previousModels[id] : (id === 'cfg_llm_image_model' ? '__video_frame__' : data.models[0]);
+        select.value = available.includes(previousModels[id]) ? previousModels[id] : data.models[0];
       });
       result.style.color = '#10b981';
       result.innerHTML = `<i class="bi bi-check-circle-fill"></i> Endpoint hợp lệ · ${data.count} model. Hãy bấm “Test model đã chọn”.`;
@@ -2730,7 +2622,7 @@
     const resEl = document.getElementById('llm-test-result');
     const button = document.getElementById('btn-test-llm');
     const payload = llmRequestPayload();
-    const taskModels = [...new Set(llmModelSelectIds.map(id => document.getElementById(id)?.value).filter(model => model && model !== '__video_frame__'))];
+    const taskModels = [...new Set(llmModelSelectIds.map(id => document.getElementById(id)?.value).filter(Boolean))];
 
     if (!payload.api_base || !payload.model) {
       if (resEl) {
@@ -2767,6 +2659,52 @@
     }
   }
 
+  function imageRequestPayload() {
+    return {
+      api_base: (document.getElementById('cfg_image_base')?.value || '').trim(),
+      api_key: (document.getElementById('cfg_image_key')?.value || '').trim(),
+      model: document.getElementById('cfg_image_model')?.value || '__video_frame__'
+    };
+  }
+
+  async function checkImageEndpoint() {
+    const button = document.getElementById('btn-check-image');
+    const result = document.getElementById('image-test-result');
+    const payload = imageRequestPayload();
+    if (!payload.api_base) { result.style.color='#ef4444'; result.textContent='Vui lòng nhập Image Provider Endpoint.'; return; }
+    button.disabled = true; result.style.color='#38bdf8'; result.textContent='Đang lấy danh sách model ảnh...';
+    try {
+      const response = await fetch('/api/image-provider/models', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Không lấy được model ảnh');
+      document.getElementById('cfg_image_base').value = data.api_base;
+      const select = document.getElementById('cfg_image_model');
+      const previous = select.value;
+      select.innerHTML = '';
+      select.add(new Option('Không dùng AI ảnh — trích frame video', '__video_frame__'));
+      data.models.forEach(model => select.add(new Option(model, model)));
+      select.value = Array.from(select.options).some(o => o.value === previous) ? previous : data.models[0];
+      result.style.color='#10b981'; result.textContent=`Đã lấy ${data.count} model. Chọn model ảnh rồi bấm Test tạo ảnh.`;
+    } catch (e) { result.style.color='#ef4444'; result.textContent=e.message; }
+    finally { button.disabled=false; }
+  }
+
+  async function testImageProvider() {
+    const button = document.getElementById('btn-test-image');
+    const result = document.getElementById('image-test-result');
+    const payload = imageRequestPayload();
+    if (payload.model === '__video_frame__') { result.style.color='#10b981'; result.textContent='Đang dùng trích frame video — không gọi AI ảnh.'; return; }
+    if (!payload.api_base) { result.style.color='#ef4444'; result.textContent='Vui lòng nhập Image Provider Endpoint.'; return; }
+    button.disabled=true; result.style.color='#38bdf8'; result.textContent='Đang gọi images/generations thật...';
+    try {
+      const response = await fetch('/api/image-provider/test', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Test ảnh thất bại');
+      result.style.color='#10b981'; result.textContent=`Tạo ảnh thành công · ${data.model} · ${data.latency_ms} ms`;
+    } catch(e) { result.style.color='#ef4444'; result.textContent=e.message; }
+    finally { button.disabled=false; }
+  }
+
   async function saveSettings() {
     const msgEl = document.getElementById('settings-save-msg');
     try {
@@ -2779,21 +2717,23 @@
       const model = document.getElementById('cfg_llm_model')?.value || 'gemini-3-flash';
       const task_models = {
         article: document.getElementById('cfg_llm_article_model')?.value || model,
-        first_comment: document.getElementById('cfg_llm_comment_model')?.value || model,
-        image: document.getElementById('cfg_llm_image_model')?.value || model
+        first_comment: document.getElementById('cfg_llm_comment_model')?.value || model
       };
+      const image_api_base = (document.getElementById('cfg_image_base')?.value || '').trim();
+      const image_api_key = (document.getElementById('cfg_image_key')?.value || '').trim();
+      const image_model = document.getElementById('cfg_image_model')?.value || '__video_frame__';
       const whisper_mode = document.getElementById('cfg_whisper_mode')?.value || 'youtube_first';
       const encoder = document.getElementById('cfg_encoder')?.value || 'h264_nvenc';
       const crf = parseInt(document.getElementById('cfg_crf')?.value || '22');
 
       const payload = {
         llm: { api_base, model, task_models },
+        image_provider: { api_base: image_api_base, model: image_model },
         whisper: { prefer_youtube_transcript: whisper_mode === 'youtube_first' },
         video_pipeline: { encoder, crf }
       };
-      if (api_key) {
-        payload.llm.api_key = api_key;
-      }
+      if (api_key) payload.llm.api_key = api_key;
+      if (image_api_key) payload.image_provider.api_key = image_api_key;
 
       const res = await fetch('/api/settings', {
         method: 'POST',
@@ -2871,10 +2811,14 @@
         const selectedModels = {
           cfg_llm_model: cfg.llm.model,
           cfg_llm_article_model: taskModels.article || cfg.llm.model,
-          cfg_llm_comment_model: taskModels.first_comment || cfg.llm.model,
-          cfg_llm_image_model: taskModels.image || cfg.llm.model
+          cfg_llm_comment_model: taskModels.first_comment || cfg.llm.model
         };
         Object.entries(selectedModels).forEach(([id, model]) => { if (model) ensureLlmModelOption(model, id); });
+      }
+      if (cfg.image_provider) {
+        const imageBase = document.getElementById('cfg_image_base');
+        if (imageBase && cfg.image_provider.api_base) imageBase.value = cfg.image_provider.api_base;
+        ensureLlmModelOption(cfg.image_provider.model || '__video_frame__', 'cfg_image_model');
       }
     } catch (e) {
       console.warn('Could not load hardware info:', e);
@@ -2996,7 +2940,8 @@
           title: title,
           summary: currentWriterContext.summary,
           hook: currentWriterContext.title,
-          video_url: currentWriterContext.video_url
+          video_url: currentWriterContext.video_url,
+          comment_model: document.getElementById('cfg_llm_comment_model')?.value || ''
         })
       });
       const data = await resp.json();
@@ -3045,7 +2990,8 @@
         body: JSON.stringify({
           job_id: currentWriterContext.job_id,
           clip_index: currentWriterContext.clip_index,
-          banner_text: bannerText
+          banner_text: bannerText,
+          image_model: document.getElementById('cfg_image_model')?.value || '__video_frame__'
         })
       });
       const data = await resp.json();

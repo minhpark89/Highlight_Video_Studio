@@ -90,23 +90,28 @@ def scheduled_publisher_worker_loop():
                         p["error"] = f"Không tìm thấy file video: {clip_fn}"
                         continue
 
-                                        # Đảm bảo bài viết CMS website và First comment có link video đầy đủ trước khi bắn Reel
-                    try:
-                        cms_res = publish_clip_to_website_cms(clip_fn, title)
-                        if isinstance(cms_res, tuple):
-                            real_article_url = cms_res[0]
-                        else:
-                            real_article_url = str(cms_res)
-                        if real_article_url:
-                            p["article_url"] = real_article_url
-                            try:
-                                first_comment = generate_curiosity_comment_with_llm(title, real_article_url, enable_llm=True)
-                                p["first_comment"] = first_comment
-                            except Exception as _e_fc:
-                                first_comment = f"🔥 Watch the full uncut footage and breakdown here: {real_article_url}\n👉 Scroll down the article to stream the complete high-definition video!"
-                                p["first_comment"] = first_comment
-                    except Exception as _e_cms:
-                        print(f"[ScheduledPublisher] CMS publish warning for {clip_fn}: {_e_cms}")
+                    # Chỉ tạo bài CMS và First Comment khi lịch đăng yêu cầu.
+                    if p.get("auto_first_comment", True):
+                        try:
+                            cms_res = publish_clip_to_website_cms(clip_fn, title)
+                            if isinstance(cms_res, tuple):
+                                real_article_url = cms_res[0]
+                            else:
+                                real_article_url = str(cms_res)
+                            if real_article_url:
+                                p["article_url"] = real_article_url
+                                try:
+                                    first_comment = generate_curiosity_comment_with_llm(
+                                        title,
+                                        real_article_url,
+                                        enable_llm=p.get("use_llm_comment", True),
+                                    )
+                                    p["first_comment"] = first_comment
+                                except Exception as _e_fc:
+                                    first_comment = f"🔥 Watch the full uncut footage and breakdown here: {real_article_url}\n👉 Scroll down the article to stream the complete high-definition video!"
+                                    p["first_comment"] = first_comment
+                        except Exception as _e_cms:
+                            print(f"[ScheduledPublisher] CMS publish warning for {clip_fn}: {_e_cms}")
 
                     print(f"[ScheduledPublisher] 🚀 Publishing Reel to {page_name} ({page_id})...")
                     try:
