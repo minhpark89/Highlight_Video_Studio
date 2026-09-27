@@ -36,7 +36,7 @@ OUTPUT_DIR = BASE_DIR / "output"
 TEMP_DIR = BASE_DIR / "temp"
 CONFIG_DIR = BASE_DIR / "config"
 
-# Portable bin priority: Node, yt-dlp, FFmpeg đóng gói sẵn trong D:\Highlight_Video_Studio\bin
+# Portable bin priority: Node, yt-dlp, FFmpeg bundled beside this application.
 if BIN_DIR.exists():
     os.environ["PATH"] = str(BIN_DIR) + ";" + os.environ.get("PATH", "")
 
@@ -102,7 +102,7 @@ def download_video_and_audio(url: str, job_id: str, update_status=None):
     """
     Tải video siêu tốc bằng yt-dlp với 8 luồng song song.
     Mặc định: Tải trực tiếp siêu tốc KHÔNG dùng cookie để đạt tốc độ tối đa và không phụ thuộc trình duyệt.
-    Fallback: Nếu gặp lỗi bot-check (Sign in to confirm you're not a bot / HTTP 403), tự động fallback sang Chrome Local Profile (D:\Highlight_Video_Studio\chrome_profile).
+    Fallback: Nếu gặp bot-check/HTTP 403, dùng Chrome profile của đúng thư mục cài hiện tại.
     """
     if update_status:
         update_status("Đang tải video siêu tốc bằng yt-dlp đa luồng (8 connections)...")
@@ -155,7 +155,7 @@ def download_video_and_audio(url: str, job_id: str, update_status=None):
         is_bot_check = any(k in err_msg.lower() for k in ["sign in to confirm", "bot", "403", "forbidden", "login"])
         if is_bot_check or CHROME_PROFILE_DIR.exists():
             if update_status:
-                update_status("Kích hoạt Fallback Chrome Local: Tải với profile đăng nhập D:\Highlight_Video_Studio\chrome_profile...")
+                update_status(f"Kích hoạt Fallback Chrome Local: {CHROME_PROFILE_DIR}...")
             res_fb, fb_title, fb_duration = try_download(use_fallback=True)
             if res_fb.returncode == 0 and out_video.exists():
                 res = res_fb

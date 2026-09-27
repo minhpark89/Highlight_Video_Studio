@@ -205,6 +205,14 @@ def run_job_pipeline(job):
         })
 
     try:
+        (
+            download_video_and_audio,
+            get_youtube_transcript,
+            transcribe_local_whisper,
+            ask_llm_for_highlights,
+            render_highlight_clip,
+            extract_video_id,
+        ) = get_pipeline_tools()
         # Bước 1: Tải video và audio
         update_msg("Đang tải video và bóc tách âm thanh siêu tốc (-N 8)...", step=1)
         dl_res = download_video_and_audio(url, job_id, update_status=lambda m: update_msg(m, step=1))

@@ -139,6 +139,32 @@ class ReleaseGuardTests(unittest.TestCase):
         self.assertTrue(safe["llm"]["has_api_key"])
         self.assertEqual(original["llm"]["api_key"], "super-secret")
 
+    def test_job_pipeline_resolves_all_lazy_pipeline_functions(self):
+        from web import app as web_app
+        with tempfile.TemporaryDirectory() as folder:
+            rendered = Path(folder) / "clip.mp4"
+            rendered.write_bytes(b"video")
+            downloader = mock.Mock(return_value={
+                "video_path": Path(folder) / "source.mp4",
+                "audio_path": Path(folder) / "audio.wav",
+                "title": "Test title",
+                "duration": 60,
+            })
+            transcript = mock.Mock(return_value=[{"start": 0, "duration": 20, "text": "hello"}])
+            whisper = mock.Mock(return_value=[])
+            highlights = mock.Mock(return_value=[{"start": 0, "end": 20, "title": "Hook"}])
+            renderer = mock.Mock(return_value=rendered)
+            extractor = mock.Mock(return_value="video-id")
+            updates = []
+            with mock.patch.object(web_app, "get_pipeline_tools", return_value=(
+                downloader, transcript, whisper, highlights, renderer, extractor
+            )), mock.patch.object(web_app, "update_job_status", side_effect=lambda job_id, data: updates.append(data)):
+                web_app.run_job_pipeline({"id": "job-test", "youtube_url": "https://youtu.be/test", "num_clips": 1})
+            downloader.assert_called_once()
+            transcript.assert_called_once_with("video-id")
+            renderer.assert_called_once()
+            self.assertEqual(updates[-1]["status"], "completed")
+
 
 if __name__ == "__main__":
     unittest.main()
