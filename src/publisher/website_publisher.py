@@ -172,7 +172,7 @@ Exact required visual elements matching viral clickbait standard:
     out_file = str(temp_dir / f"llm_hook_{abs(hash(video_title)) % 100000}.jpg")
 
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        resp = requests.post(url, headers=headers, json=payload, timeout=30)
         if resp.status_code == 200:
             res_json = resp.json()
             choices = res_json.get("choices", [])
@@ -384,7 +384,7 @@ Output strictly valid JSON only:
             "max_tokens": 800,
             "temperature": 0.7
         }
-        resp = requests.post(url, headers=headers, json=payload, timeout=8)
+        resp = requests.post(url, headers=headers, json=payload, timeout=30)
         if resp.status_code == 200:
             c = resp.json()["choices"][0]["message"]["content"].strip()
             c = re.sub(r"^```json\s*", "", c)
@@ -497,7 +497,7 @@ Rules:
             "max_tokens": 120,
             "temperature": 0.8
         }
-        resp = requests.post(url, headers=headers, json=payload, timeout=5)
+        resp = requests.post(url, headers=headers, json=payload, timeout=30)
         if resp.status_code == 200:
             res_json = resp.json()
             comment = res_json["choices"][0]["message"]["content"].strip()

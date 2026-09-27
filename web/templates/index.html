@@ -2625,6 +2625,58 @@
     showToast(`Đã nạp thành công ${count} video vào Studio! Bạn có thể nhấn 'Bắt đầu' để chạy song song.`);
   }
   // ================= HARDWARE AUTO-DETECT & SETTINGS =================
+  
+  // ================= SAVE SETTINGS =================
+  async function saveSettings() {
+    const msgEl = document.getElementById('settings-save-msg');
+    try {
+      if (msgEl) {
+        msgEl.style.color = '#38bdf8';
+        msgEl.innerHTML = '<i class="bi bi-arrow-repeat spin"></i> Đang lưu cấu hình...';
+      }
+      const api_base = (document.getElementById('cfg_llm_base')?.value || '').trim();
+      const api_key = (document.getElementById('cfg_llm_key')?.value || '').trim();
+      const model = document.getElementById('cfg_llm_model')?.value || 'gemini-3-flash';
+      const whisper_mode = document.getElementById('cfg_whisper_mode')?.value || 'youtube_first';
+      const encoder = document.getElementById('cfg_encoder')?.value || 'h264_nvenc';
+      const crf = parseInt(document.getElementById('cfg_crf')?.value || '22');
+
+      const payload = {
+        llm: { api_base, model },
+        whisper: { prefer_youtube_transcript: whisper_mode === 'youtube_first' },
+        video_pipeline: { encoder, crf }
+      };
+      if (api_key) {
+        payload.llm.api_key = api_key;
+      }
+
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (msgEl) {
+          msgEl.style.color = '#10b981';
+          msgEl.innerHTML = '<i class="bi bi-check-circle-fill"></i> Đã lưu cấu hình thành công!';
+          setTimeout(() => { if (msgEl) msgEl.innerHTML = ''; }, 4000);
+        }
+      } else {
+        if (msgEl) {
+          msgEl.style.color = '#ef4444';
+          msgEl.innerHTML = '<i class="bi bi-exclamation-triangle-fill"></i> Lưu thất bại: ' + (data.error || 'Lỗi server');
+        }
+      }
+    } catch (err) {
+      console.error('saveSettings error:', err);
+      if (msgEl) {
+        msgEl.style.color = '#ef4444';
+        msgEl.innerHTML = '<i class="bi bi-exclamation-triangle-fill"></i> Lỗi kết nối: ' + err.message;
+      }
+    }
+  }
+
   async function loadSystemHardwareInfo() {
     try {
       const res = await fetch('/api/system/info');

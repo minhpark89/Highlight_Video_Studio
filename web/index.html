@@ -1371,7 +1371,7 @@
             <!-- PANE: QUẢN LÝ PAGE & LÊN LỊCH THEO CHUẨN LOHAPAGE -->
       
       <!-- PANE: QUẢN LÝ TOKEN RIÊNG BIỆT (CHUẨN LOHAPAGE) -->
-      <section <section id="pane-tokens" class="pane">
+      <section id="pane-tokens" class="pane">
         <div class="panel">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
             <div>
@@ -1463,7 +1463,6 @@
               </tbody>
             </table>
           </div>
-        </div>
       </section>
 
 <section id="pane-pages" class="pane">
@@ -1613,7 +1612,11 @@
               </div>
               <div style="margin-bottom: 14px;">
                 <label class="lbl">LLM Provider Endpoint</label>
-                <input type="text" id="cfg_llm_base" value="http://100.89.167.97:8317/v1" readonly>
+                <input type="text" id="cfg_llm_base" class="form-control" placeholder="http://127.0.0.1:8000/v1 hoặc endpoint LLM của bạn" style="font-size: 13.5px;">
+              <div style="margin-bottom: 14px;">
+                <label class="lbl">LLM API Key</label>
+                <input type="password" id="cfg_llm_key" class="form-control" placeholder="Nhập API Key LLM (nếu có, để trống nếu không cần)" style="font-size: 13.5px;">
+              </div>
               </div>
               <div style="margin-bottom: 14px;">
                 <label class="lbl">Model phân tích Highlight</label>
@@ -1685,6 +1688,12 @@
               <div id="chrome-launch-status" style="margin-top: 10px; font-size: 12px; color: #38bdf8;"></div>
             </div>
           </div>
+              <div style="margin-top: 20px;">
+                <button type="button" class="btn btn-primary" onclick="saveSettings()" style="font-weight: 700; background: linear-gradient(135deg, #10b981, #059669); border: none; padding: 10px 20px;">
+                  <i class="bi bi-save2-fill"></i> Lưu cấu hình AI & Engine
+                </button>
+                <span id="settings-save-msg" style="margin-left: 12px; font-size: 12.5px; font-weight: 600;"></span>
+              </div>
 </section>
 
       <!-- PANE: KẾT NỐI WEBSITE BÀI VIẾT & FIRST COMMENT -->
@@ -2616,6 +2625,58 @@
     showToast(`Đã nạp thành công ${count} video vào Studio! Bạn có thể nhấn 'Bắt đầu' để chạy song song.`);
   }
   // ================= HARDWARE AUTO-DETECT & SETTINGS =================
+  
+  // ================= SAVE SETTINGS =================
+  async function saveSettings() {
+    const msgEl = document.getElementById('settings-save-msg');
+    try {
+      if (msgEl) {
+        msgEl.style.color = '#38bdf8';
+        msgEl.innerHTML = '<i class="bi bi-arrow-repeat spin"></i> Đang lưu cấu hình...';
+      }
+      const api_base = (document.getElementById('cfg_llm_base')?.value || '').trim();
+      const api_key = (document.getElementById('cfg_llm_key')?.value || '').trim();
+      const model = document.getElementById('cfg_llm_model')?.value || 'gemini-3-flash';
+      const whisper_mode = document.getElementById('cfg_whisper_mode')?.value || 'youtube_first';
+      const encoder = document.getElementById('cfg_encoder')?.value || 'h264_nvenc';
+      const crf = parseInt(document.getElementById('cfg_crf')?.value || '22');
+
+      const payload = {
+        llm: { api_base, model },
+        whisper: { prefer_youtube_transcript: whisper_mode === 'youtube_first' },
+        video_pipeline: { encoder, crf }
+      };
+      if (api_key) {
+        payload.llm.api_key = api_key;
+      }
+
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (msgEl) {
+          msgEl.style.color = '#10b981';
+          msgEl.innerHTML = '<i class="bi bi-check-circle-fill"></i> Đã lưu cấu hình thành công!';
+          setTimeout(() => { if (msgEl) msgEl.innerHTML = ''; }, 4000);
+        }
+      } else {
+        if (msgEl) {
+          msgEl.style.color = '#ef4444';
+          msgEl.innerHTML = '<i class="bi bi-exclamation-triangle-fill"></i> Lưu thất bại: ' + (data.error || 'Lỗi server');
+        }
+      }
+    } catch (err) {
+      console.error('saveSettings error:', err);
+      if (msgEl) {
+        msgEl.style.color = '#ef4444';
+        msgEl.innerHTML = '<i class="bi bi-exclamation-triangle-fill"></i> Lỗi kết nối: ' + err.message;
+      }
+    }
+  }
+
   async function loadSystemHardwareInfo() {
     try {
       const res = await fetch('/api/system/info');
@@ -4973,6 +5034,32 @@
   function runLoHaBatchSchedule(groupId, groupName) {
     document.getElementById('sched-conf-group-id').value = groupId;
     document.getElementById('sched-conf-group-name').innerText = groupName;
+
+    // Tìm cấu hình khung giờ của nhóm được lưu trữ trong allGroups (hoặc fetch)
+    const grp = (window.allGroupsCached || []).find(g => g.id === groupId);
+    const selectElem = document.getElementById('sched-conf-posts-per-page');
+    const noteElem = document.getElementById('sched-conf-times-preview');
+
+    let groupTimes = ['11:30', '19:30'];
+    if (grp && grp.schedule_config && grp.schedule_config.times && grp.schedule_config.times.length) {
+      groupTimes = grp.schedule_config.times;
+    }
+
+    if (selectElem) {
+      let optionsHtml = '';
+      const totalSlots = groupTimes.length;
+      for (let i = 1; i <= Math.min(totalSlots, 6); i++) {
+        const selected = (i === totalSlots || i === 2) ? 'selected' : '';
+        const slotText = groupTimes.slice(0, i).join(', ');
+        optionsHtml += `<option value="${i}" ${selected}>${i} bài / ngày / page (Khung giờ: ${slotText})</option>`;
+      }
+      selectElem.innerHTML = optionsHtml;
+    }
+
+    if (noteElem) {
+      noteElem.innerHTML = `Khung giờ cấu hình của nhóm: <strong style="color: #38bdf8;">${groupTimes.join(' | ')}</strong> (Giãn cách: ${(grp && grp.schedule_config && grp.schedule_config.stagger_minutes) || 15} phút/page)`;
+    }
+
     document.getElementById('modal-schedule-config').style.display = 'flex';
   }
 
@@ -5034,6 +5121,7 @@
       ]);
       const groupsData = await resG.json();
       const groups = Array.isArray(groupsData) ? groupsData : (groupsData.groups || []);
+      window.allGroupsCached = groups;
       const clipsData = await resC.json();
       const clips = Array.isArray(clipsData) ? clipsData : (clipsData.clips || []);
       const unpostedClips = clips.filter(c => !c.is_posted);
@@ -6004,6 +6092,9 @@ async function loadPostsTable() {
           <option value="2">2 bài / ngày / page (Trải đều 2 khung giờ)</option>
           <option value="4" selected>4 bài / ngày / page (Phủ kín 4 khung giờ: Sáng, Trưa, Chiều, Tối)</option>
         </select>
+        <div id="sched-conf-times-preview" style="font-size: 12px; color: #94a3b8; background: #0f172a; padding: 6px 10px; border-radius: 6px; border: 1px dashed #334155; margin-top: 6px;">
+          Khung giờ cấu hình: Đang tải...
+        </div>
         <div style="font-size: 11px; color: #64748b; margin-top: 4px;">
           Theo quy tắc 1 Video : 1 Page, hệ thống sẽ bốc số lượng video độc nhất từ kho tương ứng.
         </div>
@@ -6042,17 +6133,3 @@ async function loadPostsTable() {
 
 </body>
 </html>
-          <!-- THANH NHÓM PAGE ĐƯA RA NGOÀI MẶT TIỀN (CHUẨN LOHAPAGE) -->
-          <div style="background: rgba(15, 23, 42, 0.4); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 16px;">
-            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
-              <span style="display: flex; align-items: center; gap: 6px;">
-                <i class="bi bi-collection-play-fill" style="color: #38bdf8;"></i> Lọc Fanpage theo Nhóm Trang:
-              </span>
-              <span style="font-size: 11px; color: #64748b; text-transform: none; font-weight: normal;">Bấm vào nhóm để xem danh sách page thuộc nhóm đó</span>
-            </div>
-            <div id="loha-page-group-pills" style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
-              <!-- Render động: [ Tất cả (100) ] [ BM 1 (Dàn 100 Page) (100) ] [ nhóm 1 (4) ] -->
-            </div>
-          </div>
-
-          

@@ -1822,7 +1822,11 @@ def api_publish_website_article():
         article_url = f"https://bestnews.cfx.bz/blog/{slug}"
 
     # First comment kích thích tò mò có kèm ảnh hook & link web
-    first_comment = f"🔥 Xem trọn vẹn video bản full dài và chi tiết tình huống tại: {article_url}\n(Ảnh trích xuất khoảnh khắc gây chú ý nhất bên dưới 👇)"
+    try:
+        from src.publisher.website_publisher import generate_curiosity_comment_with_llm
+        first_comment = generate_curiosity_comment_with_llm(title, article_url, enable_llm=True)
+    except Exception as _efc:
+        first_comment = f"🔥 Watch the full uncut footage and breakdown here: {article_url}\n👉 Scroll down the article to stream the complete high-definition video!"
 
     return jsonify({
         "success": True,
