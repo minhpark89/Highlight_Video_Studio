@@ -71,6 +71,10 @@ from src.publisher.meta_reel_poster import MetaReelPoster
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
+# This build identity is kept in code because upgrades intentionally preserve
+# the user's config.json, whose version field can therefore be missing/stale.
+APP_VERSION = "1.0.19"
+
 @app.after_request
 def add_header(response):
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -363,7 +367,7 @@ _publisher_thread.start()
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", app_version=APP_VERSION)
 
 @app.route("/api/jobs", methods=["GET"])
 def get_jobs():
@@ -722,7 +726,15 @@ def _normalise_http_url(raw_url, field_name="Endpoint"):
 
 def _image_model_urls(models_url="", api_base=""):
     if str(models_url or "").strip():
-        return [_normalise_http_url(models_url, "Endpoint lấy model ảnh")]
+        exact = _normalise_http_url(models_url, "Endpoint lấy model ảnh")
+        path_only = exact.split("?", 1)[0]
+        lower_path = path_only.lower()
+        # Recover from the common mistake of pasting a POST generation endpoint
+        # into the GET model-list field. This otherwise returns an opaque 405.
+        for suffix in ("/images/generations", "/chat/completions"):
+            if lower_path.endswith(suffix):
+                return [path_only[:-len(suffix)] + "/models"]
+        return [exact]
     return _llm_model_urls(api_base)
 
 
@@ -928,6 +940,7 @@ def api_system_info():
     cfg = load_config()
     return jsonify({
         "success": True,
+        "app_version": APP_VERSION,
         "hardware": hw,
         "config": public_config(cfg)
     })
@@ -2050,10 +2063,19 @@ def api_assign_token():
         return jsonify({"error": "Thiếu page_id"}), 400
         
     pages = page_manager.list_pages()
+    token_entry = token_vault.get_token_by_id(token_id) if token_id else None
+    if token_id and not token_entry:
+        return jsonify({"error": "Token không tồn tại trong Vault"}), 404
     updated = False
     for p in pages:
         if str(p.get("page_id")) == page_id:
             p["token_id"] = token_id
+            if token_entry:
+                p["token_name"] = token_entry.get("name", "System User")
+                p["page_token"] = token_entry.get("token", "")
+            else:
+                p["token_name"] = "AutoPool (Tự động)"
+                p.pop("page_token", None)
             updated = True
             break
             
@@ -2072,10 +2094,18 @@ def api_batch_assign_token():
     assignments = data.get("assignments")
     if isinstance(assignments, list) and assignments:
         assign_map = {str(a.get("page_id")): str(a.get("token_id")) for a in assignments if a.get("page_id") and a.get("token_id")}
+        vault_map = {str(t.get("id")): t for t in token_vault.list_tokens(mask=False)}
+        unknown_ids = sorted({tid for tid in assign_map.values() if tid not in vault_map})
+        if unknown_ids:
+            return jsonify({"error": "Token không tồn tại trong Vault: " + ", ".join(unknown_ids)}), 404
         for p in pages:
             pid = str(p.get("page_id"))
             if pid in assign_map:
-                p["token_id"] = assign_map[pid]
+                token_id = assign_map[pid]
+                token_entry = vault_map[token_id]
+                p["token_id"] = token_id
+                p["token_name"] = token_entry.get("name", "System User")
+                p["page_token"] = token_entry.get("token", "")
                 count += 1
         page_manager.save_pages(pages)
         return jsonify({"success": True, "count": count, "message": f"Đã tự động xoay vòng chia đều token cho {count} trang."})
@@ -2085,10 +2115,15 @@ def api_batch_assign_token():
     page_ids = [str(pid) for pid in data.get("page_ids", [])]
     if not token_id:
         return jsonify({"error": "Thiếu token_id hoặc danh sách phân bổ assignments"}), 400
+    token_entry = token_vault.get_token_by_id(token_id)
+    if not token_entry:
+        return jsonify({"error": "Token không tồn tại trong Vault"}), 404
 
     for p in pages:
         if str(p.get("page_id")) in page_ids:
             p["token_id"] = token_id
+            p["token_name"] = token_entry.get("name", "System User")
+            p["page_token"] = token_entry.get("token", "")
             count += 1
 
     page_manager.save_pages(pages)

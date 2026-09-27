@@ -105,9 +105,14 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn("/api/groups", body)
         self.assertNotIn("/api/pages/groups", body)
 
-    def test_single_token_assign_sends_token_id(self):
+    def test_single_token_assign_opens_vault_selector(self):
         body = self._function_body("openAssignSingleTokenModal")
-        self.assertIn("/api/pages/assign_token", body)
+        self.assertIn("openQuickAssignModal", body)
+        self.assertNotIn("prompt(", body)
+
+    def test_quick_assign_sends_token_id(self):
+        body = self._function_body("saveQuickAssign")
+        self.assertIn("/api/pages/update_binding", body)
         self.assertIn("token_id", body)
 
 
@@ -252,17 +257,32 @@ class BackendApiTests(unittest.TestCase):
 
     # -- token assignment -------------------------------------------------- #
     def test_single_token_assign(self):
+        token = self._seed_token()
         self.pages.save_pages([{"page_id": "PAGE_A", "page_name": "A", "token_id": ""}])
-        resp = self.client.post("/api/pages/assign_token", json={"page_id": "PAGE_A", "token_id": "tok_x"})
+        resp = self.client.post("/api/pages/assign_token", json={"page_id": "PAGE_A", "token_id": token["id"]})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(self.pages.list_pages()[0]["token_id"], "tok_x")
+        page = self.pages.list_pages()[0]
+        self.assertEqual(page["token_id"], token["id"])
+        self.assertEqual(page["token_name"], token["name"])
+        self.assertEqual(page["page_token"], token["token"])
 
     def test_single_token_assign_unknown_page(self):
+        token = self._seed_token()
         self.pages.save_pages([{"page_id": "PAGE_A", "page_name": "A"}])
-        resp = self.client.post("/api/pages/assign_token", json={"page_id": "MISSING", "token_id": "tok_x"})
+        resp = self.client.post("/api/pages/assign_token", json={"page_id": "MISSING", "token_id": token["id"]})
+        self.assertEqual(resp.status_code, 404)
+
+    def test_single_token_assign_rejects_unknown_vault_token(self):
+        self.pages.save_pages([{"page_id": "PAGE_A", "page_name": "A"}])
+        resp = self.client.post("/api/pages/assign_token", json={"page_id": "PAGE_A", "token_id": "missing"})
         self.assertEqual(resp.status_code, 404)
 
     def test_batch_assign_round_robin(self):
+        tokens = [
+            {"id": "tok_1", "name": "T1", "token": "EAAB_page_token_1", "status": "ACTIVE"},
+            {"id": "tok_2", "name": "T2", "token": "EAAB_page_token_2", "status": "ACTIVE"},
+        ]
+        self.vault._save(tokens)
         self.pages.save_pages([
             {"page_id": "PAGE_A", "page_name": "A"},
             {"page_id": "PAGE_B", "page_name": "B"},
@@ -276,21 +296,24 @@ class BackendApiTests(unittest.TestCase):
         body = resp.get_json()
         self.assertTrue(body["success"])
         self.assertEqual(body["count"], 2)
-        m = {p["page_id"]: p["token_id"] for p in self.pages.list_pages()}
-        self.assertEqual(m, {"PAGE_A": "tok_1", "PAGE_B": "tok_2"})
+        pages = {p["page_id"]: p for p in self.pages.list_pages()}
+        self.assertEqual({pid: p["token_id"] for pid, p in pages.items()}, {"PAGE_A": "tok_1", "PAGE_B": "tok_2"})
+        self.assertEqual(pages["PAGE_A"]["page_token"], "EAAB_page_token_1")
+        self.assertEqual(pages["PAGE_B"]["token_name"], "T2")
 
     def test_batch_assign_single_token_to_many(self):
+        token = self._seed_token()
         self.pages.save_pages([
             {"page_id": "PAGE_A"}, {"page_id": "PAGE_B"}, {"page_id": "PAGE_C"},
         ])
         resp = self.client.post("/api/pages/batch_assign_token", json={
-            "token_id": "tok_shared", "page_ids": ["PAGE_A", "PAGE_C"],
+            "token_id": token["id"], "page_ids": ["PAGE_A", "PAGE_C"],
         })
         self.assertEqual(resp.get_json()["count"], 2)
-        m = {p["page_id"]: p.get("token_id", "") for p in self.pages.list_pages()}
-        self.assertEqual(m["PAGE_A"], "tok_shared")
-        self.assertEqual(m["PAGE_C"], "tok_shared")
-        self.assertEqual(m["PAGE_B"], "")
+        pages = {p["page_id"]: p for p in self.pages.list_pages()}
+        self.assertEqual(pages["PAGE_A"]["token_id"], token["id"])
+        self.assertEqual(pages["PAGE_C"]["page_token"], token["token"])
+        self.assertEqual(pages["PAGE_B"].get("token_id", ""), "")
 
     def test_batch_assign_requires_token_or_assignments(self):
         resp = self.client.post("/api/pages/batch_assign_token", json={"page_ids": ["PAGE_A"]})

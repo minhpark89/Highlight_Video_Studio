@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.0.18",
+    [string]$Version = "1.0.19",
     [string]$ToolSource = "D:\Highlight_Video_Studio\bin",
     [string]$IconSource = "D:\Highlight_Video_Studio\app.ico",
     [string]$WhisperModelSource = "$env:USERPROFILE\.cache\huggingface\hub\models--Systran--faster-whisper-small"

@@ -710,7 +710,7 @@
       </div>
       <div>
         <div class="logo-title">HIGHLIGHT STUDIO</div>
-        <div class="logo-sub">AI Shorts & Clips Cutter</div>
+        <div class="logo-sub">AI Shorts & Clips Cutter · v{{ app_version }}</div>
       </div>
     </div>
     <span class="nav-section">Tạo Nội Dung & Cắt Video</span>
@@ -783,7 +783,7 @@
 
       <div id="topbar-title">
         <i class="bi bi-magic" style="color: #ec4899;"></i>
-        <span>AI Highlight Video Studio (Vizard.ai / OpusClip Alternative)</span>
+        <span>AI Highlight Video Studio <strong id="app-version-badge" style="color:#38bdf8;">v{{ app_version }}</strong></span>
       </div>
       <div class="topbar-pill">
         <i class="bi bi-cpu text-warning"></i>
@@ -2771,6 +2771,8 @@
       if (!data.success) return;
       const hw = data.hardware || {};
       const cfg = data.config || {};
+      const versionBadge = document.getElementById('app-version-badge');
+      if (versionBadge && data.app_version) versionBadge.textContent = `v${data.app_version}`;
       // 1. Sidebar status
       const workerEl = document.getElementById('worker-node-text');
       if (workerEl) {
@@ -4119,22 +4121,8 @@
 
 
   function openAssignSingleTokenModal(pageId) {
-    const token = prompt(`Nhập mã Token riêng cho Page ${pageId} (hoặc để trống để dùng System User Token):`);
-    if (token === null) return;
-    // Backend /api/pages/assign_token expects token_id (vault token id), not a raw token string.
-    // Pass the raw token as token_id so the value the user typed is persisted as the page binding.
-    fetch('/api/pages/assign_token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ page_id: pageId, token_id: token.trim() })
-    }).then(async r => ({ ok: r.ok, data: await r.json() })).then(({ ok, data }) => {
-      if (ok && data.success) {
-        alert('Đã cập nhật Token cho Page thành công!');
-        loadTokensAndPages();
-      } else {
-        alert('Lỗi: ' + (data.error || 'Server error'));
-      }
-    }).catch(e => alert(e.message));
+    const pageObj = cachedPagesList.find(p => String(p.page_id || p.id) === String(pageId));
+    openQuickAssignModal(pageId, pageObj?.page_name || pageObj?.name || pageId);
   }
 
 

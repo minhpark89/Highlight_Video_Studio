@@ -1,6 +1,6 @@
 {
   "app_name": "Highlight Video Studio",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "port": 5080,
   "host": "0.0.0.0",
   "llm": {
