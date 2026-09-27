@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -103,6 +104,40 @@ class ReleaseGuardTests(unittest.TestCase):
             self.assertEqual(persisted[0]["attempts"], 1)
             self.assertEqual(persisted[0]["status"], "pending")
             self.assertEqual(persisted[0]["due_at"], 130)
+
+    def test_concurrent_job_updates_use_unique_atomic_files(self):
+        from web import app as web_app
+        with tempfile.TemporaryDirectory() as folder:
+            jobs_file = Path(folder) / "jobs.json"
+            with mock.patch.object(web_app, "JOBS_FILE", jobs_file):
+                self.assertTrue(web_app.save_jobs([{"id": f"job-{i}", "step": 0} for i in range(20)]))
+                threads = [
+                    threading.Thread(target=web_app.update_job_status, args=(f"job-{i}", {"step": i + 1}))
+                    for i in range(20)
+                ]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+                saved = json.loads(jobs_file.read_text(encoding="utf-8"))
+                leftovers = list(Path(folder).glob("*.tmp"))
+            self.assertEqual([job["step"] for job in saved], list(range(1, 21)))
+            self.assertEqual(leftovers, [])
+
+    def test_task_specific_models_fall_back_to_main_model(self):
+        from src.publisher.website_publisher import get_task_model
+        config = {"model": "main", "task_models": {"article": "writer", "image": "__video_frame__"}}
+        self.assertEqual(get_task_model("article", config), "writer")
+        self.assertEqual(get_task_model("first_comment", config), "main")
+        self.assertEqual(get_task_model("image", config), "__video_frame__")
+
+    def test_public_config_never_returns_llm_api_key(self):
+        from web.app import public_config
+        original = {"llm": {"api_key": "super-secret", "model": "writer"}}
+        safe = public_config(original)
+        self.assertNotIn("api_key", safe["llm"])
+        self.assertTrue(safe["llm"]["has_api_key"])
+        self.assertEqual(original["llm"]["api_key"], "super-secret")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import re
+import html
 try:
     import cv2
     HAS_CV2 = True
@@ -43,11 +44,19 @@ def get_llm_config():
             cfg = json.load(f)
             return cfg.get("llm", {})
     except Exception:
-        return {
-            "api_base": "http://100.89.167.97:8317/v1",
-            "api_key": "",
-            "model": "gemini-3-flash"
-        }
+        return {"api_base": "", "api_key": "", "model": "", "task_models": {}}
+
+def get_task_model(task: str, llm_cfg: dict = None) -> str:
+    """Return a task-specific model, falling back to the verified main model."""
+    cfg = llm_cfg or get_llm_config()
+    task_models = cfg.get("task_models") if isinstance(cfg.get("task_models"), dict) else {}
+    return str(task_models.get(task) or cfg.get("model") or "").strip()
+
+def _llm_headers(api_key: str) -> dict:
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if api_key:
+        headers.update({"Authorization": f"Bearer {api_key}", "x-api-key": api_key, "api-key": api_key})
+    return headers
 
 def get_clip_metadata(clip_filename: str) -> dict:
     """
@@ -143,6 +152,10 @@ def generate_llm_hook_image(video_title: str) -> str:
     llm_cfg = get_llm_config()
     api_base = str(llm_cfg.get("api_base") or "").strip()
     api_key = str(llm_cfg.get("api_key") or "").strip()
+    model = get_task_model("image", llm_cfg)
+    if model == "__video_frame__" or not api_base or not model:
+        logger.info("Use video frame fallback for article hook image")
+        return ""
 
     prompt = f"""A viral YouTube thumbnail and article hook image for a dramatic video: "{video_title}".
 Exact required visual elements matching viral clickbait standard:
@@ -155,13 +168,9 @@ Exact required visual elements matching viral clickbait standard:
 7. Ultra-high resolution, photorealistic, cinematic lighting, 16:9 widescreen format."""
 
     url = f"{api_base.rstrip('/')}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "x-api-key": api_key,
-        "Content-Type": "application/json"
-    }
+    headers = _llm_headers(api_key)
     payload = {
-        "model": "gemini-3.1-flash-image",
+        "model": model,
         "messages": [{"role": "user", "content": prompt}]
     }
 
@@ -170,7 +179,7 @@ Exact required visual elements matching viral clickbait standard:
     out_file = str(temp_dir / f"llm_hook_{abs(hash(video_title)) % 100000}.jpg")
 
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=30)
+        resp = requests.post(url, headers=headers, json=payload, timeout=90)
         if resp.status_code == 200:
             res_json = resp.json()
             choices = res_json.get("choices", [])
@@ -336,7 +345,7 @@ def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: li
     llm_cfg = get_llm_config()
     api_base = str(llm_cfg.get("api_base") or "").strip()
     api_key = str(llm_cfg.get("api_key") or "").strip()
-    model = str(llm_cfg.get("model") or "").strip()
+    model = get_task_model("article", llm_cfg)
 
     prompt = f"""You are a senior sports and viral investigative journalist writing an in-depth article for a global media publication.
 Write an authentic, context-rich article in English for the topic: "{title}".
@@ -365,24 +374,25 @@ Output strictly valid JSON only:
     s2_content = "Replaying the sequence frame-by-frame reveals subtleties that casual viewers easily missed in real-time. The coordination and the raw technical mastery displayed under extreme duress offer a masterclass in modern execution."
 
     try:
+        if not api_base or not model:
+            raise ValueError("Chưa cấu hình endpoint/model viết bài")
         url = f"{api_base.rstrip('/')}/chat/completions"
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        headers = _llm_headers(api_key)
         payload = {
             "model": model,
             "messages": [
                 {"role": "system", "content": "You write structured, thorough journalistic feature articles. Respond with valid JSON only."},
                 {"role": "user", "content": prompt}
             ],
-            "response_format": {"type": "json_object"} if "gemini" in model else None,
-            "max_tokens": 800,
+            "max_tokens": 1800,
             "temperature": 0.7
         }
-        resp = requests.post(url, headers=headers, json=payload, timeout=30)
+        resp = requests.post(url, headers=headers, json=payload, timeout=60)
         if resp.status_code == 200:
             c = resp.json()["choices"][0]["message"]["content"].strip()
             c = re.sub(r"^```json\s*", "", c)
             c = re.sub(r"\s*```$", "", c)
-            d = json.loads(c)
+            d = json.loads(c, strict=False)
             seo_title = d.get("seo_title") or seo_title
             lead = d.get("lead_paragraph") or lead
             s1_title = d.get("section_1_title") or s1_title
@@ -392,21 +402,27 @@ Output strictly valid JSON only:
     except Exception as exc:
         logger.warning(f"LLM deep article generation failed: {exc}")
 
+    safe_title = html.escape(str(title))
+    safe_lead = html.escape(str(lead))
+    safe_s1_title = html.escape(str(s1_title))
+    safe_s1_content = html.escape(str(s1_content)).replace(chr(10), '<br><br>')
+    safe_s2_title = html.escape(str(s2_title))
+    safe_s2_content = html.escape(str(s2_content)).replace(chr(10), '<br><br>')
     body_html = f"""
     <div class="article-content" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.8; color: #1e293b; max-width: 820px; margin: 0 auto; font-size: 16px;">
       
       {hero_top_html}
 
       <p class="lead" style="font-size: 18px; font-weight: 600; color: #0f172a; line-height: 1.7; margin-bottom: 24px; border-left: 4px solid #38bdf8; padding-left: 16px; background: rgba(56, 189, 248, 0.04); padding-top: 10px; padding-bottom: 10px; border-radius: 0 8px 8px 0;">
-        {lead}
+        {safe_lead}
       </p>
 
       <div class="article-body-section" style="margin-bottom: 24px;">
         <h2 style="font-size: 21px; font-weight: 800; color: #0f172a; margin-top: 28px; margin-bottom: 14px;">
-          {s1_title}
+          {safe_s1_title}
         </h2>
         <p style="margin-bottom: 16px;">
-          {s1_content.replace(chr(10), '<br><br>')}
+          {safe_s1_content}
         </p>
       </div>
 
@@ -414,10 +430,10 @@ Output strictly valid JSON only:
 
       <div class="article-body-section" style="margin-bottom: 28px;">
         <h2 style="font-size: 21px; font-weight: 800; color: #0f172a; margin-top: 28px; margin-bottom: 14px;">
-          {s2_title}
+          {safe_s2_title}
         </h2>
         <p style="margin-bottom: 16px;">
-          {s2_content.replace(chr(10), '<br><br>')}
+          {safe_s2_content}
         </p>
       </div>
 
@@ -468,7 +484,7 @@ def generate_curiosity_comment_with_llm(video_title: str, article_url: str, enab
     llm_cfg = get_llm_config()
     api_base = str(llm_cfg.get("api_base") or "").strip()
     api_key = str(llm_cfg.get("api_key") or "").strip()
-    model = str(llm_cfg.get("model") or "").strip()
+    model = get_task_model("first_comment", llm_cfg)
 
     prompt = f"""You are a master social media growth marketer. Write ONE viral, high-CTR First Comment in English for a Facebook Reel titled: "{video_title}".
 Rules:
@@ -479,8 +495,10 @@ Rules:
 5. Return ONLY the comment text. No commentary, no quotation marks."""
 
     try:
+        if not api_base or not model:
+            raise ValueError("Chưa cấu hình endpoint/model First Comment")
         url = f"{api_base.rstrip('/')}/chat/completions"
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        headers = _llm_headers(api_key)
         payload = {
             "model": model,
             "messages": [
@@ -490,7 +508,7 @@ Rules:
             "max_tokens": 120,
             "temperature": 0.8
         }
-        resp = requests.post(url, headers=headers, json=payload, timeout=30)
+        resp = requests.post(url, headers=headers, json=payload, timeout=45)
         if resp.status_code == 200:
             res_json = resp.json()
             comment = res_json["choices"][0]["message"]["content"].strip()

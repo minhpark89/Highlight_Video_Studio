@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.0.10",
+    [string]$Version = "1.0.11",
     [string]$ToolSource = "E:\OPENCLAW\BOB\Highlight_Studio_Setup.exe v1.0.8\bin",
     [string]$IconSource = "E:\OPENCLAW\BOB\Highlight_Studio_Setup.exe v1.0.8\app.ico"
 )

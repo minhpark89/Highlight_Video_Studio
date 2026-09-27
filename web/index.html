@@ -1625,12 +1625,17 @@
                   <option value="gemini-3.7-flash-high">gemini-3.7-flash-high</option>
                   <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
                 </select>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;">
+                  <div><label class="lbl">Model viết bài website</label><select id="cfg_llm_article_model" class="form-select"></select></div>
+                  <div><label class="lbl">Model viết First Comment</label><select id="cfg_llm_comment_model" class="form-select"></select></div>
+                  <div style="grid-column:1/-1"><label class="lbl">Model tạo ảnh Hook</label><select id="cfg_llm_image_model" class="form-select"><option value="__video_frame__">Không dùng AI ảnh — trích frame video ổn định</option></select><div style="font-size:11px;color:#64748b;margin-top:4px;">Chọn model có khả năng tạo ảnh. Nếu provider không có model ảnh, chọn trích frame video.</div></div>
+                </div>
                 <div style="display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap;">
                   <button type="button" class="btn btn-secondary btn-sm" id="btn-check-llm" onclick="checkLlmEndpoint()" style="font-weight: 700; border-color: #38bdf8;">
                     <i class="bi bi-cloud-download"></i> Lấy danh sách Models
                   </button>
                   <button type="button" class="btn btn-secondary btn-sm" id="btn-test-llm" onclick="testLlmConnection()" style="font-weight: 700; border-color: #10b981; color: #34d399;">
-                    <i class="bi bi-chat-dots"></i> Test model đã chọn
+                    <i class="bi bi-chat-dots"></i> Test tất cả model đã chọn
                   </button>
                 </div>
                 <div id="llm-test-result" style="font-size: 12.5px; font-weight: 600; margin-top: 9px; min-height: 18px;"></div>
@@ -2655,8 +2660,10 @@
   // ================= HARDWARE AUTO-DETECT & SETTINGS =================
   
   // ================= SAVE SETTINGS =================
-  function ensureLlmModelOption(modelId) {
-    const select = document.getElementById('cfg_llm_model');
+  const llmModelSelectIds = ['cfg_llm_model', 'cfg_llm_article_model', 'cfg_llm_comment_model', 'cfg_llm_image_model'];
+
+  function ensureLlmModelOption(modelId, selectId = 'cfg_llm_model') {
+    const select = document.getElementById(selectId);
     if (!select || !modelId) return;
     if (!Array.from(select.options).some(option => option.value === modelId)) {
       select.add(new Option(modelId, modelId));
@@ -2677,7 +2684,8 @@
     const result = document.getElementById('llm-test-result');
     const baseInput = document.getElementById('cfg_llm_base');
     const modelSelect = document.getElementById('cfg_llm_model');
-    const previousModel = modelSelect?.value || '';
+    const previousModels = {};
+    llmModelSelectIds.forEach(id => { previousModels[id] = document.getElementById(id)?.value || ''; });
     const payload = llmRequestPayload();
     if (!payload.api_base) {
       result.style.color = '#ef4444';
@@ -2698,9 +2706,15 @@
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || 'Không lấy được models');
       if (baseInput && data.api_base) baseInput.value = data.api_base;
-      modelSelect.innerHTML = '';
-      data.models.forEach(model => modelSelect.add(new Option(model, model)));
-      modelSelect.value = data.models.includes(previousModel) ? previousModel : data.models[0];
+      llmModelSelectIds.forEach(id => {
+        const select = document.getElementById(id);
+        if (!select) return;
+        select.innerHTML = '';
+        if (id === 'cfg_llm_image_model') select.add(new Option('Không dùng AI ảnh — trích frame video ổn định', '__video_frame__'));
+        data.models.forEach(model => select.add(new Option(model, model)));
+        const available = Array.from(select.options).map(option => option.value);
+        select.value = available.includes(previousModels[id]) ? previousModels[id] : (id === 'cfg_llm_image_model' ? '__video_frame__' : data.models[0]);
+      });
       result.style.color = '#10b981';
       result.innerHTML = `<i class="bi bi-check-circle-fill"></i> Endpoint hợp lệ · ${data.count} model. Hãy bấm “Test model đã chọn”.`;
     } catch (error) {
@@ -2716,6 +2730,7 @@
     const resEl = document.getElementById('llm-test-result');
     const button = document.getElementById('btn-test-llm');
     const payload = llmRequestPayload();
+    const taskModels = [...new Set(llmModelSelectIds.map(id => document.getElementById(id)?.value).filter(model => model && model !== '__video_frame__'))];
 
     if (!payload.api_base || !payload.model) {
       if (resEl) {
@@ -2733,23 +2748,14 @@
     }
 
     try {
-      const resp = await fetch('/api/llm/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await resp.json();
-      if (resp.ok && data.success) {
-        if (resEl) {
-          resEl.style.color = '#10b981';
-          resEl.innerHTML = `<i class="bi bi-check-circle-fill"></i> Model hoạt động thật · ${data.latency_ms} ms · “${escapeHtml(data.sample)}”`;
-        }
-      } else {
-        if (resEl) {
-          resEl.style.color = '#ef4444';
-          resEl.innerHTML = `<i class="bi bi-x-circle-fill"></i> ${escapeHtml(data.error || 'Lỗi kết nối LLM')}`;
-        }
+      const results = [];
+      for (const model of taskModels) {
+        const resp = await fetch('/api/llm/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, model }) });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) throw new Error(`${model}: ${data.error || 'Lỗi kết nối LLM'}`);
+        results.push(`${model} (${data.latency_ms} ms)`);
       }
+      if (resEl) { resEl.style.color = '#10b981'; resEl.innerHTML = `<i class="bi bi-check-circle-fill"></i> Hoạt động thật: ${escapeHtml(results.join(' · '))}`; }
     } catch (e) {
       if (resEl) {
         resEl.style.color = '#ef4444';
@@ -2757,7 +2763,7 @@
       }
     } finally {
       button.disabled = false;
-      button.innerHTML = '<i class="bi bi-chat-dots"></i> Test model đã chọn';
+      button.innerHTML = '<i class="bi bi-chat-dots"></i> Test tất cả model đã chọn';
     }
   }
 
@@ -2771,12 +2777,17 @@
       const api_base = (document.getElementById('cfg_llm_base')?.value || '').trim();
       const api_key = (document.getElementById('cfg_llm_key')?.value || '').trim();
       const model = document.getElementById('cfg_llm_model')?.value || 'gemini-3-flash';
+      const task_models = {
+        article: document.getElementById('cfg_llm_article_model')?.value || model,
+        first_comment: document.getElementById('cfg_llm_comment_model')?.value || model,
+        image: document.getElementById('cfg_llm_image_model')?.value || model
+      };
       const whisper_mode = document.getElementById('cfg_whisper_mode')?.value || 'youtube_first';
       const encoder = document.getElementById('cfg_encoder')?.value || 'h264_nvenc';
       const crf = parseInt(document.getElementById('cfg_crf')?.value || '22');
 
       const payload = {
-        llm: { api_base, model },
+        llm: { api_base, model, task_models },
         whisper: { prefer_youtube_transcript: whisper_mode === 'youtube_first' },
         video_pipeline: { encoder, crf }
       };
@@ -2856,8 +2867,14 @@
       if (cfg.llm) {
         const baseInput = document.getElementById('cfg_llm_base');
         if (baseInput && cfg.llm.api_base) baseInput.value = cfg.llm.api_base;
-        const modelSelect = document.getElementById('cfg_llm_model');
-        if (modelSelect && cfg.llm.model) ensureLlmModelOption(cfg.llm.model);
+        const taskModels = cfg.llm.task_models || {};
+        const selectedModels = {
+          cfg_llm_model: cfg.llm.model,
+          cfg_llm_article_model: taskModels.article || cfg.llm.model,
+          cfg_llm_comment_model: taskModels.first_comment || cfg.llm.model,
+          cfg_llm_image_model: taskModels.image || cfg.llm.model
+        };
+        Object.entries(selectedModels).forEach(([id, model]) => { if (model) ensureLlmModelOption(model, id); });
       }
     } catch (e) {
       console.warn('Could not load hardware info:', e);

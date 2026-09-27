@@ -6,6 +6,7 @@ using System.IO.Compression;
 using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 internal sealed class InstallerForm : Form
 {
@@ -16,7 +17,7 @@ internal sealed class InstallerForm : Form
 
     internal InstallerForm()
     {
-        Text = "Highlight Video Studio v1.0.10 — Cài đặt";
+        Text = "Highlight Video Studio v1.0.11 — Cài đặt";
         ClientSize = new Size(620, 355);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -29,7 +30,7 @@ internal sealed class InstallerForm : Form
         Controls.Add(new Label { Text = "AI Highlight • Research • Multi-channel Publisher", Font = new Font("Segoe UI", 10), ForeColor = Color.FromArgb(148, 163, 184), AutoSize = true, Location = new Point(37, 69) });
         Controls.Add(new Label { Text = "Thư mục cài đặt", Font = new Font("Segoe UI", 9, FontStyle.Bold), AutoSize = true, Location = new Point(38, 112) });
 
-        destination.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Highlight Video Studio");
+        destination.Text = DetectInstallLocation();
         destination.Location = new Point(38, 137);
         destination.Size = new Size(542, 27);
         destination.Font = new Font("Segoe UI", 10);
@@ -100,6 +101,7 @@ internal sealed class InstallerForm : Form
             string programs = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Highlight Video Studio");
             Directory.CreateDirectory(programs);
             CreateShortcut(Path.Combine(programs, "Highlight Video Studio.lnk"), launcher, target);
+            SaveInstallLocation(target);
             UpdateUi("Cài đặt hoàn tất. Đang mở Highlight Video Studio…", 100);
             Process.Start(new ProcessStartInfo(launcher) { WorkingDirectory = target, UseShellExecute = true });
             Thread.Sleep(800);
@@ -124,6 +126,30 @@ internal sealed class InstallerForm : Form
                path == "page_groups.json" || path == "tokens_vault.json" ||
                path.StartsWith("downloads/") || path.StartsWith("output/") ||
                path.StartsWith("chrome_profile/") || path.StartsWith("data/");
+    }
+
+    private static string DetectInstallLocation()
+    {
+        try
+        {
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\HighlightVideoStudio"))
+            {
+                string saved = key == null ? null : key.GetValue("InstallLocation") as string;
+                if (!String.IsNullOrWhiteSpace(saved) && Directory.Exists(saved)) return saved;
+            }
+        }
+        catch { }
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Highlight Video Studio");
+    }
+
+    private static void SaveInstallLocation(string target)
+    {
+        try
+        {
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(@"Software\HighlightVideoStudio"))
+                key.SetValue("InstallLocation", target, RegistryValueKind.String);
+        }
+        catch { }
     }
 
     private static void CreateShortcut(string shortcutPath, string target, string workingDirectory)

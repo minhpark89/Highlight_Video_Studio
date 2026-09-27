@@ -4,7 +4,7 @@
 
 ## Cài đặt
 
-Tải `Highlight_Studio_Setup_v1.0.10.exe` trong GitHub Releases, chạy file và bấm **Cài đặt & khởi chạy**. Bản cài gồm Python portable cùng các engine cần thiết; người dùng không phải cài Python hoặc chạy lệnh thủ công.
+Tải bộ cài mới nhất trong GitHub Releases, chạy file và bấm **Cài đặt & khởi chạy**. Bản cài gồm Python portable cùng các engine cần thiết; người dùng không phải cài Python hoặc chạy lệnh thủ công.
 
 Installer tạo shortcut có icon tại Desktop và Start Menu. Khi cài đè bản mới, cấu hình, token, lịch đăng, video đã tải và Chrome profile được giữ nguyên.
 

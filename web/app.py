@@ -123,7 +123,7 @@ page_manager = PageManager(BASE_DIR)
 reel_poster = MetaReelPoster(token_vault=token_vault)
 
 
-JOBS_LOCK = threading.Lock()
+JOBS_LOCK = threading.RLock()
 
 def load_jobs():
     if not JOBS_FILE.exists():
@@ -151,38 +151,43 @@ def load_jobs():
     return []
 
 def save_jobs(jobs):
+    """Atomically save jobs without sharing one temp filename between workers."""
     with JOBS_LOCK:
-        tmp_file = BASE_DIR / "jobs.tmp"
-        for _ in range(10):
+        if not jobs and JOBS_FILE.exists() and JOBS_FILE.stat().st_size > 100:
+            return False
+        tmp_file = JOBS_FILE.with_name(
+            f"{JOBS_FILE.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
+        )
+        try:
+            with open(tmp_file, "w", encoding="utf-8") as handle:
+                json.dump(jobs, handle, indent=2, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            for attempt in range(12):
+                try:
+                    os.replace(str(tmp_file), str(JOBS_FILE))
+                    return True
+                except PermissionError:
+                    if attempt == 11:
+                        raise
+                    time.sleep(0.04 * (attempt + 1))
+        finally:
             try:
-                with open(tmp_file, "w", encoding="utf-8") as f:
-                    json.dump(jobs, f, ensure_ascii=False, indent=2)
-                # Atomic replace
-                if tmp_file.exists():
-                    os.replace(tmp_file, JOBS_FILE)
-                return True
+                tmp_file.unlink(missing_ok=True)
             except Exception:
-                time.sleep(0.05)
-        return False
-
-
-def save_jobs(jobs):
-    if not jobs:
-        # Prevent accidentally wiping jobs.json
-        if JOBS_FILE.exists() and JOBS_FILE.stat().st_size > 100:
-            return
-    tmp_file = JOBS_FILE.with_suffix(".tmp")
-    with open(tmp_file, "w", encoding="utf-8") as f:
-        json.dump(jobs, f, indent=2, ensure_ascii=False)
-    tmp_file.replace(JOBS_FILE)
+                pass
+    return False
 
 def update_job_status(job_id, updates):
-    jobs = load_jobs()
-    for j in jobs:
-        if j["id"] == job_id:
-            j.update(updates)
-            break
-    save_jobs(jobs)
+    # Read-modify-write is one critical section so simultaneous worker updates
+    # cannot overwrite each other with an older snapshot.
+    with JOBS_LOCK:
+        jobs = load_jobs()
+        for job in jobs:
+            if job.get("id") == job_id:
+                job.update(updates)
+                break
+        return save_jobs(jobs)
 
 def run_job_pipeline(job):
     job_id = job["id"]
@@ -650,6 +655,15 @@ def save_config(cfg):
     except Exception:
         return False
 
+def public_config(cfg):
+    """Return UI-safe settings without exposing saved credentials to browsers."""
+    safe = json.loads(json.dumps(cfg or {}))
+    llm = safe.get("llm")
+    if isinstance(llm, dict):
+        llm["has_api_key"] = bool(llm.get("api_key"))
+        llm.pop("api_key", None)
+    return safe
+
 
 def _normalise_llm_base(raw_base):
     from urllib.parse import urlsplit, urlunsplit
@@ -841,7 +855,7 @@ def api_system_info():
     return jsonify({
         "success": True,
         "hardware": hw,
-        "config": cfg
+        "config": public_config(cfg)
     })
 
 @app.route("/api/settings", methods=["GET", "POST"])
@@ -865,7 +879,7 @@ def api_settings():
         saved = save_config(cfg)
         return jsonify({"success": saved, "config": cfg})
     else:
-        return jsonify({"success": True, "config": load_config()})
+        return jsonify({"success": True, "config": public_config(load_config())})
 
 
 @app.route("/api/llm/models", methods=["POST"])
