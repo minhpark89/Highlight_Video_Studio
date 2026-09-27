@@ -475,21 +475,26 @@ def get_all_clips():
             pass
 
     seen_files = set()
+    # Chỉ lấy các clip có file video THỰC TẾ đang tồn tại trên ổ đĩa máy này
     for j in jobs:
         for c in j.get("clips", []):
             fn = c.get("filename")
             if fn:
+                clip_path = OUTPUT_DIR / fn
+                if not clip_path.exists():
+                    continue # Bỏ qua nếu file video không có trên máy tính này
                 seen_files.add(fn)
-            clip_copy = dict(c)
-            clip_copy["job_id"] = j["id"]
-            clip_copy["video_source"] = j.get("video_title", j.get("youtube_url"))
-            clip_copy["is_posted"] = (fn in posted_set)
-            all_clips.append(clip_copy)
+                clip_copy = dict(c)
+                clip_copy["job_id"] = j["id"]
+                clip_copy["video_source"] = j.get("video_title", j.get("youtube_url"))
+                clip_copy["is_posted"] = (fn in posted_set)
+                all_clips.append(clip_copy)
             
-    # Also auto-discover any mp4 files in output/ directory directly
+    # Quét trực tiếp các video .mp4 thực tế trong thư mục output/
     if OUTPUT_DIR.exists():
         for f in sorted(OUTPUT_DIR.glob("*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
             if f.name not in seen_files:
+                seen_files.add(f.name)
                 all_clips.append({
                     "filename": f.name,
                     "title": f.stem,
@@ -497,7 +502,7 @@ def get_all_clips():
                     "file_size": f.stat().st_size,
                     "is_posted": (f.name in posted_set),
                     "job_id": "direct_scan",
-                    "video_source": "Kho video ổ D"
+                    "video_source": "Kho video thực tế"
                 })
                 
     return jsonify(all_clips)
@@ -673,40 +678,48 @@ def detect_hardware():
 
 @app.route("/api/system/youtube_status", methods=["GET"])
 def api_youtube_status():
-    """Kiểm tra xem Chrome profile đã đăng nhập YouTube hay chưa dựa trên cookies (hỗ trợ cả Default và Profile 1..9)."""
-    base_dir = r"F:\openclaw\.openclaw\workspace\chrome_profile"
-    if not os.path.exists(base_dir):
-        return jsonify({"logged_in": False, "reason": "Chưa có profile Chrome"})
-    
-    profiles = ["Profile 1", "Default", "Profile 2", "Profile 3"]
+    """Kiểm tra xem Chrome profile đã đăng nhập YouTube hay chưa dựa trên cookies xác thực Google/YouTube."""
+    candidate_dirs = [
+        ROOT_DIR / "chrome_profile",
+        Path(r"F:\openclaw\.openclaw\workspace\chrome_profile")
+    ]
+    profiles = ["Default", "Profile 1", "Profile 2", "Profile 3"]
     total_cnt = 0
-    
-    for prof in profiles:
-        cookie_path = os.path.join(base_dir, prof, "Network", "Cookies")
-        if not os.path.exists(cookie_path):
+
+    for base_dir in candidate_dirs:
+        if not base_dir.exists():
             continue
-            
-        temp_db = os.path.join(base_dir, f"temp_yt_{prof}.db")
-        try:
-            shutil.copyfile(cookie_path, temp_db)
-            conn = sqlite3.connect(temp_db)
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM cookies WHERE host_key LIKE '%youtube.com%' AND name IN ('LOGIN_INFO', 'SID', 'SSID', 'SAPISID')")
-            row = cur.fetchone()
-            cnt = row[0] if row else 0
-            conn.close()
-            total_cnt += cnt
-            if cnt > 0:
-                return jsonify({"logged_in": True, "count": cnt, "profile": prof})
-        except Exception as e:
-            pass
-        finally:
-            if os.path.exists(temp_db):
-                try:
-                    os.remove(temp_db)
-                except Exception:
-                    pass
-                    
+        for prof in profiles:
+            cookie_path = base_dir / prof / "Network" / "Cookies"
+            if not cookie_path.exists():
+                continue
+
+            temp_db = base_dir / f"temp_yt_{prof}_{int(time.time()*1000)}.db"
+            try:
+                shutil.copyfile(str(cookie_path), str(temp_db))
+                conn = sqlite3.connect(str(temp_db))
+                cur = conn.cursor()
+                # Kiểm tra cả domain google.com và youtube.com vì đăng nhập tài khoản Google cấp cookie SID/SSID/SAPISID
+                cur.execute("""
+                    SELECT COUNT(*) FROM cookies 
+                    WHERE (host_key LIKE '%youtube.com%' OR host_key LIKE '%google.com%') 
+                      AND name IN ('LOGIN_INFO', 'SID', 'SSID', 'SAPISID', 'HSID', '__Secure-1PSID', '__Secure-3PSID', 'APISID')
+                """)
+                row = cur.fetchone()
+                cnt = row[0] if row else 0
+                conn.close()
+                total_cnt += cnt
+                if cnt > 0:
+                    return jsonify({"logged_in": True, "count": cnt, "profile": prof})
+            except Exception:
+                pass
+            finally:
+                if temp_db.exists():
+                    try:
+                        temp_db.unlink()
+                    except Exception:
+                        pass
+
     return jsonify({"logged_in": total_cnt > 0, "count": total_cnt})
 
 @app.route("/api/system/open_chrome", methods=["POST"])
@@ -1290,8 +1303,12 @@ def api_get_posts():
     posts = load_posts()
     # Sắp xếp bài mới lên lịch / mới đăng lên đầu danh sách (Newest First)
     def _sort_key(p):
-        return p.get("created_at") or p.get("scheduled_time") or ""
-    posts.sort(key=_sort_key, reverse=True)
+        # Ưu tiên sắp xếp theo thời điểm tạo bài hoặc lên lịch
+        c_at = p.get("created_at", "")
+        s_at = p.get("scheduled_time", "")
+        p_id = p.get("id", "")
+        return (c_at, s_at, p_id)
+    posts = sorted(posts, key=_sort_key, reverse=True)
     return jsonify(posts)
 
 @app.route("/api/posts", methods=["POST"])

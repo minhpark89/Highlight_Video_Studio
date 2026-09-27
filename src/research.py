@@ -1,12 +1,90 @@
+import os
+import sys
 import re
 import json
 import logging
+import subprocess
+from pathlib import Path
 from typing import List, Dict, Any
-import yt_dlp
+
+try:
+    import yt_dlp
+    HAS_YTDLP_MODULE = True
+except Exception:
+    HAS_YTDLP_MODULE = False
 
 logger = logging.getLogger('research')
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 def search_videos(query: str, platform: str = 'youtube', max_results: int = 12, filter_type: str = 'all', sort_by: str = 'views') -> List[Dict[str, Any]]:
+    query = query.strip()
+    if not query:
+        return []
+
+    is_url = query.startswith('http://') or query.startswith('https://')
+
+    # Nếu có module yt_dlp trong python
+    if HAS_YTDLP_MODULE:
+        try:
+            return _search_videos_module(query, platform, max_results, filter_type, sort_by, is_url)
+        except Exception as e:
+            logger.warning(f"yt_dlp module search error: {e}, falling back to CLI binary...")
+
+    # Fallback dùng binary bin/yt-dlp.exe đóng gói sẵn trong App
+    return _search_videos_cli(query, platform, max_results, filter_type, sort_by, is_url)
+
+def _search_videos_cli(query: str, platform: str, max_results: int, filter_type: str, sort_by: str, is_url: bool) -> List[Dict[str, Any]]:
+    bin_path = BASE_DIR / "bin" / "yt-dlp.exe"
+    exe_cmd = str(bin_path) if bin_path.exists() else "yt-dlp"
+    
+    target_query = query
+    if not is_url:
+        fetch_count = max(30, int(max_results * 1.5))
+        if platform == 'youtube_shorts':
+            target_query = f"ytsearch{fetch_count}:{query} #shorts"
+        elif platform == 'podcast':
+            target_query = f"ytsearch{fetch_count}:{query} podcast"
+        elif platform == 'viral':
+            target_query = f"ytsearch{fetch_count}:{query} viral"
+        else:
+            target_query = f"ytsearch{fetch_count}:{query}"
+
+    cmd = [
+        exe_cmd,
+        "--dump-json",
+        "--flat-playlist",
+        "--no-warnings",
+        "--ignore-errors",
+        target_query
+    ]
+    if is_url:
+        cmd.extend(["--playlist-end", str(max_results)])
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore", timeout=45)
+        raw_lines = [l.strip() for l in proc.stdout.splitlines() if l.strip()]
+        results = []
+        for line in raw_lines:
+            try:
+                e = json.loads(line)
+                vid = e.get("id") or ""
+                vurl = e.get("url") or f"https://www.youtube.com/watch?v={vid}"
+                results.append({
+                    "id": vid,
+                    "title": e.get("title", "Untitled"),
+                    "url": vurl,
+                    "duration": e.get("duration", 0),
+                    "views": e.get("view_count", 0),
+                    "thumbnail": e.get("thumbnail") or f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+                })
+            except Exception:
+                continue
+        return results[:max_results]
+    except Exception as ex:
+        logger.error(f"yt-dlp cli search error: {ex}")
+        return []
+
+def _search_videos_module(query: str, platform: str, max_results: int, filter_type: str, sort_by: str, is_url: bool) -> List[Dict[str, Any]]:
     query = query.strip()
     if not query:
         return []
