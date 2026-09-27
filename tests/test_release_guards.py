@@ -165,6 +165,23 @@ class ReleaseGuardTests(unittest.TestCase):
             renderer.assert_called_once()
             self.assertEqual(updates[-1]["status"], "completed")
 
+    def test_ytdlp_json3_captions_are_available_without_whisper(self):
+        from src.pipeline import _parse_ytdlp_json3
+        with tempfile.TemporaryDirectory() as folder:
+            caption_file = Path(folder) / "captions.json3"
+            caption_file.write_text(json.dumps({"events": [
+                {"tStartMs": 1250, "dDurationMs": 2500, "segs": [
+                    {"utf8": "hello"}, {"utf8": " world"}
+                ]},
+                {"tStartMs": 3750, "dDurationMs": 100, "segs": [{"utf8": "\n"}]},
+            ]}), encoding="utf-8")
+            items = _parse_ytdlp_json3(caption_file)
+        self.assertEqual(items, [{
+            "start": 1.25,
+            "duration": 2.5,
+            "text": "hello world",
+        }])
+
 
 if __name__ == "__main__":
     unittest.main()

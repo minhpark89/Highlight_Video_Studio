@@ -94,6 +94,76 @@ def get_youtube_transcript(video_id: str):
             pass
     except Exception as e:
         print(f"[Transcript API] KhÃ´ng tÃ¬m tháº¥y transcript trá»±c tiáº¿p tá»« YouTube: {e}")
+    # youtube-transcript-api is frequently blocked while yt-dlp can still read
+    # the same automatic captions through the authenticated player response.
+    return get_ytdlp_transcript(video_id)
+
+
+def _parse_ytdlp_json3(path: Path):
+    """Convert yt-dlp's JSON3 captions to the pipeline transcript format."""
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    items = []
+    for event in payload.get("events", []):
+        segments = event.get("segs") or []
+        text = "".join(str(part.get("utf8") or "") for part in segments)
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            continue
+        items.append({
+            "start": float(event.get("tStartMs", 0)) / 1000.0,
+            "duration": max(float(event.get("dDurationMs", 0)) / 1000.0, 0.1),
+            "text": text,
+        })
+    return items
+
+
+def get_ytdlp_transcript(video_id: str):
+    """Download automatic captions with the bundled yt-dlp as a fast fallback."""
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    prefix = TEMP_DIR / f"transcript_{video_id}"
+    output_template = str(prefix) + ".%(ext)s"
+    base_args = [
+        YT_DLP_BIN,
+        "--skip-download",
+        "--write-auto-subs",
+        "--sub-langs", "en-orig,en,vi",
+        "--sub-format", "json3",
+        "--no-playlist",
+        "-o", output_template,
+    ]
+    if NODE_BIN and Path(NODE_BIN).exists():
+        base_args.extend(["--js-runtimes", f"node:{NODE_BIN}"])
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    attempts = [base_args + [url]]
+    if CHROME_PROFILE_DIR.exists():
+        attempts.append(base_args + ["--cookies-from-browser", f"chrome:{CHROME_PROFILE_DIR}", url])
+    try:
+        for command in attempts:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=90,
+                creationflags=NO_WINDOW,
+            )
+            candidates = sorted(TEMP_DIR.glob(f"transcript_{video_id}.*.json3"))
+            for candidate in candidates:
+                items = _parse_ytdlp_json3(candidate)
+                if items:
+                    return items
+            if result.returncode == 0:
+                break
+    except Exception as exc:
+        print(f"[yt-dlp captions] {exc}")
+    finally:
+        for candidate in TEMP_DIR.glob(f"transcript_{video_id}.*.json3"):
+            try:
+                candidate.unlink()
+            except OSError:
+                pass
     return None
 
 CHROME_PROFILE_DIR = BASE_DIR / "chrome_profile"
@@ -309,8 +379,10 @@ def transcribe_local_whisper(audio_path: str, update_status=None):
         update_status("Äang nháº­n diá»‡n giá»ng nÃ³i báº±ng GPU NVIDIA RTX 3060 (CUDA float16)...")
     try:
         from faster_whisper import WhisperModel
-    except Exception:
-        WhisperModel = None
+    except Exception as exc:
+        raise RuntimeError(
+            "Video không có phụ đề YouTube và bộ nhận diện giọng nói faster-whisper chưa được cài đặt."
+        ) from exc
     try:
         model = WhisperModel("small", device="cuda", compute_type="float16")
     except Exception as e:
