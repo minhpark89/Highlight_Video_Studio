@@ -1,5 +1,14 @@
 {
-  "base_url": "https://bestnews.cfx.bz",
-  "username": "admin",
-  "password": "admin123"
+  "base_url": "",
+  "username": "",
+  "password": "",
+  "video_upload": {
+    "method": "scp",
+    "host": "",
+    "port": 22,
+    "username": "",
+    "private_key_path": "",
+    "remote_dir": "",
+    "public_base_url": ""
+  }
 }

@@ -15,21 +15,19 @@ import requests
 logger = logging.getLogger("website_publisher")
 
 HVS_DIR = Path(__file__).resolve().parent.parent.parent
-NVS_DIR = Path(r"D:\News_Video_Studio")
 sys.path.insert(0, str(HVS_DIR))
-sys.path.insert(0, str(NVS_DIR))
 
 try:
-    from core.website_article_service import WebsiteArticleService, _BackendSession
+    from core.website_article_service import WebsiteArticleService, WebsiteServiceError, _BackendSession
     HAS_WEBSITE_SVC = True
-except Exception:
+except Exception as exc:
+    WebsiteServiceError = RuntimeError
+    logger.error("WebsiteArticleService import failed: %s", exc)
     HAS_WEBSITE_SVC = False
 
 def get_website_config():
-    """Lấy config CMS website từ HVS hoặc NVS."""
+    """Lấy config CMS website được lưu cục bộ trong HVS."""
     cfg_file = HVS_DIR / "config" / "website_config.json"
-    if not cfg_file.exists():
-        cfg_file = NVS_DIR / "data" / "registry" / "website_config.json"
     if cfg_file.exists():
         try:
             with open(cfg_file, "r", encoding="utf-8") as f:
@@ -47,7 +45,7 @@ def get_llm_config():
     except Exception:
         return {
             "api_base": "http://100.89.167.97:8317/v1",
-            "api_key": "oc_clip_904296c3e5356d9027135dd4a881d9e102bbe4c420d1d4a9ab7b133d27d548b1",
+            "api_key": "",
             "model": "gemini-3-flash"
         }
 
@@ -143,8 +141,8 @@ def generate_llm_hook_image(video_title: str) -> str:
     """
     import base64
     llm_cfg = get_llm_config()
-    api_base = llm_cfg.get("api_base", "http://100.89.167.97:8317/v1")
-    api_key = llm_cfg.get("api_key", "oc_clip_904296c3e5356d9027135dd4a881d9e102bbe4c420d1d4a9ab7b133d27d548b1")
+    api_base = str(llm_cfg.get("api_base") or "").strip()
+    api_key = str(llm_cfg.get("api_key") or "").strip()
 
     prompt = f"""A viral YouTube thumbnail and article hook image for a dramatic video: "{video_title}".
 Exact required visual elements matching viral clickbait standard:
@@ -211,25 +209,18 @@ def upload_long_video_to_public_stream(meta: dict, clip_filename: str) -> str:
     if not target_video_file or not target_video_file.exists():
         return ""
 
-    vps_url = f"https://studio.shopkitai.com/videos/{target_stream_name}"
-    try:
-        r = requests.head(vps_url, timeout=3)
-        if r.status_code == 200:
-            return vps_url
-    except Exception:
-        pass
+    cfg_data, cfg_file = get_website_config()
+    if not HAS_WEBSITE_SVC:
+        raise WebsiteServiceError("Bản cài thiếu WebsiteArticleService")
+    if not cfg_file.exists():
+        raise WebsiteServiceError("Chưa cấu hình Website CMS")
 
-    try:
-        cmd = f'scp -i C:\\Users\\Admin\\.ssh\\bob2_auto -o StrictHostKeyChecking=no "{target_video_file}" root@157.173.116.71:/var/www/portfolio/videos/'
-        p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=180)
-        if p.returncode == 0:
-            return vps_url
-        else:
-            logger.warning(f"SCP long video upload error: {p.stderr}")
-    except Exception as e:
-        logger.warning(f"SCP long video upload exception: {e}")
-
-    return vps_url
+    svc = WebsiteArticleService(str(cfg_file))
+    # CMS cấp presigned HTTPS URL và public URL. Cách này chạy trên mọi máy,
+    # không phụ thuộc SSH key hoặc username Windows của máy build.
+    public_url = svc.upload_video(str(target_video_file))
+    svc.verify_public_media(public_url, require_range=True)
+    return public_url
 
 def extract_and_upload_article_assets(clip_filename: str, video_title: str) -> tuple:
     """
@@ -311,6 +302,8 @@ def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: li
     - 2 phần phân tích chuyên sâu + ảnh minh họa diễn biến
     - CUỐI BÀI: Video Player HTML5 phát file video MP4 gốc dài (100% chạy trên điện thoại và máy tính)!
     """
+    if not video_stream_url or not str(video_stream_url).startswith("https://"):
+        raise WebsiteServiceError("Video chưa có HTTPS public URL hợp lệ")
     title = video_title or "Uncut Breakdown & Critical Scene Analysis"
     
     # 1. Khối ảnh Hero Hook nằm ngay đầu bài viết (dưới tiêu đề)
@@ -341,9 +334,9 @@ def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: li
         """
 
     llm_cfg = get_llm_config()
-    api_base = llm_cfg.get("api_base", "http://100.89.167.97:8317/v1")
-    api_key = llm_cfg.get("api_key", "oc_clip_904296c3e5356d9027135dd4a881d9e102bbe4c420d1d4a9ab7b133d27d548b1")
-    model = llm_cfg.get("model", "gemini-3-flash")
+    api_base = str(llm_cfg.get("api_base") or "").strip()
+    api_key = str(llm_cfg.get("api_key") or "").strip()
+    model = str(llm_cfg.get("model") or "").strip()
 
     prompt = f"""You are a senior sports and viral investigative journalist writing an in-depth article for a global media publication.
 Write an authentic, context-rich article in English for the topic: "{title}".
@@ -473,9 +466,9 @@ def generate_curiosity_comment_with_llm(video_title: str, article_url: str, enab
         return fallback_comment
 
     llm_cfg = get_llm_config()
-    api_base = llm_cfg.get("api_base", "http://100.89.167.97:8317/v1")
-    api_key = llm_cfg.get("api_key", "oc_clip_904296c3e5356d9027135dd4a881d9e102bbe4c420d1d4a9ab7b133d27d548b1")
-    model = llm_cfg.get("model", "gemini-3-flash")
+    api_base = str(llm_cfg.get("api_base") or "").strip()
+    api_key = str(llm_cfg.get("api_key") or "").strip()
+    model = str(llm_cfg.get("model") or "").strip()
 
     prompt = f"""You are a master social media growth marketer. Write ONE viral, high-CTR First Comment in English for a Facebook Reel titled: "{video_title}".
 Rules:
@@ -505,6 +498,12 @@ Rules:
                 comment = comment[1:-1].strip()
             if article_url not in comment:
                 comment += f"\n👉 Full uncut video: {article_url}"
+            # Facebook accepts longer comments, but keeping this compact gives
+            # the requested high-CTR first-comment format.
+            if len(comment) > 500:
+                comment = comment[:500].rsplit(" ", 1)[0]
+                if article_url not in comment:
+                    comment = f"🔥 Full uncut story and video: {article_url}"
             return comment
         else:
             logger.warning(f"LLM comment gen error: {resp.status_code} {resp.text}")
@@ -524,6 +523,10 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
     Trả về: (article_url, hero_image_url)
     """
     cfg_data, cfg_file = get_website_config()
+    if not HAS_WEBSITE_SVC:
+        raise WebsiteServiceError("Bản cài thiếu WebsiteArticleService")
+    if not cfg_file.exists():
+        raise WebsiteServiceError("Chưa cấu hình Website CMS")
     base_url = cfg_data.get("base_url", "https://bestnews.cfx.bz").rstrip("/")
 
     # 1. Metadata chuẩn sạch, loại bỏ hoàn toàn 'Clip 1', 'Clip 2'
@@ -533,6 +536,8 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
 
     # 2. Upload/Stream VIDEO GỐC DÀI qua direct HTML5 video player (100% chạy trên mọi thiết bị)
     video_stream_url = upload_long_video_to_public_stream(meta, clip_filename)
+    if not video_stream_url:
+        raise WebsiteServiceError("Upload video không trả public URL")
 
     # 3. Tạo ảnh HOOK AI bằng LLM & Trích xuất ảnh minh họa
     hero_img, body_imgs = extract_and_upload_article_assets(clip_filename, video_title)
@@ -548,21 +553,17 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
     slug = f"{clean_slug}-{abs(hash(clip_filename)) % 100000}"
 
     # 6. Publish lên CMS qua WebsiteArticleService kèm Hero Image (Hook Thumbnail)
-    article_url = f"{base_url}/blog/{slug}"
-    if HAS_WEBSITE_SVC and cfg_file.exists():
-        try:
-            svc = WebsiteArticleService(str(cfg_file))
-            if svc.cfg.base_url:
-                res = svc.publish_article(
-                    title=seo_title,
-                    slug=slug,
-                    body_html=body_html,
-                    image_url=hero_img,
-                    dry_run=False
-                )
-                if res.get("status") == "success" and res.get("article_url"):
-                    article_url = res.get("article_url")
-        except Exception as e:
-            logger.warning(f"Error publishing to website CMS: {e}")
+    svc = WebsiteArticleService(str(cfg_file))
+    res = svc.publish_article(
+        title=seo_title,
+        slug=slug,
+        body_html=body_html,
+        image_url=hero_img,
+        dry_run=False,
+    )
+    article_url = res.get("article_url")
+    if res.get("status") != "success" or not article_url:
+        raise WebsiteServiceError("CMS không xác nhận bài viết đã được tạo")
+    svc.verify_article(article_url)
 
     return article_url, hero_img

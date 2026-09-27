@@ -1613,26 +1613,27 @@
               <div style="margin-bottom: 14px;">
                 <label class="lbl">LLM Provider Endpoint</label>
                 <input type="text" id="cfg_llm_base" class="form-control" placeholder="http://127.0.0.1:8000/v1 hoặc endpoint LLM của bạn" style="font-size: 13.5px;">
+              </div>
               <div style="margin-bottom: 14px;">
                 <label class="lbl">LLM API Key</label>
                 <input type="password" id="cfg_llm_key" class="form-control" placeholder="Nhập API Key LLM (nếu có, để trống nếu không cần)" style="font-size: 13.5px;">
               </div>
-
-              <div style="margin-bottom: 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                <button type="button" class="btn btn-secondary btn-sm" onclick="testLlmConnection()" style="background: #1e293b; border-color: #38bdf8; color: #38bdf8; font-weight: 700; padding: 6px 14px;">
-                  <i class="bi bi-broadcast"></i> Kiểm tra kết nối LLM (Ping Test)
-                </button>
-                <span id="llm-test-result" style="font-size: 12.5px; font-weight: 600;"></span>
-              </div>
-
-              </div>
               <div style="margin-bottom: 14px;">
                 <label class="lbl">Model phân tích Highlight</label>
-                <select id="cfg_llm_model">
+                <select id="cfg_llm_model" class="form-select">
                   <option value="gemini-3-flash" selected>gemini-3-flash (Nhanh & Tối ưu hook)</option>
                   <option value="gemini-3.7-flash-high">gemini-3.7-flash-high</option>
                   <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
                 </select>
+                <div style="display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap;">
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-check-llm" onclick="checkLlmEndpoint()" style="font-weight: 700; border-color: #38bdf8;">
+                    <i class="bi bi-cloud-download"></i> Lấy danh sách Models
+                  </button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-test-llm" onclick="testLlmConnection()" style="font-weight: 700; border-color: #10b981; color: #34d399;">
+                    <i class="bi bi-chat-dots"></i> Test model đã chọn
+                  </button>
+                </div>
+                <div id="llm-test-result" style="font-size: 12.5px; font-weight: 600; margin-top: 9px; min-height: 18px;"></div>
               </div>
               <div style="margin-bottom: 14px;">
                 <label class="lbl">Whisper Transcription Engine</label>
@@ -1736,7 +1737,20 @@
               </div>
             </div>
             <div id="cfg_web_status" style="font-size: 12px; color: #94a3b8; margin-bottom: 16px;">
-              <i class="bi bi-shield-lock"></i> Mật khẩu được mã hóa an toàn trên Windows bằng DPAPI.
+              <i class="bi bi-shield-lock"></i> Để trống mật khẩu nếu không muốn thay đổi giá trị đang lưu.
+            </div>
+            <div style="border-top:1px solid #23304d; margin:20px 0 16px; padding-top:18px;">
+              <div style="font-weight:800; margin-bottom:12px;"><i class="bi bi-camera-video"></i> Máy chủ phát video công khai</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                <div><label class="form-label">Phương thức upload</label><select id="cfg_video_method" class="form-control"><option value="scp">SCP/SFTP (khuyến nghị)</option><option value="cms">CMS presigned upload</option></select></div>
+                <div><label class="form-label">SSH Host</label><input id="cfg_video_host" class="form-control" placeholder="157.173.116.71"></div>
+                <div><label class="form-label">SSH Port</label><input id="cfg_video_port" type="number" class="form-control" value="22" min="1" max="65535"></div>
+                <div><label class="form-label">SSH Username</label><input id="cfg_video_user" class="form-control" placeholder="root"></div>
+                <div style="grid-column:1/-1"><label class="form-label">Đường dẫn private key trên máy</label><input id="cfg_video_key" class="form-control" placeholder="C:\Users\Bạn\.ssh\id_ed25519"></div>
+                <div style="grid-column:1/-1"><label class="form-label">Thư mục video trên server</label><input id="cfg_video_remote" class="form-control" placeholder="/var/www/portfolio/videos"></div>
+                <div style="grid-column:1/-1"><label class="form-label">Public video URL</label><input id="cfg_video_public" class="form-control" placeholder="https://studio.example.com/videos"></div>
+              </div>
+              <div id="cfg_video_status" style="font-size:12px;color:#94a3b8;margin-top:10px;">Chưa kiểm tra máy chủ video.</div>
             </div>
             <div style="display: flex; align-items: center; gap: 12px;">
               <button type="submit" class="btn btn-primary" style="font-weight: 700; padding: 10px 20px;">
@@ -1744,6 +1758,9 @@
               </button>
               <button type="button" class="btn btn-secondary" onclick="testWebsiteConnection()" style="font-weight: 600;">
                 <i class="bi bi-broadcast"></i> Kiểm tra kết nối
+              </button>
+              <button type="button" class="btn btn-secondary" onclick="testVideoUploader()" style="font-weight: 600;">
+                <i class="bi bi-cloud-arrow-up"></i> Kiểm tra upload video
               </button>
               <span id="website-save-msg" style="font-size: 12.5px; font-weight: 600;"></span>
             </div>
@@ -2638,38 +2655,94 @@
   // ================= HARDWARE AUTO-DETECT & SETTINGS =================
   
   // ================= SAVE SETTINGS =================
-  
-  // ================= KIỂM TRA KẾT NỐI LLM =================
+  function ensureLlmModelOption(modelId) {
+    const select = document.getElementById('cfg_llm_model');
+    if (!select || !modelId) return;
+    if (!Array.from(select.options).some(option => option.value === modelId)) {
+      select.add(new Option(modelId, modelId));
+    }
+    select.value = modelId;
+  }
+
+  function llmRequestPayload() {
+    return {
+      api_base: (document.getElementById('cfg_llm_base')?.value || '').trim(),
+      api_key: (document.getElementById('cfg_llm_key')?.value || '').trim(),
+      model: document.getElementById('cfg_llm_model')?.value || ''
+    };
+  }
+
+  async function checkLlmEndpoint() {
+    const button = document.getElementById('btn-check-llm');
+    const result = document.getElementById('llm-test-result');
+    const baseInput = document.getElementById('cfg_llm_base');
+    const modelSelect = document.getElementById('cfg_llm_model');
+    const previousModel = modelSelect?.value || '';
+    const payload = llmRequestPayload();
+    if (!payload.api_base) {
+      result.style.color = '#ef4444';
+      result.textContent = 'Vui lòng nhập endpoint trước.';
+      baseInput?.focus();
+      return;
+    }
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Đang lấy...';
+    result.style.color = '#38bdf8';
+    result.textContent = 'Đang xác thực endpoint và đọc danh sách model...';
+    try {
+      const response = await fetch('/api/llm/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Không lấy được models');
+      if (baseInput && data.api_base) baseInput.value = data.api_base;
+      modelSelect.innerHTML = '';
+      data.models.forEach(model => modelSelect.add(new Option(model, model)));
+      modelSelect.value = data.models.includes(previousModel) ? previousModel : data.models[0];
+      result.style.color = '#10b981';
+      result.innerHTML = `<i class="bi bi-check-circle-fill"></i> Endpoint hợp lệ · ${data.count} model. Hãy bấm “Test model đã chọn”.`;
+    } catch (error) {
+      result.style.color = '#ef4444';
+      result.innerHTML = `<i class="bi bi-x-circle-fill"></i> ${escapeHtml(error.message)}`;
+    } finally {
+      button.disabled = false;
+      button.innerHTML = '<i class="bi bi-cloud-download"></i> Lấy danh sách Models';
+    }
+  }
+
   async function testLlmConnection() {
     const resEl = document.getElementById('llm-test-result');
-    const api_base = (document.getElementById('cfg_llm_base')?.value || '').trim();
-    const api_key = ***'cfg_llm_key')?.value || '').trim();
-    const model = document.getElementById('cfg_llm_model')?.value || 'gemini-3-flash';
+    const button = document.getElementById('btn-test-llm');
+    const payload = llmRequestPayload();
 
-    if (!api_base) {
+    if (!payload.api_base || !payload.model) {
       if (resEl) {
         resEl.style.color = '#ef4444';
-        resEl.innerHTML = '<i class="bi bi-exclamation-circle-fill"></i> Vui lòng nhập LLM Provider Endpoint trước!';
+        resEl.innerHTML = '<i class="bi bi-exclamation-circle-fill"></i> Vui lòng nhập endpoint và chọn model!';
       }
       return;
     }
 
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Đang test...';
     if (resEl) {
       resEl.style.color = '#38bdf8';
-      resEl.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Đang gửi lệnh test đến LLM...';
+      resEl.innerHTML = 'Đang gửi một chat completion thật đến provider...';
     }
 
     try {
       const resp = await fetch('/api/llm/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_base, api_key, model })
+        body: JSON.stringify(payload)
       });
       const data = await resp.json();
       if (resp.ok && data.success) {
         if (resEl) {
           resEl.style.color = '#10b981';
-          resEl.innerHTML = `<i class="bi bi-check-circle-fill"></i> ${escapeHtml(data.message)}`;
+          resEl.innerHTML = `<i class="bi bi-check-circle-fill"></i> Model hoạt động thật · ${data.latency_ms} ms · “${escapeHtml(data.sample)}”`;
         }
       } else {
         if (resEl) {
@@ -2682,6 +2755,9 @@
         resEl.style.color = '#ef4444';
         resEl.innerHTML = `<i class="bi bi-x-circle-fill"></i> Lỗi mạng: ${escapeHtml(e.message)}`;
       }
+    } finally {
+      button.disabled = false;
+      button.innerHTML = '<i class="bi bi-chat-dots"></i> Test model đã chọn';
     }
   }
 
@@ -2781,7 +2857,7 @@
         const baseInput = document.getElementById('cfg_llm_base');
         if (baseInput && cfg.llm.api_base) baseInput.value = cfg.llm.api_base;
         const modelSelect = document.getElementById('cfg_llm_model');
-        if (modelSelect && cfg.llm.model) modelSelect.value = cfg.llm.model;
+        if (modelSelect && cfg.llm.model) ensureLlmModelOption(cfg.llm.model);
       }
     } catch (e) {
       console.warn('Could not load hardware info:', e);
@@ -4399,9 +4475,17 @@
       if (d.success && d.config) {
         if (document.getElementById('cfg_web_base')) document.getElementById('cfg_web_base').value = d.config.base_url || '';
         if (document.getElementById('cfg_web_user')) document.getElementById('cfg_web_user').value = d.config.username || '';
+        const video = d.config.video_upload || {};
+        const videoFields = {
+          cfg_video_method: video.method || 'scp', cfg_video_host: video.host || '',
+          cfg_video_port: video.port || 22, cfg_video_user: video.username || '',
+          cfg_video_key: video.private_key_path || '', cfg_video_remote: video.remote_dir || '',
+          cfg_video_public: video.public_base_url || ''
+        };
+        Object.entries(videoFields).forEach(([id, value]) => { const el = document.getElementById(id); if (el) el.value = value; });
         if (document.getElementById('cfg_web_status')) {
           if (d.config.has_password) {
-            document.getElementById('cfg_web_status').innerHTML = '<span style="color:#22c55e;"><i class="bi bi-check-circle-fill"></i> Đã lưu mật khẩu an toàn (DPAPI). Để trống ô mật khẩu nếu không đổi.</span>';
+            document.getElementById('cfg_web_status').innerHTML = '<span style="color:#22c55e;"><i class="bi bi-check-circle-fill"></i> Đã có mật khẩu. Để trống ô mật khẩu nếu không đổi.</span>';
           } else {
             document.getElementById('cfg_web_status').innerHTML = '<span style="color:#f59e0b;"><i class="bi bi-exclamation-triangle"></i> Chưa lưu mật khẩu website.</span>';
           }
@@ -4419,11 +4503,20 @@
     const base_url = document.getElementById('cfg_web_base').value.trim();
     const username = document.getElementById('cfg_web_user').value.trim();
     const password = document.getElementById('cfg_web_password').value;
+    const video_upload = {
+      method: document.getElementById('cfg_video_method').value,
+      host: document.getElementById('cfg_video_host').value.trim(),
+      port: Number(document.getElementById('cfg_video_port').value || 22),
+      username: document.getElementById('cfg_video_user').value.trim(),
+      private_key_path: document.getElementById('cfg_video_key').value.trim(),
+      remote_dir: document.getElementById('cfg_video_remote').value.trim(),
+      public_base_url: document.getElementById('cfg_video_public').value.trim()
+    };
     try {
       const res = await fetch('/api/website-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ base_url, username, password })
+        body: JSON.stringify({ base_url, username, password, video_upload })
       });
       const d = await res.json();
       if (res.ok && d.success) {
@@ -4459,6 +4552,16 @@
       msgEl.textContent = 'Lỗi: ' + e.message;
       msgEl.style.color = '#ef4444';
     }
+  }
+  async function testVideoUploader() {
+    const el = document.getElementById('cfg_video_status');
+    el.textContent = 'Đang kiểm tra SSH/thư mục upload...'; el.style.color = '#f59e0b';
+    try {
+      const res = await fetch('/api/website-config/test-video', { method: 'POST' });
+      const d = await res.json();
+      if (res.ok && d.success) { el.textContent = '✓ ' + (d.message || 'Máy chủ video sẵn sàng'); el.style.color = '#22c55e'; }
+      else { el.textContent = '✗ ' + (d.error || 'Không thể kết nối'); el.style.color = '#ef4444'; }
+    } catch (e) { el.textContent = '✗ ' + e.message; el.style.color = '#ef4444'; }
   }
   // ================= PUBLISHER & SCHEDULER CONTROLLER (LOHA ARCHITECTURE) =================
   let currentPublishContext = {

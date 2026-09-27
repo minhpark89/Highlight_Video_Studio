@@ -1,126 +1,89 @@
 using System;
-using System.IO;
 using System.Diagnostics;
+using System.IO;
+using System.Net;
 using System.Threading;
 using System.Windows.Forms;
 
-public class AppLauncher
+internal static class AppLauncher
 {
+    private const string AppUrl = "http://127.0.0.1:5080";
+
     [STAThread]
-    public static void Main()
+    private static void Main()
     {
         string baseDir = AppDomain.CurrentDomain.BaseDirectory;
         Directory.SetCurrentDirectory(baseDir);
-
-        string pythonExe = "";
-        string[] candidates = new string[]
+        string python = Path.Combine(baseDir, "runtime", "python.exe");
+        string server = Path.Combine(baseDir, "run_server.py");
+        if (!File.Exists(python) || !File.Exists(server))
         {
-            Path.Combine(baseDir, "runtime\\python.exe"),
-            Path.Combine(baseDir, "venv\\Scripts\\python.exe"),
-            "python.exe",
-            "py.exe",
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs\\Python\\Python313\\python.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs\\Python\\Python312\\python.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs\\Python\\Python311\\python.exe"),
-            "C:\\Python313\\python.exe",
-            "C:\\Python312\\python.exe",
-            "C:\\Python311\\python.exe"
-        };
-
-        foreach (var c in candidates)
-        {
-            if (File.Exists(c))
-            {
-                pythonExe = c;
-                break;
-            }
-        }
-
-        if (string.IsNullOrEmpty(pythonExe))
-        {
-            try
-            {
-                Process p = new Process();
-                p.StartInfo.FileName = "where";
-                p.StartInfo.Arguments = "python";
-                p.StartInfo.UseShellExecute = false;
-                p.StartInfo.RedirectStandardOutput = true;
-                p.StartInfo.CreateNoWindow = true;
-                p.Start();
-                string output = p.StandardOutput.ReadLine();
-                p.WaitForExit();
-                if (!string.IsNullOrEmpty(output) && File.Exists(output.Trim()))
-                {
-                    pythonExe = output.Trim();
-                }
-            }
-            catch {}
-        }
-
-        if (string.IsNullOrEmpty(pythonExe))
-        {
-            MessageBox.Show("Khong tim thay Python tren may tinh!\n\nVui long cai dat Python (nho tich Add python.exe to PATH) de khoi chay Highlight Video Studio.", "Highlight Video Studio", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(
+                "Bản cài thiếu Python portable hoặc run_server.py. Vui lòng cài lại Highlight Video Studio.",
+                "Highlight Video Studio", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
-        // Kiem tra va tu dong cai thu vien Flask, Waitress, Requests neu may chua co
-        try
+        if (!ServerReady())
         {
-            Process checkP = new Process();
-            checkP.StartInfo.FileName = pythonExe;
-            checkP.StartInfo.Arguments = "-c \"import flask, waitress, requests, yt_dlp\"";
-            checkP.StartInfo.UseShellExecute = false;
-            checkP.StartInfo.CreateNoWindow = true;
-            checkP.Start();
-            checkP.WaitForExit();
-
-            if (checkP.ExitCode != 0)
+            try
             {
-                // Cai dat thu vien can thiet
-                Process pipP = new Process();
-                pipP.StartInfo.FileName = pythonExe;
-                pipP.StartInfo.Arguments = "-m pip install flask waitress requests yt-dlp";
-                pipP.StartInfo.UseShellExecute = false;
-                pipP.StartInfo.CreateNoWindow = false; // hien de user thay tien trinh
-                pipP.Start();
-                pipP.WaitForExit();
-            }
-        }
-        catch {}
-
-        try
-        {
-            // Chay run_server.py
-            ProcessStartInfo psi = new ProcessStartInfo();
-            psi.FileName = pythonExe;
-            psi.Arguments = "run_server.py";
-            psi.WorkingDirectory = baseDir;
-            psi.WindowStyle = ProcessWindowStyle.Hidden;
-            psi.CreateNoWindow = true;
-            psi.UseShellExecute = false;
-            
-            // Redirect stderr de bat loi neu crash
-            string logFile = Path.Combine(baseDir, "server_error.log");
-            psi.RedirectStandardError = true;
-            
-            Process proc = new Process();
-            proc.StartInfo = psi;
-            proc.ErrorDataReceived += (s, e) => {
-                if (!string.IsNullOrEmpty(e.Data))
+                var info = new ProcessStartInfo
                 {
-                    try { File.AppendAllText(logFile, e.Data + "\n"); } catch {}
-                }
-            };
-            proc.Start();
-            proc.BeginErrorReadLine();
+                    FileName = python,
+                    Arguments = "\"" + server + "\"",
+                    WorkingDirectory = baseDir,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    RedirectStandardError = true
+                };
+                var process = new Process { StartInfo = info, EnableRaisingEvents = true };
+                process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs args)
+                {
+                    if (String.IsNullOrWhiteSpace(args.Data)) return;
+                    try { File.AppendAllText(Path.Combine(baseDir, "server_error.log"), args.Data + Environment.NewLine); }
+                    catch { }
+                };
+                process.Start();
+                process.BeginErrorReadLine();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Không thể khởi động ứng dụng: " + ex.Message,
+                    "Highlight Video Studio", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
 
-            // Cho 2s kiem tra xem port 5080 da len chua
-            Thread.Sleep(2000);
-            Process.Start("http://localhost:5080");
+            DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+            while (DateTime.UtcNow < deadline && !ServerReady()) Thread.Sleep(350);
         }
+
+        if (!ServerReady())
+        {
+            MessageBox.Show("Máy chủ không khởi động trong 30 giây. Hãy xem server_error.log trong thư mục cài đặt.",
+                "Highlight Video Studio", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try { Process.Start(new ProcessStartInfo(AppUrl) { UseShellExecute = true }); }
         catch (Exception ex)
         {
-            MessageBox.Show("Loi khoi dong: " + ex.Message, "Highlight Video Studio", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show("Ứng dụng đã chạy tại " + AppUrl + "\n\n" + ex.Message,
+                "Highlight Video Studio", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
+    }
+
+    private static bool ServerReady()
+    {
+        try
+        {
+            var request = (HttpWebRequest)WebRequest.Create(AppUrl + "/api/system/info");
+            request.Timeout = 700;
+            request.ReadWriteTimeout = 700;
+            using (var response = (HttpWebResponse)request.GetResponse())
+                return (int)response.StatusCode >= 200 && (int)response.StatusCode < 500;
+        }
+        catch { return false; }
     }
 }

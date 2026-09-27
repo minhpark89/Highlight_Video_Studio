@@ -1,12 +1,11 @@
 import sys
 from pathlib import Path
-NVS_DIR = Path(r"D:\News_Video_Studio")
-if str(NVS_DIR) not in sys.path:
-    sys.path.append(str(NVS_DIR))
 try:
-    from core.website_article_service import WebsiteArticleService
+    from core.website_article_service import WebsiteArticleService, WebsiteServiceError
     HAS_WEBSITE_SVC = True
 except Exception as _e:
+    WebsiteArticleService = None
+    WebsiteServiceError = RuntimeError
     HAS_WEBSITE_SVC = False
 
 import subprocess
@@ -15,6 +14,8 @@ import sqlite3
 import os
 import sys
 import json
+import html
+import requests
 import uuid
 import threading
 from queue import Queue
@@ -649,6 +650,67 @@ def save_config(cfg):
     except Exception:
         return False
 
+
+def _normalise_llm_base(raw_base):
+    from urllib.parse import urlsplit, urlunsplit
+
+    value = str(raw_base or "").strip().rstrip("/")
+    if not value:
+        raise ValueError("Vui lòng nhập LLM Provider Endpoint")
+    parsed = urlsplit(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("Endpoint phải là URL http:// hoặc https:// hợp lệ")
+    path = parsed.path.rstrip("/")
+    lower_path = path.lower()
+    for suffix in ("/chat/completions", "/completions", "/models"):
+        if lower_path.endswith(suffix):
+            path = path[:-len(suffix)].rstrip("/")
+            break
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", "")).rstrip("/")
+
+
+def _llm_model_urls(raw_base):
+    base = _normalise_llm_base(raw_base)
+    urls = [f"{base}/models"]
+    if not base.lower().endswith("/v1"):
+        urls.append(f"{base}/v1/models")
+    return list(dict.fromkeys(urls))
+
+
+def _extract_llm_models(payload):
+    if isinstance(payload, dict):
+        rows = payload.get("data")
+        if not isinstance(rows, list):
+            rows = payload.get("models")
+    elif isinstance(payload, list):
+        rows = payload
+    else:
+        rows = None
+    models = []
+    for row in rows or []:
+        if isinstance(row, str):
+            model_id = row
+        elif isinstance(row, dict):
+            model_id = row.get("id") or row.get("name") or row.get("model")
+            if isinstance(model_id, str) and model_id.startswith("models/"):
+                model_id = model_id.split("/", 1)[1]
+        else:
+            model_id = None
+        if model_id and model_id not in models:
+            models.append(model_id)
+    return sorted(models, key=str.lower)
+
+
+def _llm_headers(api_key):
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if api_key:
+        headers.update({
+            "Authorization": f"Bearer {api_key}",
+            "x-api-key": api_key,
+            "api-key": api_key,
+        })
+    return headers
+
 def detect_hardware():
     import platform
     import subprocess
@@ -788,7 +850,13 @@ def api_settings():
         data = request.json or {}
         cfg = load_config()
         if "llm" in data:
-            cfg.setdefault("llm", {}).update(data["llm"])
+            llm_update = dict(data["llm"] or {})
+            if "api_base" in llm_update:
+                try:
+                    llm_update["api_base"] = _normalise_llm_base(llm_update["api_base"])
+                except ValueError as exc:
+                    return jsonify({"success": False, "error": str(exc)}), 400
+            cfg.setdefault("llm", {}).update(llm_update)
         if "video_pipeline" in data:
             cfg.setdefault("video_pipeline", {}).update(data["video_pipeline"])
         if "whisper" in data:
@@ -798,6 +866,104 @@ def api_settings():
         return jsonify({"success": saved, "config": cfg})
     else:
         return jsonify({"success": True, "config": load_config()})
+
+
+@app.route("/api/llm/models", methods=["POST"])
+def api_llm_models():
+    data = request.json or {}
+    cfg_llm = load_config().get("llm", {})
+    raw_base = data.get("api_base") or cfg_llm.get("api_base")
+    api_key = data.get("api_key") or cfg_llm.get("api_key", "")
+    try:
+        model_urls = _llm_model_urls(raw_base)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+
+    failures = []
+    for models_url in model_urls:
+        try:
+            response = requests.get(models_url, headers=_llm_headers(api_key), timeout=15)
+            if response.status_code != 200:
+                try:
+                    detail = response.json().get("error") or response.json().get("message") or ""
+                    if isinstance(detail, dict):
+                        detail = detail.get("message") or str(detail)
+                except Exception:
+                    detail = response.text[:180].strip()
+                failures.append(f"{models_url}: HTTP {response.status_code}" + (f" - {detail}" if detail else ""))
+                continue
+            models = _extract_llm_models(response.json())
+            if not models:
+                failures.append(f"{models_url}: response không có danh sách model")
+                continue
+            return jsonify({
+                "success": True,
+                "api_base": models_url[:-len("/models")].rstrip("/"),
+                "models": models,
+                "count": len(models),
+            })
+        except requests.RequestException as exc:
+            failures.append(f"{models_url}: {exc}")
+        except ValueError:
+            failures.append(f"{models_url}: server không trả JSON hợp lệ")
+    return jsonify({"success": False, "error": "Không thể lấy danh sách model. " + " | ".join(failures)}), 502
+
+
+@app.route("/api/llm/test", methods=["POST"])
+def api_llm_test():
+    data = request.json or {}
+    cfg_llm = load_config().get("llm", {})
+    raw_base = data.get("api_base") or cfg_llm.get("api_base")
+    api_key = data.get("api_key") or cfg_llm.get("api_key", "")
+    model = str(data.get("model") or cfg_llm.get("model") or "").strip()
+    if not model:
+        return jsonify({"success": False, "error": "Vui lòng chọn model cần kiểm tra"}), 400
+    try:
+        api_base = _normalise_llm_base(raw_base)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    started = time.perf_counter()
+    try:
+        response = requests.post(
+            f"{api_base}/chat/completions",
+            headers=_llm_headers(api_key),
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+                "max_tokens": 8,
+                "temperature": 0,
+            },
+            timeout=30,
+        )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {}
+        if response.status_code != 200:
+            detail = payload.get("error") or payload.get("message") or response.text[:240]
+            if isinstance(detail, dict):
+                detail = detail.get("message") or str(detail)
+            return jsonify({
+                "success": False,
+                "error": f"Model có trong danh sách nhưng gọi chat thất bại (HTTP {response.status_code}): {detail}",
+                "latency_ms": latency_ms,
+            }), 502
+        choices = payload.get("choices") or []
+        content = ""
+        if choices and isinstance(choices[0], dict):
+            content = str((choices[0].get("message") or {}).get("content") or choices[0].get("text") or "").strip()
+        if not content:
+            return jsonify({"success": False, "error": "Provider trả HTTP 200 nhưng không có nội dung chat"}), 502
+        return jsonify({
+            "success": True,
+            "api_base": api_base,
+            "model": model,
+            "latency_ms": latency_ms,
+            "sample": content[:80],
+        })
+    except requests.RequestException as exc:
+        return jsonify({"success": False, "error": f"Không kết nối được model: {exc}"}), 502
 
 
 @app.route("/api/content/generate", methods=["POST"])
@@ -1222,7 +1388,7 @@ def load_website_config():
                 return json.load(f)
         except Exception:
             pass
-    return {"base_url": "https://boostnews.danhngon.pro", "username": "admin", "password": ""}
+    return {"base_url": "", "username": "", "password": "", "video_upload": {"method": "scp", "port": 22}}
 
 def save_website_config(cfg):
     os.makedirs(os.path.dirname(WEBSITE_CFG_FILE), exist_ok=True)
@@ -1237,7 +1403,8 @@ def api_get_website_config():
         "config": {
             "base_url": cfg.get("base_url", ""),
             "username": cfg.get("username", ""),
-            "has_password": bool(cfg.get("password"))
+            "has_password": bool(cfg.get("password")),
+            "video_upload": cfg.get("video_upload") or {"method": "scp", "port": 22}
         }
     })
 
@@ -1247,6 +1414,7 @@ def api_save_website_config():
     base_url = data.get("base_url", "").strip()
     username = data.get("username", "").strip()
     password = data.get("password", "")
+    video_upload = data.get("video_upload")
 
     cfg = load_website_config()
     if base_url:
@@ -1255,6 +1423,12 @@ def api_save_website_config():
         cfg["username"] = username
     if password:
         cfg["password"] = password
+    if isinstance(video_upload, dict):
+        current_video = dict(cfg.get("video_upload") or {})
+        for key in ("method", "host", "port", "username", "private_key_path", "remote_dir", "public_base_url"):
+            if key in video_upload:
+                current_video[key] = video_upload[key]
+        cfg["video_upload"] = current_video
 
     save_website_config(cfg)
     return jsonify({"success": True, "message": "Đã lưu cấu hình website thành công"})
@@ -1265,13 +1439,22 @@ def api_test_website_config():
     base_url = cfg.get("base_url", "").strip()
     if not base_url:
         return jsonify({"success": False, "error": "Chưa nhập Website URL"}), 400
+    if not HAS_WEBSITE_SVC:
+        return jsonify({"success": False, "error": "Bản cài thiếu WebsiteArticleService"}), 500
     try:
-        import urllib.request
-        req = urllib.request.Request(base_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            return jsonify({"success": True, "message": f"Website phản hồi mã HTTP {response.status}"})
+        result = WebsiteArticleService(WEBSITE_CFG_FILE).test_connection()
+        return jsonify(result)
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+        return jsonify({"success": False, "error": str(e)}), 502
+
+@app.route("/api/website-config/test-video", methods=["POST"])
+def api_test_video_uploader():
+    if not HAS_WEBSITE_SVC:
+        return jsonify({"success": False, "error": "Bản cài thiếu WebsiteArticleService"}), 500
+    try:
+        return jsonify(WebsiteArticleService(WEBSITE_CFG_FILE).test_video_uploader())
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 502
 
 
 
@@ -1781,20 +1964,58 @@ def api_publish_website_article():
     if not title:
         return jsonify({"success": False, "error": "Thiếu tiêu đề bài viết"}), 400
 
-    cfg_file = NVS_DIR / "data" / "registry" / "website_config.json"
-    if not cfg_file.exists():
-        cfg_file = BASE_DIR / "config" / "website_config.json"
+    cfg_file = BASE_DIR / "config" / "website_config.json"
+    if not HAS_WEBSITE_SVC:
+        return jsonify({"success": False, "error": "Bản cài thiếu WebsiteArticleService"}), 500
 
-    article_url = ""
-    hook_caption = ""
-    
-    # Tạo nội dung HTML nhúng video dài chuẩn (thẻ <video> nội bộ hoặc direct stream, không gắn link youtube)
+    try:
+        svc = WebsiteArticleService(str(cfg_file))
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+
+    # Chỉ chấp nhận URL HTTPS đã xác minh hoặc file nằm trong downloads/output.
+    public_video_url = ""
+    local_video_path = None
+    if str(long_video).startswith("https://"):
+        try:
+            svc.verify_public_media(long_video, require_range=True)
+            public_video_url = long_video
+        except Exception as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+    else:
+        requested_name = Path(str(long_video).replace("\\", "/")).name
+        candidates = []
+        if long_video:
+            raw_path = Path(long_video)
+            if raw_path.is_absolute():
+                candidates.append(raw_path)
+        candidates.extend([OUTPUT_DIR / requested_name, DOWNLOADS_DIR / requested_name])
+        allowed_roots = [OUTPUT_DIR.resolve(), DOWNLOADS_DIR.resolve()]
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+                if resolved.is_file() and any(root == resolved.parent or root in resolved.parents for root in allowed_roots):
+                    local_video_path = resolved
+                    break
+            except Exception:
+                continue
+        if not local_video_path:
+            return jsonify({"success": False, "error": "Không tìm thấy video local hợp lệ để upload"}), 400
+        try:
+            public_video_url = svc.upload_video(str(local_video_path))
+        except Exception as exc:
+            return jsonify({"success": False, "error": f"Upload video thất bại: {exc}"}), 502
+
+    safe_title = html.escape(title)
+    safe_summary = html.escape(summary or title)
+    safe_video_url = html.escape(public_video_url, quote=True)
+    safe_hook_url = html.escape(hook_img, quote=True) if str(hook_img).startswith("https://") else ""
     body_html = f"""
     <div class="article-content">
-      <p class="lead-summary"><strong>{summary or title}</strong></p>
+      <p class="lead-summary"><strong>{safe_summary}</strong></p>
       <div class="video-container" style="margin: 20px 0; text-align: center;">
-        <video controls style="width: 100%; max-width: 720px; border-radius: 8px;" poster="{hook_img}">
-          <source src="{long_video}" type="video/mp4">
+        <video controls playsinline preload="metadata" style="width: 100%; max-width: 720px; border-radius: 8px; background: #000;" poster="{safe_hook_url}">
+          <source src="{safe_video_url}" type="video/mp4">
           Trình duyệt của bạn không hỗ trợ phát video trực tiếp.
         </video>
       </div>
@@ -1803,23 +2024,20 @@ def api_publish_website_article():
     """
 
     slug = re.sub(r'[^a-zA-Z0-9]+', '-', title.lower()).strip('-')[:60]
-    
-    if HAS_WEBSITE_SVC and cfg_file.exists():
-        try:
-            svc = WebsiteArticleService(str(cfg_file))
-            res = svc.publish_article(
-                title=title,
-                slug=slug,
-                body_html=body_html,
-                image_path=hook_img if os.path.exists(hook_img) else None,
-                dry_run=dry_run
-            )
-            article_url = res.get("article_url", f"https://bestnews.cfx.bz/blog/{slug}")
-        except Exception as e:
-            print("[WebsiteService Error]", e)
-            article_url = f"https://bestnews.cfx.bz/blog/{slug}"
-    else:
-        article_url = f"https://bestnews.cfx.bz/blog/{slug}"
+    try:
+        res = svc.publish_article(
+            title=title,
+            slug=slug,
+            body_html=body_html,
+            image_path=hook_img if hook_img and os.path.exists(hook_img) else None,
+            image_url=hook_img if str(hook_img).startswith("https://") else "",
+            dry_run=dry_run,
+        )
+        article_url = res.get("article_url")
+        if not article_url:
+            raise WebsiteServiceError("CMS không trả article_url")
+    except Exception as exc:
+        return jsonify({"success": False, "error": f"Đăng bài CMS thất bại: {exc}"}), 502
 
     # First comment kích thích tò mò có kèm ảnh hook & link web
     try:
@@ -1833,7 +2051,9 @@ def api_publish_website_article():
         "article_url": article_url,
         "first_comment": first_comment,
         "hook_image": hook_img,
-        "title": title
+        "title": title,
+        "video_url": public_video_url,
+        "cms_verified": not dry_run,
     })
 
 
@@ -1841,6 +2061,3 @@ if __name__ == "__main__":
     import waitress
     print("Highlight Video Studio starting on port 5080 with Waitress (threads=8)...")
     waitress.serve(app, host="0.0.0.0", port=5080, threads=8, channel_timeout=30)
-
-
-from web.llm_test_route import *

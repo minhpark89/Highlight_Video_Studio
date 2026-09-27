@@ -105,6 +105,17 @@ class MetaReelPoster:
             if not is_scheduled and first_comment and first_comment.strip():
                 time.sleep(3)
                 comment_result = self.post_first_comment(video_id, page_token, first_comment.strip(), token_id=track_target)
+            elif is_scheduled and first_comment and first_comment.strip():
+                from src.publisher.first_comment_queue import enqueue_first_comment
+                # Meta does not accept comments before a scheduled Reel becomes
+                # public. Persist it and retry shortly after publish time.
+                comment_result = enqueue_first_comment(
+                    video_id,
+                    page_token,
+                    first_comment.strip(),
+                    int(finish_payload["scheduled_publish_time"]) + 30,
+                    token_id=track_target,
+                )
 
             return {
                 "success": True,

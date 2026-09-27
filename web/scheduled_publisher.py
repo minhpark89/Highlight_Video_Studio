@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 import json
 
-BASE_DIR = Path(r"D:\Highlight_Video_Studio")
+BASE_DIR = Path(__file__).resolve().parent.parent
 POSTS_FILE = BASE_DIR / "posts.json"
 POSTED_CLIPS_FILE = BASE_DIR / "posted_clips.json"
 OUTPUT_DIR = BASE_DIR / "output"
@@ -36,6 +36,7 @@ def scheduled_publisher_worker_loop():
     import sys
     sys.path.insert(0, str(BASE_DIR))
     from src.publisher.meta_reel_poster import MetaReelPoster
+    from src.publisher.first_comment_queue import process_due_first_comments
     from src.publisher.website_publisher import publish_clip_to_website_cms, generate_curiosity_comment_with_llm
 
 
@@ -44,6 +45,9 @@ def scheduled_publisher_worker_loop():
 
     while True:
         try:
+            queue_result = process_due_first_comments(poster)
+            if queue_result.get("processed"):
+                print(f"[ScheduledPublisher] Posted {queue_result['processed']} queued first comment(s).")
             posts = load_posts()
             now = datetime.now()
 

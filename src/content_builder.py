@@ -20,9 +20,9 @@ def get_llm_candidates():
         except Exception:
             pass
     llm = cfg.get("llm", {})
-    configured_base = llm.get("api_base", "http://100.89.167.97:8317/v1")
-    api_key = llm.get("api_key", "oc_clip_904296c3e5356d9027135dd4a881d9e102bbe4c420d1d4a9ab7b133d27d548b1")
-    model = llm.get("model", "gemini-3-flash")
+    configured_base = str(llm.get("api_base") or "").strip()
+    api_key = str(llm.get("api_key") or "").strip()
+    model = str(llm.get("model") or "").strip()
 
     # Danh sách các endpoint 9router ứng viên để auto-detect trên các máy khác nhau
     raw_candidates = [

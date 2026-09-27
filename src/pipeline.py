@@ -52,9 +52,9 @@ if CONFIG_FILE.exists():
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-LLM_BASE = config.get("llm", {}).get("api_base", "http://100.89.167.97:8317/v1")
-LLM_KEY = config.get("llm", {}).get("api_key", "oc_clip_904296c3e5356d9027135dd4a881d9e102bbe4c420d1d4a9ab7b133d27d548b1")
-LLM_MODEL = config.get("llm", {}).get("model", "gemini-3-flash")
+LLM_BASE = str(config.get("llm", {}).get("api_base") or "").strip()
+LLM_KEY = str(config.get("llm", {}).get("api_key") or "").strip()
+LLM_MODEL = str(config.get("llm", {}).get("model") or "").strip()
 
 def extract_video_id(url: str) -> str:
     patterns = [
