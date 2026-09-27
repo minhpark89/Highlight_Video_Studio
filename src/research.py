@@ -23,20 +23,28 @@ def search_videos(query: str, platform: str = 'youtube', max_results: int = 12, 
 
     is_url = query.startswith('http://') or query.startswith('https://')
 
-    # Nếu có module yt_dlp trong python
+    # Ưu tiên dùng CLI yt-dlp.exe độc lập (standalone 17.8MB) để độc lập 100% với môi trường Python của máy trạm
+    bin_path = BASE_DIR / "bin" / "yt-dlp.exe"
+    if bin_path.exists() and bin_path.stat().st_size > 1_000_000:
+        res = _search_videos_cli(query, platform, max_results, filter_type, sort_by, is_url, exe_cmd=str(bin_path))
+        if res:
+            return res
+
+    # Nếu module yt_dlp có sẵn
     if HAS_YTDLP_MODULE:
         try:
             return _search_videos_module(query, platform, max_results, filter_type, sort_by, is_url)
         except Exception as e:
             logger.warning(f"yt_dlp module search error: {e}, falling back to CLI binary...")
 
-    # Fallback dùng binary bin/yt-dlp.exe đóng gói sẵn trong App
+    # Fallback cuối cùng: yt-dlp trong PATH hệ thống hoặc bin_path
     return _search_videos_cli(query, platform, max_results, filter_type, sort_by, is_url)
 
-def _search_videos_cli(query: str, platform: str, max_results: int, filter_type: str, sort_by: str, is_url: bool) -> List[Dict[str, Any]]:
-    bin_path = BASE_DIR / "bin" / "yt-dlp.exe"
-    exe_cmd = str(bin_path) if bin_path.exists() else "yt-dlp"
-    
+def _search_videos_cli(query: str, platform: str, max_results: int, filter_type: str, sort_by: str, is_url: bool, exe_cmd: str = None) -> List[Dict[str, Any]]:
+    if not exe_cmd:
+        bin_path = BASE_DIR / "bin" / "yt-dlp.exe"
+        exe_cmd = str(bin_path) if bin_path.exists() else "yt-dlp"
+
     target_query = query
     if not is_url:
         fetch_count = max(30, int(max_results * 1.5))
@@ -61,7 +69,15 @@ def _search_videos_cli(query: str, platform: str, max_results: int, filter_type:
         cmd.extend(["--playlist-end", str(max_results)])
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore", timeout=45)
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore", timeout=60)
+        if proc.returncode != 0 and not proc.stdout:
+            err_msg = (proc.stderr or "").strip()
+            logger.error(f"yt-dlp cli returned code {proc.returncode}: {err_msg}")
+            if "not recognized" in err_msg or "cannot find" in err_msg:
+                raise RuntimeError(f"Không tìm thấy công cụ yt-dlp: {err_msg}")
+            elif err_msg:
+                raise RuntimeError(f"Lỗi YouTube: {err_msg[:200]}")
+
         raw_lines = [l.strip() for l in proc.stdout.splitlines() if l.strip()]
         results = []
         for line in raw_lines:
@@ -69,20 +85,58 @@ def _search_videos_cli(query: str, platform: str, max_results: int, filter_type:
                 e = json.loads(line)
                 vid = e.get("id") or ""
                 vurl = e.get("url") or f"https://www.youtube.com/watch?v={vid}"
+                dur = e.get("duration") or 0
+                
+                # Filter duration
+                if filter_type == 'short' and dur > 300:
+                    continue
+                elif filter_type == 'medium' and (dur < 300 or dur > 1800):
+                    continue
+                elif filter_type == 'long' and dur < 1800 and dur > 0:
+                    continue
+
+                dur_str = ''
+                if dur:
+                    m, s = divmod(int(dur), 60)
+                    h, m = divmod(m, 60)
+                    dur_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+
+                view_cnt = e.get("view_count") or 0
+                if view_cnt >= 1_000_000_000:
+                    view_str = f"{view_cnt/1_000_000_000:.1f}B views"
+                elif view_cnt >= 1_000_000:
+                    view_str = f"{view_cnt/1_000_000:.1f}M views"
+                elif view_cnt >= 1_000:
+                    view_str = f"{view_cnt/1_000:.1f}K views"
+                elif view_cnt > 0:
+                    view_str = f"{view_cnt:,} views"
+                else:
+                    view_str = "N/A views"
+
+                thumb = e.get("thumbnail") or f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+
                 results.append({
                     "id": vid,
                     "title": e.get("title", "Untitled"),
                     "url": vurl,
-                    "duration": e.get("duration", 0),
-                    "views": e.get("view_count", 0),
-                    "thumbnail": e.get("thumbnail") or f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+                    "platform": "youtube",
+                    "uploader": e.get("uploader") or e.get("channel") or "Creator",
+                    "duration": dur,
+                    "duration_str": dur_str,
+                    "view_count": view_cnt,
+                    "view_count_str": view_str,
+                    "thumbnail": thumb
                 })
             except Exception:
                 continue
+
+        if sort_by == 'views':
+            results.sort(key=lambda x: (x.get("view_count") or 0), reverse=True)
+
         return results[:max_results]
     except Exception as ex:
         logger.error(f"yt-dlp cli search error: {ex}")
-        return []
+        raise ex
 
 def _search_videos_module(query: str, platform: str, max_results: int, filter_type: str, sort_by: str, is_url: bool) -> List[Dict[str, Any]]:
     query = query.strip()
@@ -104,7 +158,6 @@ def _search_videos_module(query: str, platform: str, max_results: int, filter_ty
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             target_query = query
             if not is_url:
-                # Canh fetch_count du lon de loc duoc video chat luong va view cao
                 fetch_count = max(30, int(max_results * 1.5))
                 if fetch_count > 1000:
                     fetch_count = 1000
@@ -127,7 +180,6 @@ def _search_videos_module(query: str, platform: str, max_results: int, filter_ty
 
             raw_entries = [e for e in entries if e and (e.get('id') or e.get('url'))]
 
-            # Ưu tiên sắp xếp theo lượt view cao nhất (viral)
             if sort_by == 'views':
                 raw_entries.sort(key=lambda x: (x.get('view_count') or 0), reverse=True)
 
@@ -192,6 +244,6 @@ def _search_videos_module(query: str, platform: str, max_results: int, filter_ty
                     break
     except Exception as e:
         logger.error(f"Search error: {e}")
-        print(f"Search error: {e}")
+        raise e
 
     return results

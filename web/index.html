@@ -1617,6 +1617,14 @@
                 <label class="lbl">LLM API Key</label>
                 <input type="password" id="cfg_llm_key" class="form-control" placeholder="Nhập API Key LLM (nếu có, để trống nếu không cần)" style="font-size: 13.5px;">
               </div>
+
+              <div style="margin-bottom: 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="testLlmConnection()" style="background: #1e293b; border-color: #38bdf8; color: #38bdf8; font-weight: 700; padding: 6px 14px;">
+                  <i class="bi bi-broadcast"></i> Kiểm tra kết nối LLM (Ping Test)
+                </button>
+                <span id="llm-test-result" style="font-size: 12.5px; font-weight: 600;"></span>
+              </div>
+
               </div>
               <div style="margin-bottom: 14px;">
                 <label class="lbl">Model phân tích Highlight</label>
@@ -2487,10 +2495,13 @@
         `;
       }).join('');
     } catch (err) {
+      console.error('Research error:', err);
       container.innerHTML = `
-        <div class="col-12" style="text-align: center; color: #f87171; padding: 40px;">
-          <i class="bi bi-exclamation-triangle" style="font-size: 3rem; display: block; margin-bottom: 10px;"></i>
-          Đã xảy ra lỗi: ${escapeHtml(err.message)}
+        <div class="col-12" style="text-align: center; color: #f87171; padding: 40px; background: rgba(239, 68, 68, 0.08); border: 1px dashed rgba(239, 68, 68, 0.4); border-radius: 12px; margin-top: 15px;">
+          <i class="bi bi-exclamation-octagon-fill" style="font-size: 3rem; display: block; margin-bottom: 12px; color: #ef4444;"></i>
+          <div style="font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 6px;">Không thể cào dữ liệu từ YouTube</div>
+          <div style="font-size: 13px; color: #fca5a5; font-family: monospace; max-width: 700px; margin: 0 auto; word-break: break-word;">${escapeHtml(err.message)}</div>
+          <div style="font-size: 12px; color: #94a3b8; margin-top: 10px;">Gợi ý: Kiểm tra kết nối mạng Internet hoặc thử dán trực tiếp 1 đường link Video/Kênh YouTube cụ thể.</div>
         </div>
       `;
     } finally {
@@ -2627,6 +2638,53 @@
   // ================= HARDWARE AUTO-DETECT & SETTINGS =================
   
   // ================= SAVE SETTINGS =================
+  
+  // ================= KIỂM TRA KẾT NỐI LLM =================
+  async function testLlmConnection() {
+    const resEl = document.getElementById('llm-test-result');
+    const api_base = (document.getElementById('cfg_llm_base')?.value || '').trim();
+    const api_key = ***'cfg_llm_key')?.value || '').trim();
+    const model = document.getElementById('cfg_llm_model')?.value || 'gemini-3-flash';
+
+    if (!api_base) {
+      if (resEl) {
+        resEl.style.color = '#ef4444';
+        resEl.innerHTML = '<i class="bi bi-exclamation-circle-fill"></i> Vui lòng nhập LLM Provider Endpoint trước!';
+      }
+      return;
+    }
+
+    if (resEl) {
+      resEl.style.color = '#38bdf8';
+      resEl.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Đang gửi lệnh test đến LLM...';
+    }
+
+    try {
+      const resp = await fetch('/api/llm/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_base, api_key, model })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success) {
+        if (resEl) {
+          resEl.style.color = '#10b981';
+          resEl.innerHTML = `<i class="bi bi-check-circle-fill"></i> ${escapeHtml(data.message)}`;
+        }
+      } else {
+        if (resEl) {
+          resEl.style.color = '#ef4444';
+          resEl.innerHTML = `<i class="bi bi-x-circle-fill"></i> ${escapeHtml(data.error || 'Lỗi kết nối LLM')}`;
+        }
+      }
+    } catch (e) {
+      if (resEl) {
+        resEl.style.color = '#ef4444';
+        resEl.innerHTML = `<i class="bi bi-x-circle-fill"></i> Lỗi mạng: ${escapeHtml(e.message)}`;
+      }
+    }
+  }
+
   async function saveSettings() {
     const msgEl = document.getElementById('settings-save-msg');
     try {

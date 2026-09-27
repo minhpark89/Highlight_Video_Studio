@@ -1842,3 +1842,5 @@ if __name__ == "__main__":
     print("Highlight Video Studio starting on port 5080 with Waitress (threads=8)...")
     waitress.serve(app, host="0.0.0.0", port=5080, threads=8, channel_timeout=30)
 
+
+from web.llm_test_route import *
