@@ -2293,5 +2293,6 @@ def api_publish_website_article():
 
 if __name__ == "__main__":
     import waitress
-    print("Highlight Video Studio starting on port 5080 with Waitress (threads=8)...")
-    waitress.serve(app, host="0.0.0.0", port=5080, threads=8, channel_timeout=30)
+    bind_host = os.environ.get("HIGHLIGHT_BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    print(f"Highlight Video Studio starting on http://{bind_host}:5080 with Waitress (threads=8)...")
+    waitress.serve(app, host=bind_host, port=5080, threads=8, channel_timeout=30)
