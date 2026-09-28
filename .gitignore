@@ -22,6 +22,7 @@ crawled_videos.json
 tokens_vault.json
 pages.json
 page_groups.json
+data/hardware_profile.json
 *.log
 *.bak
 *.bak*
