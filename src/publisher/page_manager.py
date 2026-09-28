@@ -32,6 +32,7 @@ class PageManager:
     def sync_pages_from_token(self, token_entry, pages_data):
         current_pages = self.list_pages()
         token_id = token_entry.get("id")
+        token_name = token_entry.get("name")
         
         for p in pages_data:
             page_id = p.get("page_id")
@@ -42,6 +43,7 @@ class PageManager:
                 existing["avatar"] = p.get("avatar")
                 existing["page_token"] = p.get("page_token")
                 existing["token_id"] = token_id
+                existing["token_name"] = token_name
                 existing["last_synced"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             else:
                 current_pages.append({
@@ -51,6 +53,7 @@ class PageManager:
                     "avatar": p.get("avatar"),
                     "page_token": p.get("page_token"),
                     "token_id": token_id,
+                    "token_name": token_name,
                     "group_ids": [],
                     "status": "ACTIVE",
                     "last_synced": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

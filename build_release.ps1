@@ -1,5 +1,6 @@
 param(
     [string]$Version = "1.0.19",
+    [string]$PreviewRevision = "preview.2",
     [string]$BuildChannel = "desktop-test",
     [switch]$SkipTests,
     [string]$ToolSource = "D:\Highlight_Video_Studio\bin",
@@ -62,6 +63,7 @@ Copy-Item -LiteralPath $IconSource -Destination (Join-Path $stage "app.ico") -Fo
 
 $buildIdentity = @{
     app_version = $Version
+    prerelease_build = "$Version-$PreviewRevision"
     build_channel = $BuildChannel
     product_name = "Highlight Desktop Test"
     bind_host = "127.0.0.1"
@@ -168,13 +170,13 @@ Write-Host "Packaging guard: staged tree clean (no runtime state, no machine ide
 tar -a -c -f $payload -C $stage .
 if ($LASTEXITCODE -ne 0) { throw "Payload zip failed (tar $LASTEXITCODE)" }
 if (-not (Test-Path -LiteralPath $payload)) { throw "Payload zip missing: $payload" }
-$setupName = "Highlight_Desktop_Test_Setup_v$Version-preview.1.exe"
+$setupName = "Highlight_Desktop_Test_Setup_v$Version-$PreviewRevision.exe"
 $setup = Join-Path $release $setupName
 & $csc /nologo /target:winexe /optimize+ ("/out:" + $setup) ("/win32icon:" + (Join-Path $stage "app.ico")) /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll /reference:Microsoft.CSharp.dll ("/resource:" + $payload + ",HighlightDesktopTest.Payload") (Join-Path $root "Installer.cs")
 if ($LASTEXITCODE -ne 0) { throw "Installer compile failed" }
 
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
-$hashFile = Join-Path $release "Highlight_Desktop_Test_Setup_v$Version-preview.1.sha256"
+$hashFile = Join-Path $release "Highlight_Desktop_Test_Setup_v$Version-$PreviewRevision.sha256"
 Set-Content -LiteralPath $hashFile -Encoding ASCII -Value "$hash  $setupName"
 try { Remove-Item -LiteralPath $payload -Force -ErrorAction Stop } catch { Write-Warning "Could not remove temporary payload: $payload" }
 try { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction Stop } catch { Write-Warning "Could not remove temporary stage: $stage" }

@@ -191,6 +191,90 @@ class ReleaseGuardTests(unittest.TestCase):
         self.assertEqual(post.call_args.args[0], "https://router.test/v9/chat/completions")
         self.assertIn("messages", post.call_args.kwargs["json"])
 
+    def test_runtime_image_config_promotes_real_task_model_over_frame_sentinel(self):
+        from src.publisher import website_publisher as publisher
+        root = {
+            "image_provider": {
+                "generation_url": "https://images.test/v1/images/generations",
+                "models_url": "https://catalog.test/models",
+                "model": "__video_frame__",
+            },
+            "llm": {"task_models": {"image": "real-image-model"}},
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder) / "config.json"
+            config.write_text(json.dumps(root), encoding="utf-8")
+            with mock.patch.object(publisher, "HVS_DIR", Path(folder)):
+                resolved = publisher.get_image_provider_config()
+        self.assertEqual(resolved["model"], "real-image-model")
+        self.assertEqual(resolved["generation_url"], "https://images.test/v1/images/generations")
+        self.assertEqual(resolved["models_url"], "https://catalog.test/models")
+
+    def test_runtime_image_response_extractor_accepts_url_base64_and_nested_chat(self):
+        from src.publisher.website_publisher import _image_response_values
+        fixtures = [
+            ({"data": [{"url": "https://cdn.test/a.png"}]}, "https://cdn.test/a.png"),
+            ({"data": [{"b64_json": "aW1hZ2U="}]}, "aW1hZ2U="),
+            ({"choices": [{"message": {"images": [{"image_url": {"url": "https://cdn.test/b.png"}}]}}]}, "https://cdn.test/b.png"),
+            ({"choices": [{"message": {"content": "data:image/png;base64,aW1hZ2U="}}]}, "aW1hZ2U="),
+            ({"output": [{"content": "result: https://cdn.test/c.png"}]}, "https://cdn.test/c.png"),
+        ]
+        for payload, expected in fixtures:
+            with self.subTest(payload=payload):
+                self.assertIn(expected, _image_response_values(payload))
+
+    def test_runtime_generation_uses_exact_url_and_saves_nested_chat_image(self):
+        from src.publisher import website_publisher as publisher
+        encoded = "aW1hZ2U="
+        generated = FakeResponse(200, {"choices": [{"message": {"images": [{"image_url": {"b64_json": encoded}}]}}]})
+        config = {
+            "image_provider": {
+                "generation_url": "https://router.test/v9/chat/completions",
+                "models_url": "https://router.test/catalog/models",
+                "api_key": "test-only-placeholder",
+                "model": "image-model-a",
+            }
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "config.json").write_text(json.dumps(config), encoding="utf-8")
+            with mock.patch.object(publisher, "HVS_DIR", root), mock.patch(
+                "src.publisher.website_publisher.requests.post", return_value=generated
+            ) as post:
+                output = publisher.generate_llm_hook_image("Safe canary")
+            self.assertTrue(Path(output).is_file())
+            self.assertEqual(Path(output).read_bytes(), b"image")
+        self.assertEqual(post.call_args.args[0], "https://router.test/v9/chat/completions")
+        self.assertIn("messages", post.call_args.kwargs["json"])
+
+    def test_image_provider_accepts_nested_url_base64_and_content_outputs(self):
+        from web.app import _image_response_has_output
+        fixtures = [
+            {"data": [{"url": "https://cdn.test/a.png"}]},
+            {"data": [{"b64_json": "aW1hZ2U="}]},
+            {"choices": [{"message": {"images": [{"image_url": {"url": "https://cdn.test/b.png"}}]}}]},
+            {"choices": [{"message": {"content": "data:image/png;base64,aW1hZ2U="}}]},
+            {"choices": [{"message": {"content": "result: https://cdn.test/c.png"}}]},
+        ]
+        for payload in fixtures:
+            with self.subTest(payload=payload):
+                self.assertTrue(_image_response_has_output(payload))
+
+    def test_image_model_list_promotes_first_real_model_over_frame_sentinel(self):
+        html = (Path(__file__).resolve().parent.parent / "web" / "templates" / "index.html").read_text(encoding="utf-8")
+        start = html.index("async function checkImageEndpoint")
+        end = html.index("async function testImageProvider", start)
+        body = html[start:end]
+        self.assertIn("data.models[0]", body)
+        self.assertIn("__video_frame__", body)
+
+    def test_source_and_packaged_templates_are_identical(self):
+        root = Path(__file__).resolve().parent.parent
+        self.assertEqual(
+            (root / "web" / "templates" / "index.html").read_bytes(),
+            (root / "web" / "index.html").read_bytes(),
+        )
+
     def test_job_pipeline_resolves_all_lazy_pipeline_functions(self):
         from web import app as web_app
         with tempfile.TemporaryDirectory() as folder:

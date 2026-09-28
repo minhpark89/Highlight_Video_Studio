@@ -600,7 +600,7 @@
       align-items: center;
       margin-top: 10px;
     }
-  
+
     /* Video Player & Content Modals */
     .app-modal-overlay {
       position: fixed;
@@ -828,7 +828,7 @@
 
           <!-- Bảng Nhóm Trang theo dòng chuẩn LoHa Page -->
           <div style="overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel-bg);">
-            
+
           <!-- THANH NHÓM TRANG ĐƯA RA NGOÀI MẶT TIỀN (CHUẨN LOHAPAGE) -->
           <div style="background: rgba(15, 23, 42, 0.4); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 16px;">
             <div style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between;">
@@ -929,7 +929,7 @@
         </div>
       </section>
 
-      
+
       <!-- PANE 1: CẮT HIGHLIGHT STUDIO -->
       <section id="pane-studio" class="pane">
         <div class="row">
@@ -940,7 +940,7 @@
                 <span class="pticon"><i class="bi bi-youtube"></i></span>
                 <span>Nhập Video & Thiết lập Highlight AI</span>
               </div>
-              
+
               <!-- BATCH QUEUE CONTROLS -->
               <div id="queue-control-banner" style="background: linear-gradient(135deg, rgba(245, 158, 11, 0.1), rgba(59, 130, 246, 0.1)); border: 1px solid #23304d; border-radius: 10px; padding: 12px 16px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
                 <div style="display: flex; align-items: center; gap: 14px;">
@@ -1121,7 +1121,7 @@
           </div>
         </div>
       </section>
-      
+
         <!-- PANE: RESEARCH LINK NGUỒN (YOUTUBE, PODCAST, SHORTS, ETC.) -->
         <section id="pane-research" class="pane active">
           <div class="panel">
@@ -1205,7 +1205,7 @@
                 <span class="spinner-border spinner-border-sm" style="margin-right: 6px;"></span> Đang cào dữ liệu từ YouTube...
               </div>
             </div>
-            
+
             <!-- Batch Selection Action Bar -->
             <div id="research-batch-bar" style="display: none; align-items: center; justify-content: space-between; background: #0d1527; border: 1px solid var(--border); border-radius: 10px; padding: 12px 18px; margin-bottom: 16px; flex-wrap: wrap; gap: 10px;">
               <div style="display: flex; align-items: center; gap: 14px;">
@@ -1297,23 +1297,23 @@
               </button>
             </div>
           </div>
-          
+
           <div id="clips-gallery-container" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
             <div style="grid-column: 1 / -1; text-align: center; color: var(--text-dim); padding: 40px;">
               <i class="bi bi-film" style="font-size: 3rem; opacity: 0.3; display: block; margin-bottom: 10px;"></i>
               Đang tải danh sách clips...
             </div>
           </div>
-          
+
           <!-- Phân trang Pagination -->
           <div id="gallery-pagination" style="display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 20px;"></div>
         </div>
       </section>
       <!-- PANE 4: CẤU HÌNH HỆ THỐNG -->
-      
+
       <!-- PANE: QUẢN LÝ PAGE & TOKEN (LoHa Architecture) -->
             <!-- PANE: QUẢN LÝ PAGE & LÊN LỊCH THEO CHUẨN LOHAPAGE -->
-      
+
       <!-- PANE: QUẢN LÝ TOKEN RIÊNG BIỆT (CHUẨN LOHAPAGE) -->
       <section id="pane-tokens" class="pane">
         <div class="panel">
@@ -1531,9 +1531,9 @@
           <div id="pages-pagination" style="display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 24px; margin-bottom: 50px; padding-bottom: 20px;"></div>
         </div>
       </section>
-      
+
       <!-- PANE: QUY TẮC LÊN LỊCH & PHÂN BỔ (LOHA ARCHITECTURE) -->
-      
+
 
 <section id="pane-settings" class="pane">
         <div class="row">
@@ -1634,7 +1634,7 @@
             </div>
           </div>
         </div>
-      
+
           <div class="col-12">
             <div class="panel" style="border: 1px solid rgba(236, 72, 153, 0.4); background: linear-gradient(145deg, #131d35, #0d1527);">
               <div class="panel-title">
@@ -1672,8 +1672,8 @@
 
 
 
-  
-      
+
+
 
 </main>
 </div>
@@ -1960,14 +1960,14 @@
 
     container.innerHTML = pageClips.map((c, idx) => {
       const isPosted = !!c.is_posted;
-      const statusBadge = isPosted 
+      const statusBadge = isPosted
         ? '<span class="badge" style="background: rgba(34, 197, 94, 0.2); color: #4ade80; font-size: 10px;"><i class="bi bi-check2-all"></i> ĐÃ POST</span>'
         : '<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b; font-size: 10px;"><i class="bi bi-clock"></i> CHƯA POST</span>';
-      
+
       const title = c.title || c.hook_title || c.filename;
       const videoSrc = `/api/clips/play/${encodeURIComponent(c.filename)}`;
       const cardId = `clip-card-${startIndex + idx}`;
-      
+
       return `
         <div class="card" style="background: #111c33; border: 1px solid ${isPosted ? '#166534' : '#23304d'}; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 12px rgba(0,0,0,0.25);">
           <!-- Media Player Preview (Nhẹ, không tải hết video cùng lúc) -->
@@ -1982,7 +1982,7 @@
               ${c.duration ? Math.round(c.duration) + 's' : ''}
             </div>
           </div>
-          
+
           <div style="padding: 12px; display: flex; flex-direction: column; flex: 1;">
             <div style="font-weight: 700; font-size: 13px; color: #f8fafc; margin-bottom: 4px; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; min-height: 35px;" title="${title}">
               ${title}
@@ -1990,7 +1990,7 @@
             <div style="font-size: 11px; color: #64748b; margin-bottom: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
               ${c.filename}
             </div>
-            
+
             <div style="margin-top: auto; display: flex; justify-content: space-between; align-items: center; gap: 6px; border-top: 1px solid #1e293b; padding-top: 10px;">
               <span class="badge" style="background: rgba(236, 72, 153, 0.2); color: #f472b6; font-size: 10.5px;">
                 ★ Viral: ${c.viral_score || 95}
@@ -2072,7 +2072,7 @@
     }
   }
 
-  
+
   // ================= DỌN DẸP Ổ D & TRÁNH TRÙNG LẶP =================
   async function purgePostedClips() {
     if (!confirm('Hành động này sẽ XÓA TOÀN BỘ các file video đã đăng/đã lên lịch khỏi ổ D để giải phóng dung lượng và chống đăng trùng.\n\nBạn có chắc chắn muốn dọn sạch không?')) return;
@@ -2145,7 +2145,7 @@
   // Initial load
   loadJobsTable();
   loadClipsGallery();
-  
+
   // ================= RESEARCH VIDEO PERSISTENCE & HISTORY =================
   function renderResearchCards(results) {
     const container = document.getElementById('research-results-container');
@@ -2257,7 +2257,7 @@
     }
   }
 
-  
+
 
   // ================= JOB RETRY FUNCTIONS =================
   async function retryFailedJobs() {
@@ -2402,7 +2402,7 @@
                       <button class="btn btn-secondary btn-sm" style="font-size: 11.5px; padding: 0 10px; justify-content: center; background: #1e293b; border-color: #38bdf8; color: #38bdf8;" onclick="openVideoPlayerModal('${v.url}', '${escapeHtml(v.title)}', '${v.id}')" title="Xem video trực tiếp trên web">
                         <i class="bi bi-play-circle-fill"></i> <span style="margin-left: 4px;">Xem trực tiếp</span>
                       </button>
-                      
+
                   </div>
                 </div>
               </div>
@@ -2503,7 +2503,7 @@
     const checkboxes = document.querySelectorAll('.video-select-check:checked');
     const count = checkboxes.length;
     const total = document.querySelectorAll('.video-select-check').length;
-    
+
     const countEl = document.getElementById('selected-count');
     const copyBtnCount = document.getElementById('copy-btn-count');
     const btnCopy = document.getElementById('btn-copy-selected');
@@ -2552,7 +2552,7 @@
     showToast(`Đã nạp thành công ${count} video vào Studio! Bạn có thể nhấn 'Bắt đầu' để chạy song song.`);
   }
   // ================= HARDWARE AUTO-DETECT & SETTINGS =================
-  
+
   // ================= SAVE SETTINGS =================
   const llmModelSelectIds = ['cfg_llm_model', 'cfg_llm_article_model', 'cfg_llm_comment_model'];
 
@@ -2683,7 +2683,11 @@
       const list = document.getElementById('image-model-options');
       list.innerHTML = '<option value="__video_frame__">Không dùng AI ảnh — trích frame video</option>';
       data.models.forEach(model => list.appendChild(new Option(model, model)));
-      result.style.color='#10b981'; result.textContent=`Endpoint model hoạt động: tìm thấy ${data.count} model. Có thể chọn gợi ý hoặc nhập model thủ công.`;
+      const modelInput = document.getElementById('cfg_image_model');
+      if (modelInput && (!modelInput.value.trim() || modelInput.value === '__video_frame__') && data.models.length) {
+        modelInput.value = data.models[0];
+      }
+      result.style.color='#10b981'; result.textContent=`Endpoint model hoạt động: tìm thấy ${data.count} model. Đã chọn model ảnh thật đầu tiên; vẫn có thể nhập model thủ công.`;
     } catch (e) { result.style.color='#ef4444'; result.textContent=e.message; }
     finally { button.disabled=false; }
   }
@@ -2806,8 +2810,8 @@
       // 4. Auto-sync encoder select in Settings
       const cfgEncoder = document.getElementById('cfg_encoder');
       if (cfgEncoder) {
-        const preferredEncoder = (cfg.video_pipeline && cfg.video_pipeline.encoder && cfg.video_pipeline.encoder !== 'auto') 
-          ? cfg.video_pipeline.encoder 
+        const preferredEncoder = (cfg.video_pipeline && cfg.video_pipeline.encoder && cfg.video_pipeline.encoder !== 'auto')
+          ? cfg.video_pipeline.encoder
           : hw.recommended_encoder;
         cfgEncoder.value = preferredEncoder || 'h264_nvenc';
       }
@@ -2852,7 +2856,7 @@
     currentModalVideo = { url, title, id: videoId };
     document.getElementById('player-modal-title').textContent = title || 'Trình xem video trực tiếp';
     const iframe = document.getElementById('youtube-embed-frame');
-    
+
     if (videoId) {
       iframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0`;
     } else {
@@ -2961,7 +2965,7 @@
         document.getElementById('out-viral-title').value = d.viral_title || '';
         document.getElementById('out-fb-post').value = d.facebook_post || '';
         document.getElementById('out-first-comment').value = d.first_comment || '';
-        
+
         // Render tags
         const tagsContainer = document.getElementById('out-hashtags');
         tagsContainer.innerHTML = '';
@@ -3060,6 +3064,47 @@
     const m = document.getElementById('modal-add-token');
     if (m) m.style.display = 'none';
   }
+
+  async function submitAddToken() {
+    const button = document.getElementById('btn-submit-token');
+    const tokensInput = (document.getElementById('token-input-str')?.value || '').trim();
+    const name = (document.getElementById('token-input-name')?.value || '').trim();
+    const kind = document.getElementById('token-input-kind')?.value || 'SYS';
+    if (!tokensInput) {
+      alert('Vui lòng dán ít nhất một token.');
+      return;
+    }
+
+    const originalHtml = button?.innerHTML || '';
+    if (button) {
+      button.disabled = true;
+      button.innerHTML = '<i class="bi bi-arrow-repeat spin"></i> Đang lưu & đồng bộ...';
+    }
+    try {
+      const response = await fetch('/api/tokens', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({tokens_input: tokensInput, name, kind})
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Không thể lưu token');
+
+      document.getElementById('token-input-str').value = '';
+      document.getElementById('token-input-name').value = '';
+      closeAddTokenModal();
+      await Promise.all([loadTokensOnly(), loadTokensAndPages()]);
+      const failed = (data.results || []).filter(item => item.status !== 'ACTIVE');
+      const summary = `Đã lưu ${data.count || 0} token và đồng bộ ${data.synced_pages || 0} Page.`;
+      alert(failed.length ? `${summary}\n${failed.length} token cần kiểm tra trạng thái trong Token Vault.` : summary);
+    } catch (error) {
+      alert('Lưu & đồng bộ Page thất bại: ' + error.message);
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.innerHTML = originalHtml;
+      }
+    }
+  }
   // [FIX] Stale stub openAddGroupModal/closeAddGroupModal removed; the live implementation
   // below also populates the page selection list.
   // Xem chi tiết Job trong hàng đợi khi ấn icon con mắt
@@ -3141,7 +3186,7 @@
   // ================= TOKEN & PAGE MANAGEMENT (SHARED REFS) =================
   // [FIX] Duplicate openAddGroupModal/closeAddGroupModal removed here; the live implementation
   // (which also resets the group name field) remains below.
-  
+
   // ================= QUẢN LÝ FANPAGE & TOKEN CHUẨN LOHAPAGE =================
   let cachedPagesList = [];
   let globalTokensCatalog = [];
@@ -3232,7 +3277,7 @@
         const colors = ['#2563eb', '#7c3aed', '#db2777', '#059669', '#d97706', '#0284c7'];
         const avatarBg = colors[Math.abs(pName.split('').reduce((a,c)=>a+c.charCodeAt(0), 0)) % colors.length];
 
-        const tokenBadge = hasToken 
+        const tokenBadge = hasToken
           ? `<span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #34d399; font-size: 11px; padding: 4px 8px; border: 1px solid rgba(16, 185, 129, 0.3);"><i class="bi bi-shield-check"></i> VĨNH VIỄN</span>`
           : `<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: #f87171; font-size: 11px; padding: 4px 8px; border: 1px solid rgba(239, 68, 68, 0.3);"><i class="bi bi-shield-x"></i> THIẾU TOKEN</span>`;
 
@@ -3342,7 +3387,7 @@
   }
 
   // Cập nhật loadTokensAndPages để nạp danh sách chuẩn
-  
+
   // ================= QUẢN LÝ NHÓM PAGE (CHUẨN LOHAPAGE: THÊM, XOÁ, HIỂN THỊ) =================
   let cachedGroupsList = [];
 
@@ -3351,7 +3396,7 @@
     if (!m) return;
     document.getElementById('group-input-name').value = '';
     m.style.display = 'flex';
-    
+
     // Nạp danh sách checkbox các Fanpage
     const box = document.getElementById('group-pages-select-box');
     if (box) {
@@ -3519,9 +3564,9 @@
   }
 
 
-  
+
   // ================= TAB QUẢN LÝ TOKEN RIÊNG BIỆT (CHUẨN LOHAPAGE) =================
-  
+
   // ================= QUẢN LÝ NHÓM TOKEN (LOHA TOKEN POOL CONTROLLER) =================
   let cachedTokenGroups = [];
 
@@ -3529,7 +3574,7 @@
     const m = document.getElementById('modal-token-group');
     if (!m) return;
     document.getElementById('tgrp-input-name').value = '';
-    
+
     // Render list of 31 tokens into checkbox box
     const box = document.getElementById('tgrp-tokens-select-box');
     if (box) {
@@ -3658,8 +3703,8 @@
       const totalTokensCount = (dataTok.tokens || []).length;
 
       let pillsHtml = `
-        <button class="btn btn-sm ${currentSelectedTokenGroupId === 'all' ? 'btn-primary' : 'btn-outline'}" 
-                onclick="filterTokensByGroup('all')" 
+        <button class="btn btn-sm ${currentSelectedTokenGroupId === 'all' ? 'btn-primary' : 'btn-outline'}"
+                onclick="filterTokensByGroup('all')"
                 style="border-radius: 20px; padding: 4px 14px; font-weight: 700;">
           <i class="bi bi-grid-fill"></i> Tất cả (${totalTokensCount})
         </button>
@@ -3669,8 +3714,8 @@
         const count = (g.token_ids || []).length;
         const isActive = currentSelectedTokenGroupId === g.id;
         pillsHtml += `
-          <button class="btn btn-sm ${isActive ? 'btn-primary' : 'btn-outline'}" 
-                  onclick="filterTokensByGroup('${g.id}')" 
+          <button class="btn btn-sm ${isActive ? 'btn-primary' : 'btn-outline'}"
+                  onclick="filterTokensByGroup('${g.id}')"
                   style="border-radius: 20px; padding: 4px 14px; font-weight: 700; ${isActive ? 'background: linear-gradient(135deg, #ec4899, #8b5cf6); border: none;' : ''}">
             <i class="bi bi-collection"></i> ${g.name} (${count})
           </button>
@@ -3688,7 +3733,7 @@
     loadTokensOnly();
   }
 
-  
+
   async function rebalanceTokenPageAllocation() {
     const inputVal = parseInt(document.getElementById('pages-per-token-input').value) || 4;
     if (!confirm(`Xác nhận: Tự động phân bổ lại toàn bộ Fanpage vào dàn Token trong Vault theo tỷ lệ tối đa ${inputVal} Page/Token (Tự động xoay vòng bù trừ để 100% Page đều có Token)?`)) {
@@ -3824,7 +3869,7 @@
               </span>
             </td>
             <td style="padding: 12px 16px;">
-              ${(tokenGroupMap[t.id] || []).length > 0 
+              ${(tokenGroupMap[t.id] || []).length > 0
                 ? tokenGroupMap[t.id].map(gn => `<span style="background: rgba(236,72,153,0.15); color: #f472b6; border: 1px solid rgba(236,72,153,0.3); padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; margin-right: 4px;"><i class="bi bi-diagram-3-fill"></i> ${gn}</span>`).join('')
                 : '<span style="color: #64748b; font-size: 11px;">(Mặc định)</span>'
               }
@@ -3890,7 +3935,7 @@
       if (document.getElementById('stat-total-tokens')) document.getElementById('stat-total-tokens').textContent = tokens.length;
       if (document.getElementById('stat-total-pages')) document.getElementById('stat-total-pages').textContent = pages.length;
       if (document.getElementById('stat-total-groups')) document.getElementById('stat-total-groups').textContent = groups.length;
-      
+
       const totalPub = pages.reduce((acc, p) => acc + (p.total_posted || 0), 0);
       if (document.getElementById('stat-total-published')) document.getElementById('stat-total-published').textContent = totalPub;
 
@@ -4031,12 +4076,12 @@
     }
   }
 
-  
+
   // ================= MODAL CHỌN NHÓM & TOKEN TRỰC TIẾP (CHUẨN LOHAPAGE) =================
   function openQuickAssignModal(pageId, pageName) {
     const m = document.getElementById('modal-quick-assign');
     if (!m) return;
-    
+
     document.getElementById('assign-target-page-id').value = pageId;
     document.getElementById('assign-page-name-title').textContent = pageName || pageId;
 
@@ -4463,11 +4508,11 @@
         globalGroupsCatalog = data.groups || [];
         // Fill single page select
         const pSel = document.getElementById('pub-select-single-page');
-        pSel.innerHTML = '<option value="">-- Chọn 1 Fanpage cụ thể --</option>' + 
+        pSel.innerHTML = '<option value="">-- Chọn 1 Fanpage cụ thể --</option>' +
           globalPagesCatalog.map(p => `<option value="${p.page_id}">${p.page_name} (ID: ${p.page_id})</option>`).join('');
         // Fill group select
         const gSel = document.getElementById('pub-select-group');
-        gSel.innerHTML = '<option value="">-- Chọn nhóm trang vệ tinh --</option>' + 
+        gSel.innerHTML = '<option value="">-- Chọn nhóm trang vệ tinh --</option>' +
           globalGroupsCatalog.map(g => `<option value="${g.id}">${g.name} (${(g.page_ids || []).length} Pages)</option>`).join('');
         onPubGroupChanged();
       }
@@ -4585,7 +4630,7 @@
         banner.innerHTML = `<strong><i class="bi bi-check-circle-fill"></i> ${actionStr}!</strong> Đã xử lý cho ${sCount} Fanpage. Facebook Video ID: ${data.results?.[0]?.video_id || 'OK'}.`;
         showToast(`${actionStr} cho ${sCount} Trang!`);
         btn.innerHTML = '<i class="bi bi-check-lg"></i> Hoàn tất!';
-        
+
         // Cập nhật lại số liệu
         loadTokensAndPages();
         setTimeout(() => {
@@ -4642,7 +4687,7 @@
       if (document.getElementById('q-stat-queued')) document.getElementById('q-stat-queued').textContent = data.queued || 0;
       if (document.getElementById('q-stat-running')) document.getElementById('q-stat-running').textContent = data.running || 0;
       if (document.getElementById('q-stat-completed')) document.getElementById('q-stat-completed').textContent = data.completed || 0;
-      
+
       const btnPause = document.getElementById('btn-queue-pause');
       const dot = document.getElementById('queue-status-dot');
       if (data.is_paused) {
@@ -4715,21 +4760,21 @@
   function openTokenAllocModal() {
     const m = document.getElementById('modal-token-alloc');
     if (!m) return;
-    
+
     // Nạp số lượng
-    const tokCount = (globalTokensCatalog && globalTokensCatalog.length > 0) 
-      ? globalTokensCatalog.length 
+    const tokCount = (globalTokensCatalog && globalTokensCatalog.length > 0)
+      ? globalTokensCatalog.length
       : (parseInt(document.getElementById('stat-total-tokens')?.textContent || '0') || 0);
     const pageCount = (cachedPagesList && cachedPagesList.length > 0)
       ? cachedPagesList.length
       : (parseInt(document.getElementById('stat-total-pages')?.textContent || '0') || 0);
-      
+
     document.getElementById('alloc-tokens-count').textContent = tokCount;
     document.getElementById('alloc-pages-count').textContent = pageCount;
-    
+
     const banner = document.getElementById('alloc-status-banner');
     if (banner) banner.style.display = 'none';
-    
+
     toggleAllocMode();
     m.style.display = 'flex';
   }
@@ -4751,16 +4796,16 @@
   function calculateAllocPreview() {
     const previewEl = document.getElementById('alloc-preview-text');
     if (!previewEl) return;
-    
+
     const mode = document.querySelector('input[name="alloc_mode"]:checked')?.value || 'fixed_ratio';
     const pagesCount = cachedPagesList.length || parseInt(document.getElementById('alloc-pages-count')?.textContent || '0') || 0;
     const tokensCount = globalTokensCatalog.length || parseInt(document.getElementById('alloc-tokens-count')?.textContent || '0') || 0;
-    
+
     if (tokensCount === 0) {
       previewEl.innerHTML = '<span style="color: #ef4444;"><i class="bi bi-exclamation-triangle"></i> Kho chưa có Token nào! Vui lòng thêm token trước.</span>';
       return;
     }
-    
+
     if (mode === 'fixed_ratio') {
       const perToken = parseInt(document.getElementById('alloc-pages-per-token')?.value || '5', 10) || 5;
       const neededTokens = Math.ceil(pagesCount / perToken);
@@ -4787,7 +4832,7 @@
     const mode = document.querySelector('input[name="alloc_mode"]:checked')?.value || 'fixed_ratio';
     const scope = document.getElementById('alloc-scope-select')?.value || 'all';
     const perToken = parseInt(document.getElementById('alloc-pages-per-token')?.value || '5', 10) || 5;
-    
+
     // Đảm bảo có token list và pages list
     let tokens = globalTokensCatalog;
     let pages = cachedPagesList;
@@ -4805,35 +4850,35 @@
         return;
       }
     }
-    
+
     if (tokens.length === 0) {
       alert('Không tìm thấy token nào trong kho!');
       return;
     }
-    
+
     // Lọc pages cần gán
     let targetPages = pages;
     if (scope === 'unassigned') {
       targetPages = pages.filter(p => !p.token_id);
     }
-    
+
     if (targetPages.length === 0) {
       alert('Không có Fanpage nào cần phân bổ token trong phạm vi đã chọn!');
       return;
     }
-    
+
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Đang phân bổ...';
     banner.style.display = 'block';
     banner.style.background = '#1e293b';
     banner.style.color = '#38bdf8';
     banner.innerHTML = `<i class="bi bi-hourglass-split"></i> Đang gán token cho ${targetPages.length} Fanpage...`;
-    
+
     // Thuật toán phân bổ
     // Group target pages theo token_id
     let tokenMap = {}; // token_id -> array of page_ids
     tokens.forEach(t => { tokenMap[t.id] = []; });
-    
+
     if (mode === 'fixed_ratio') {
       // 1 token = perToken pages
       let tokenIdx = 0;
@@ -4852,7 +4897,7 @@
         tokenMap[tId].push(p.page_id || p.id);
       });
     }
-    
+
     // Gửi batch_assign_token qua backend
     try {
       let totalAssigned = 0;
@@ -4869,13 +4914,13 @@
           }
         }
       }
-      
+
       banner.style.background = 'rgba(34, 197, 94, 0.2)';
       banner.style.border = '1px solid #22c55e';
       banner.style.color = '#4ade80';
       banner.innerHTML = `<strong><i class="bi bi-check-circle-fill"></i> Thành công!</strong> Đã tự động phân bổ và gán token cho <strong>${totalAssigned} Fanpage</strong> theo cấu hình!`;
       showToast(`Đã phân bổ token thành công cho ${totalAssigned} Fanpage!`);
-      
+
       await loadTokensAndPages();
       setTimeout(() => {
         btn.disabled = false;
@@ -4921,7 +4966,7 @@
   // LOHA PAGE PIPELINE: NHÓM TRANG & LÊN LỊCH TỰ ĐỘNG + QUẢN LÝ BÀI ĐĂNG
   // =========================================================================
 
-    
+
   // ==================== LOHA PAGE: QUẢN LÝ & SỬA NHÓM TRANG ====================
   let allPagesCached = [];
 
@@ -5102,7 +5147,7 @@
   async function loadLoHaGroups() {
     const tbody = document.getElementById('loha-groups-table-body');
     if (!tbody) return;
-    
+
     tbody.innerHTML = `
       <tr>
         <td colspan="7" style="text-align: center; padding: 40px; color: #94a3b8;">
@@ -5206,7 +5251,7 @@
 
 // Old runLoHaBatchSchedule removed to use modal-schedule-config
 
-  
+
   async function clearScheduledPosts() {
     if (!confirm('Xác nhận: HỦY TOÀN BỘ các bài viết đang ở trạng thái Đang hẹn lịch?\n\nThao tác này sẽ làm sạch danh sách hẹn để bạn chọn nhóm Page và phân bổ lịch lại từ đầu!')) {
       return;
@@ -5421,7 +5466,7 @@ async function loadPostsTable() {
       </div>
     </div>
   </div>
-  
+
   <!-- MODAL 3: THÊM TOKEN MỚI (LoHa Architecture) -->
   <div id="modal-add-token" class="app-modal-overlay">
     <div class="app-modal-box" style="max-width: 540px;">
@@ -5653,7 +5698,7 @@ async function loadPostsTable() {
     </div>
   </div>
   <!-- MODAL XUẤT BẢN & LÊN LỊCH REELS (LoHa Page Architecture) -->
-  
+
   <!-- MODAL: CẤU HÌNH TỰ ĐỘNG CHIA TOKEN CHO FANPAGE (LOHAPAGE MODEL) -->
   <div id="modal-token-alloc" class="app-modal-overlay" style="display: none;">
     <div class="app-modal-box" style="max-width: 560px;">
@@ -5738,7 +5783,7 @@ async function loadPostsTable() {
   </div>
 
   <!-- MODAL: QUY TẮC HẸN LỊCH TỰ ĐỘNG (LOHA PAGE SPEC) -->
-  
+
   <!-- MODAL: QUY TẮC LÊN LỊCH & ĐĂNG BÀI (CHUẨN LOHAPAGE) -->
   <div id="modal-schedule-rules" class="app-modal-overlay" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
     <div class="app-modal-box" style="background: #111c33; border: 1px solid #23304d; border-radius: 14px; width: 620px; max-width: 95vw; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.6);">
@@ -5750,7 +5795,7 @@ async function loadPostsTable() {
         <button type="button" class="btn btn-secondary btn-sm" onclick="closeScheduleRulesModal()"><i class="bi bi-x-lg"></i></button>
       </div>
       <div class="app-modal-body" style="padding: 20px; max-height: 80vh; overflow-y: auto;">
-        
+
         <!-- Khung giờ đăng cố định (Slots) -->
         <div style="margin-bottom: 18px;">
           <label style="font-size: 12.5px; font-weight: 700; color: #cbd5e1; display: block; margin-bottom: 6px;">
@@ -5916,7 +5961,7 @@ async function loadPostsTable() {
       </div>
       <div class="app-modal-body" style="padding: 20px;">
         <input type="hidden" id="assign-target-page-id">
-        
+
         <!-- Chọn Nhóm Page -->
         <div style="margin-bottom: 16px;">
           <label style="font-size: 12px; font-weight: 700; color: #cbd5e1; display: block; margin-bottom: 6px;">
@@ -5959,7 +6004,7 @@ async function loadPostsTable() {
         <button type="button" class="btn btn-secondary btn-sm" onclick="closeTokenGroupModal()"><i class="bi bi-x-lg"></i></button>
       </div>
       <div class="app-modal-body" style="padding: 20px; max-height: 75vh; overflow-y: auto;">
-        
+
         <!-- Form thêm nhóm token -->
         <div style="background: #0f172a; border: 1px solid #23304d; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
           <div style="font-size: 13px; font-weight: 700; color: #38bdf8; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
@@ -6019,7 +6064,7 @@ async function loadPostsTable() {
 
     <form id="form-edit-group" onsubmit="saveEditGroup(event)">
       <input type="hidden" id="edit-group-id">
-      
+
       <div style="margin-bottom: 16px;">
         <label style="display: block; font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">Tên Nhóm Trang:</label>
         <input type="text" id="edit-group-name" required style="width: 100%; background: #0b1120; border: 1px solid #334155; border-radius: 8px; padding: 10px; color: #fff; font-size: 13px;">

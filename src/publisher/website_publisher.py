@@ -64,12 +64,17 @@ def get_image_provider_config(model_override: str = "") -> dict:
     llm_cfg = root_cfg.get("llm") if isinstance(root_cfg.get("llm"), dict) else {}
     api_base = str(image_cfg.get("api_base") or llm_cfg.get("api_base") or "").strip()
     generation_url = str(image_cfg.get("generation_url") or "").strip()
+    configured_model = str(image_cfg.get("model") or "").strip()
+    task_model = get_task_model("image", llm_cfg)
+    model_candidates = [str(model_override or "").strip(), configured_model, task_model]
+    real_model = next((candidate for candidate in model_candidates if candidate and candidate != "__video_frame__"), "")
+    selected_model = real_model or next((candidate for candidate in model_candidates if candidate), "")
     return {
         "api_base": api_base,
         "generation_url": generation_url,
         "models_url": str(image_cfg.get("models_url") or "").strip(),
         "api_key": str(image_cfg.get("api_key") or llm_cfg.get("api_key") or "").strip(),
-        "model": str(model_override or image_cfg.get("model") or get_task_model("image", llm_cfg) or "").strip(),
+        "model": selected_model,
     }
 
 def _llm_headers(api_key: str) -> dict:
@@ -77,6 +82,43 @@ def _llm_headers(api_key: str) -> dict:
     if api_key:
         headers.update({"Authorization": f"Bearer {api_key}", "x-api-key": api_key, "api-key": api_key})
     return headers
+
+
+def _image_response_values(payload) -> list:
+    """Extract provider image URL/base64 values from OpenAI-style and nested chat responses."""
+    values = []
+
+    def add(value):
+        if isinstance(value, str):
+            text = value.strip()
+            data_match = re.search(r"data:image/[^;]+;base64,([A-Za-z0-9+/=\r\n]+)", text)
+            if data_match:
+                values.append(data_match.group(1).replace("\r", "").replace("\n", ""))
+            for match in re.finditer(r"https?://[^\s)\]>'\"]+", text):
+                values.append(match.group(0).rstrip(".,;"))
+
+    def walk(value, key=""):
+        if isinstance(value, dict):
+            for child_key, child in value.items():
+                lower_key = str(child_key).lower()
+                if lower_key in ("url", "b64_json", "base64", "image_url"):
+                    if isinstance(child, str):
+                        if lower_key in ("b64_json", "base64"):
+                            values.append(child.strip())
+                        else:
+                            add(child)
+                    else:
+                        walk(child, lower_key)
+                elif lower_key in ("data", "images", "image", "choices", "message", "content", "output"):
+                    walk(child, lower_key)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child, key)
+        elif isinstance(value, str) and key in ("content", "output", "image", "image_url"):
+            add(value)
+
+    walk(payload)
+    return list(dict.fromkeys(value for value in values if value))
 
 def get_clip_metadata(clip_filename: str) -> dict:
     """
@@ -230,24 +272,8 @@ Exact required visual elements matching viral clickbait standard:
             if resp.status_code != 200:
                 logger.warning("Image provider %s returned HTTP %s", url, resp.status_code)
                 continue
-            res_json = resp.json()
-            data = res_json.get("data") or []
-            if data and isinstance(data[0], dict):
-                saved = save_image_value(data[0].get("b64_json") or data[0].get("url"))
-                if saved:
-                    return saved
-            choices = res_json.get("choices") or []
-            message = choices[0].get("message", {}) if choices and isinstance(choices[0], dict) else {}
-            images = message.get("images") or []
-            if images:
-                saved = save_image_value(images[0].get("image_url") if isinstance(images[0], dict) else images[0])
-                if saved:
-                    return saved
-            content = message.get("content")
-            if isinstance(content, str):
-                data_match = re.search(r"data:image/[^;]+;base64,([A-Za-z0-9+/=]+)", content)
-                url_match = re.search(r"https?://[^\s)\]>'\"]+", content)
-                saved = save_image_value(data_match.group(1) if data_match else (url_match.group(0) if url_match else ""))
+            for image_value in _image_response_values(resp.json()):
+                saved = save_image_value(image_value)
                 if saved:
                     return saved
         except Exception as exc:

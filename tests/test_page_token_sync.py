@@ -54,6 +54,7 @@ class FrontendInvariantTests(unittest.TestCase):
     def test_required_handlers_defined_once(self):
         names = self._functions()
         for fn in (
+            "submitAddToken",
             "openAddGroupModal",
             "closeAddGroupModal",
             "openScheduleRulesModal",
@@ -64,6 +65,14 @@ class FrontendInvariantTests(unittest.TestCase):
             "renderFilteredPages",
         ):
             self.assertEqual(names.count(fn), 1, f"{fn} must be defined exactly once (found {names.count(fn)})")
+
+    def test_submit_add_token_posts_batch_and_refreshes_token_page_state(self):
+        body = self._function_body("submitAddToken")
+        self.assertIn("/api/tokens", body)
+        self.assertIn("tokens_input", body)
+        self.assertIn("loadTokensOnly", body)
+        self.assertIn("loadTokensAndPages", body)
+        self.assertIn("closeAddTokenModal", body)
 
     def test_no_code_reference_to_stale_distribute_dom_ids(self):
         # The removed stale handler referenced these DOM ids directly. A descriptive
@@ -190,6 +199,13 @@ class BackendApiTests(unittest.TestCase):
         for p in pages:
             self.assertIn("group_ids", p)
             self.assertEqual(p["token_id"], body["results"][0]["id"])
+            self.assertEqual(p["token_name"], "MyToken")
+            self.assertTrue(p["page_token"].startswith("EAAB_page_"))
+
+        response_text = resp.get_data(as_text=True)
+        self.assertNotIn("EAAB_secret", response_text)
+        self.assertNotIn("EAAB_page_a", response_text)
+        self.assertNotIn("EAAB_page_b", response_text)
 
     def test_add_token_duplicate_is_deduped(self):
         verify = {"status": "ACTIVE", "error": "", "pages": [], "owner_name": ""}
