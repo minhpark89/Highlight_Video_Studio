@@ -123,6 +123,46 @@ foreach ($required in @("runtime\Lib\site-packages\flask", "runtime\Lib\site-pac
     if (-not (Test-Path -LiteralPath (Join-Path $stage $required))) { throw "Staged package incomplete, missing: $required" }
 }
 
+# Fail-closed packaging guard: a public release must never ship this machine's
+# hardware identity, per-user state, or runtime/local-environment files. Scan the
+# staged tree before packaging and abort on any hit.
+$forbiddenDirPrefixes = @("data\", "output\", "temp\", "downloads\", "logs\", "chrome_profile\", "artifacts\", "build\")
+foreach ($dir in @("data", "output", "temp", "downloads")) {
+    $dirPath = Join-Path $stage $dir
+    if (Test-Path -LiteralPath $dirPath) {
+        $stray = Get-ChildItem -LiteralPath $dirPath -Recurse -File -Force -ErrorAction SilentlyContinue
+        if ($stray) { throw "Packaging guard: runtime/user state found under $dir\: $($stray[0].FullName)" }
+    }
+}
+$forbiddenFileNames = @("hardware_profile.json", "tokens_vault.json", "pages.json", "page_groups.json", "crawled_videos.json", "schedule_rules.json", ".env")
+$identityNeedles = @("RTX 3060", "GeForce", "Xeon", "E5-2680", "DESKTOP-COM8UQ7")
+$scanExtensions = @(".py", ".html", ".htm", ".js", ".json", ".css", ".txt", ".md", ".cs", ".ps1", ".cfg", ".ini", ".yml", ".yaml")
+$scanRoots = @("web", "src", "core", "multi_pc", "research", "config")
+$guardHits = New-Object System.Collections.Generic.List[string]
+foreach ($fname in $forbiddenFileNames) {
+    $hits = Get-ChildItem -LiteralPath $stage -Recurse -File -Force -Filter $fname -ErrorAction SilentlyContinue
+    foreach ($h in $hits) { $guardHits.Add("forbidden file: $($h.FullName.Substring($stage.Length))") }
+}
+foreach ($relRoot in $scanRoots) {
+    $absRoot = Join-Path $stage $relRoot
+    if (-not (Test-Path -LiteralPath $absRoot)) { continue }
+    foreach ($file in Get-ChildItem -LiteralPath $absRoot -Recurse -File -Force -ErrorAction SilentlyContinue) {
+        if ($file.FullName -match "-preview\." -or $file.FullName -match "\.bak") { continue }
+        if ($scanExtensions -notcontains $file.Extension.ToLowerInvariant()) { continue }
+        $text = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($null -eq $text) { continue }
+        foreach ($needle in $identityNeedles) {
+            if ($text.Contains($needle)) { $guardHits.Add("hardware identity '$needle' in $($file.FullName.Substring($stage.Length))") }
+        }
+    }
+}
+if ($guardHits.Count -gt 0) {
+    $guardHits | Select-Object -First 20 | ForEach-Object { Write-Host "  GUARD: $_" }
+    throw "Packaging guard failed: $($guardHits.Count) unsafe entr(ies) in staged payload"
+}
+Write-Host "Packaging guard: staged tree clean (no runtime state, no machine identity)"
+
+
 # Compress-Archive aborts on this tree (long paths / large payload), so use bsdtar,
 # which produces a plain .zip the Installer reads via System.IO.Compression.
 tar -a -c -f $payload -C $stage .
