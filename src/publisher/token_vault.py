@@ -78,7 +78,8 @@ class TokenVault:
             pass
         return None
 
-    def add_token(self, name, token_str, kind="SYS", note=""):
+    def add_token(self, name, token_str, kind="SYS", note="", discover_pages=True):
+        """Store one token; optionally avoid the expensive /me/accounts discovery call."""
         token_str = token_str.strip()
         tokens = []
         if self.vault_file.exists():
@@ -88,7 +89,7 @@ class TokenVault:
             except Exception:
                 tokens = []
 
-        status_info = self.verify_token(token_str)
+        status_info = self.verify_token(token_str) if discover_pages else self.verify_identity(token_str)
         token_id = f"tok_{int(datetime.now().timestamp())}_{len(tokens)+1}"
         owner_name = status_info.get("owner_name", "").strip()
         resolved_name = name.strip() if name and name.strip() else (owner_name or f"Token {len(tokens)+1}")
@@ -133,20 +134,39 @@ class TokenVault:
         except Exception:
             return False
 
-    def verify_token(self, token_str):
+    def verify_identity(self, token_str):
+        """Validate a token without enumerating its managed Pages."""
         token_str = token_str.strip()
-        owner_name = ""
         try:
-            me_resp = requests.get(
+            response = requests.get(
                 "https://graph.facebook.com/v22.0/me",
                 params={"access_token": token_str, "fields": "id,name"},
                 timeout=10
             )
-            me_data = me_resp.json()
-            if "name" in me_data and me_data["name"]:
-                owner_name = me_data["name"]
-        except Exception:
-            pass
+            data = response.json()
+            if "error" in data:
+                err = data["error"]
+                return {
+                    "status": "ERROR",
+                    "error": f"[{err.get('code')}] {err.get('message')}",
+                    "pages": [],
+                    "owner_name": "",
+                }
+            return {
+                "status": "ACTIVE",
+                "error": "",
+                "pages": [],
+                "owner_name": str(data.get("name") or "").strip(),
+            }
+        except Exception as exc:
+            return {"status": "ERROR", "error": str(exc), "pages": [], "owner_name": ""}
+
+    def verify_token(self, token_str):
+        token_str = token_str.strip()
+        identity = self.verify_identity(token_str)
+        owner_name = identity.get("owner_name", "")
+        if identity.get("status") != "ACTIVE":
+            return identity
 
         url = "https://graph.facebook.com/v22.0/me/accounts"
         params = {
@@ -186,6 +206,21 @@ class TokenVault:
                 "error": str(e),
                 "pages": []
             }
+
+    def refresh_token_pages(self, token_id):
+        """Explicitly re-run full Page discovery for one stored token."""
+        tokens = self.list_tokens(mask=False)
+        entry = next((item for item in tokens if item.get("id") == token_id), None)
+        if not entry:
+            return None, []
+        status_info = self.verify_token(entry.get("token", ""))
+        entry["status"] = status_info.get("status", "ERROR")
+        entry["error_msg"] = status_info.get("error", "")
+        entry["owner_name"] = status_info.get("owner_name", entry.get("owner_name", ""))
+        entry["pages_count"] = len(status_info.get("pages", []))
+        entry["last_checked"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._save(tokens)
+        return entry, status_info.get("pages", [])
 
     def record_usage(self, token_id_or_token, response_headers=None):
         """Ghi nhận lượt gọi API và phân tích Header Rate Limit (X-App-Usage) của Meta"""

@@ -160,6 +160,16 @@ class ReleaseGuardTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
         self.assertTrue(result.get_json()["success"])
         self.assertEqual(post.call_args.args[0], "https://images.test/v1/images/generations")
+        self.assertEqual(post.call_args.kwargs["json"], {
+            "model": "ag/gemini-3.1-flash-image",
+            "prompt": "A simple blue circle on white background",
+            "n": 1,
+            "size": "auto",
+            "quality": "auto",
+            "background": "auto",
+            "image_detail": "high",
+            "output_format": "png",
+        })
 
     def test_image_model_listing_uses_independent_exact_url(self):
         from web.app import app
@@ -174,24 +184,22 @@ class ReleaseGuardTests(unittest.TestCase):
         self.assertEqual(result.get_json()["models"], ["image-model-a"])
         self.assertEqual(get.call_args.args[0], "https://router.test/catalog/image-models")
 
-    def test_image_generation_exact_chat_endpoint_is_independent_of_models(self):
+    def test_image_generation_rejects_chat_endpoint_and_makes_no_request(self):
         from web.app import app
         app.config["TESTING"] = True
         client = app.test_client()
-        generated = FakeResponse(200, {"choices": [{"message": {"images": [{"image_url": "https://cdn.test/image.png"}]}}]})
-        with mock.patch("web.app.requests.post", return_value=generated) as post:
+        with mock.patch("web.app.requests.post") as post:
             result = client.post("/api/image-provider/test", json={
                 "generation_url": "https://router.test/v9/chat/completions",
                 "models_url": "https://router.test/not-supported/models",
                 "api_key": "k",
                 "model": "image-model-a",
             })
-        self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.get_json()["endpoint_type"], "chat")
-        self.assertEqual(post.call_args.args[0], "https://router.test/v9/chat/completions")
-        self.assertIn("messages", post.call_args.kwargs["json"])
+        self.assertEqual(result.status_code, 400)
+        self.assertIn("/v1/images/generations", result.get_json()["error"])
+        post.assert_not_called()
 
-    def test_runtime_image_config_promotes_real_task_model_over_frame_sentinel(self):
+    def test_runtime_image_config_preserves_explicit_frame_mode(self):
         from src.publisher import website_publisher as publisher
         root = {
             "image_provider": {
@@ -206,7 +214,7 @@ class ReleaseGuardTests(unittest.TestCase):
             config.write_text(json.dumps(root), encoding="utf-8")
             with mock.patch.object(publisher, "HVS_DIR", Path(folder)):
                 resolved = publisher.get_image_provider_config()
-        self.assertEqual(resolved["model"], "real-image-model")
+        self.assertEqual(resolved["model"], "__video_frame__")
         self.assertEqual(resolved["generation_url"], "https://images.test/v1/images/generations")
         self.assertEqual(resolved["models_url"], "https://catalog.test/models")
 
@@ -223,16 +231,16 @@ class ReleaseGuardTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 self.assertIn(expected, _image_response_values(payload))
 
-    def test_runtime_generation_uses_exact_url_and_saves_nested_chat_image(self):
+    def test_runtime_generation_uses_exact_images_endpoint_and_payload(self):
         from src.publisher import website_publisher as publisher
         encoded = "aW1hZ2U="
-        generated = FakeResponse(200, {"choices": [{"message": {"images": [{"image_url": {"b64_json": encoded}}]}}]})
+        generated = FakeResponse(200, {"data": [{"b64_json": encoded}]})
         config = {
             "image_provider": {
-                "generation_url": "https://router.test/v9/chat/completions",
+                "generation_url": "https://router.test/v1/images/generations",
                 "models_url": "https://router.test/catalog/models",
                 "api_key": "test-only-placeholder",
-                "model": "image-model-a",
+                "model": "ag/gemini-3.1-flash-image",
             }
         }
         with tempfile.TemporaryDirectory() as folder:
@@ -244,8 +252,22 @@ class ReleaseGuardTests(unittest.TestCase):
                 output = publisher.generate_llm_hook_image("Safe canary")
             self.assertTrue(Path(output).is_file())
             self.assertEqual(Path(output).read_bytes(), b"image")
-        self.assertEqual(post.call_args.args[0], "https://router.test/v9/chat/completions")
-        self.assertIn("messages", post.call_args.kwargs["json"])
+        self.assertEqual(post.call_args.args[0], "https://router.test/v1/images/generations")
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["model"], "ag/gemini-3.1-flash-image")
+        self.assertEqual({k: payload[k] for k in ("n", "size", "quality", "background", "image_detail", "output_format")}, {
+            "n": 1, "size": "auto", "quality": "auto", "background": "auto", "image_detail": "high", "output_format": "png",
+        })
+
+    def test_runtime_frame_mode_makes_no_external_request(self):
+        from src.publisher import website_publisher as publisher
+        config = {"image_provider": {"model": "__video_frame__", "generation_url": "https://router.test/v1/images/generations"}}
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "config.json").write_text(json.dumps(config), encoding="utf-8")
+            with mock.patch.object(publisher, "HVS_DIR", root), mock.patch("src.publisher.website_publisher.requests.post") as post:
+                self.assertEqual(publisher.generate_llm_hook_image("Safe canary"), "")
+        post.assert_not_called()
 
     def test_image_provider_accepts_nested_url_base64_and_content_outputs(self):
         from web.app import _image_response_has_output

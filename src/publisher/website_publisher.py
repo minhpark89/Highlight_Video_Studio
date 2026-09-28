@@ -65,10 +65,11 @@ def get_image_provider_config(model_override: str = "") -> dict:
     api_base = str(image_cfg.get("api_base") or llm_cfg.get("api_base") or "").strip()
     generation_url = str(image_cfg.get("generation_url") or "").strip()
     configured_model = str(image_cfg.get("model") or "").strip()
-    task_model = get_task_model("image", llm_cfg)
-    model_candidates = [str(model_override or "").strip(), configured_model, task_model]
-    real_model = next((candidate for candidate in model_candidates if candidate and candidate != "__video_frame__"), "")
-    selected_model = real_model or next((candidate for candidate in model_candidates if candidate), "")
+    requested_model = str(model_override or "").strip()
+    if requested_model == "__video_frame__" or (not requested_model and configured_model == "__video_frame__"):
+        selected_model = "__video_frame__"
+    else:
+        selected_model = "ag/gemini-3.1-flash-image"
     return {
         "api_base": api_base,
         "generation_url": generation_url,
@@ -255,17 +256,21 @@ Exact required visual elements matching viral clickbait standard:
             logger.warning("Cannot save generated image response: %s", exc)
             return ""
 
-    image_payload = {"model": model, "prompt": prompt, "n": 1, "size": "1536x1024"}
-    chat_payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
-    if generation_url:
-        exact_url = generation_url.rstrip("/")
-        payload = chat_payload if exact_url.lower().split("?", 1)[0].endswith("/chat/completions") else image_payload
-        attempts = [(exact_url, payload)]
-    else:
-        attempts = [
-            (f"{api_base.rstrip('/')}/images/generations", image_payload),
-            (f"{api_base.rstrip('/')}/chat/completions", chat_payload),
-        ]
+    image_payload = {
+        "model": "ag/gemini-3.1-flash-image",
+        "prompt": prompt,
+        "n": 1,
+        "size": "auto",
+        "quality": "auto",
+        "background": "auto",
+        "image_detail": "high",
+        "output_format": "png",
+    }
+    exact_url = generation_url.rstrip("/") if generation_url else f"{api_base.rstrip('/')}/images/generations"
+    if not exact_url.lower().split("?", 1)[0].endswith("/v1/images/generations"):
+        logger.warning("Image generation URL must end with /v1/images/generations: %s", exact_url)
+        return ""
+    attempts = [(exact_url, image_payload)]
     for url, payload in attempts:
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=120)

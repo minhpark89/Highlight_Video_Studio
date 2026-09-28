@@ -207,6 +207,31 @@ class BackendApiTests(unittest.TestCase):
         self.assertNotIn("EAAB_page_a", response_text)
         self.assertNotIn("EAAB_page_b", response_text)
 
+    def test_batch_import_syncs_pages_only_from_representative_token(self):
+        first_pages = self._graph_pages()
+        identity = {"status": "ACTIVE", "error": "", "pages": [], "owner_name": "Owner"}
+        with mock.patch.object(self.vault, "verify_token", return_value={"status": "ACTIVE", "error": "", "pages": first_pages, "owner_name": "Owner"}) as full, mock.patch.object(self.vault, "verify_identity", return_value=identity) as light:
+            resp = self.client.post("/api/tokens", json={
+                "tokens_input": "T1|EAAB_one\nT2|EAAB_two\nT3|EAAB_three",
+                "page_sync_mode": "representative",
+            })
+        body = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(body["synced_pages"], 2)
+        self.assertEqual(full.call_count, 1)
+        self.assertEqual(light.call_count, 2)
+        self.assertEqual([item["page_sync"] for item in body["results"]], ["synced", "skipped", "skipped"])
+
+    def test_manual_refresh_syncs_one_token_pages(self):
+        token = self._seed_token()
+        verify = {"status": "ACTIVE", "error": "", "pages": self._graph_pages(), "owner_name": "Owner"}
+        with mock.patch.object(self.vault, "verify_token", return_value=verify) as full:
+            resp = self.client.post(f"/api/tokens/{token['id']}/refresh-pages")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["synced_pages"], 2)
+        self.assertEqual(full.call_count, 1)
+        self.assertEqual({p["token_id"] for p in self.pages.list_pages()}, {token["id"]})
+
     def test_add_token_duplicate_is_deduped(self):
         verify = {"status": "ACTIVE", "error": "", "pages": [], "owner_name": ""}
         with mock.patch.object(self.vault, "verify_token", return_value=verify):
@@ -338,6 +363,7 @@ class BackendApiTests(unittest.TestCase):
     # -- token groups ------------------------------------------------------ #
     def test_token_group_create_and_read(self):
         # Seed a non-empty file so load_token_groups() does not inject its default group.
+        self._seed_token()
         self.appmod.save_token_groups([{"id": "seed", "name": "Seed", "token_ids": []}])
         r = self.client.post("/api/token-groups", json={"name": "Pool 1", "token_ids": ["tok_test_1"]})
         self.assertEqual(r.status_code, 200)
@@ -346,6 +372,31 @@ class BackendApiTests(unittest.TestCase):
         names = {g["name"]: g for g in groups}
         self.assertIn("Pool 1", names)
         self.assertEqual(names["Pool 1"]["token_ids"], ["tok_test_1"])
+
+    def test_token_group_reuses_representative_page_set_without_graph_fetch(self):
+        tokens = [
+            {"id": "tok_1", "name": "Representative", "token": "EAAB_one", "status": "ACTIVE"},
+            {"id": "tok_2", "name": "Pool member", "token": "EAAB_two", "status": "ACTIVE"},
+        ]
+        self.vault._save(tokens)
+        self.pages.save_pages([
+            {"page_id": "PAGE_A", "token_id": "tok_1"},
+            {"page_id": "PAGE_B", "token_id": "tok_1"},
+            {"page_id": "PAGE_OTHER", "token_id": "tok_other"},
+        ])
+        self.appmod.save_token_groups([{"id": "seed", "name": "Seed", "token_ids": []}])
+        with mock.patch.object(self.vault, "verify_token") as full:
+            r = self.client.post("/api/token-groups", json={
+                "name": "Shared Page Pool",
+                "token_ids": ["tok_1", "tok_2", "tok_2"],
+                "page_source_token_id": "tok_1",
+            })
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(full.call_count, 0)
+        group = next(g for g in self.client.get("/api/token-groups").get_json()["groups"] if g["name"] == "Shared Page Pool")
+        self.assertEqual(group["token_ids"], ["tok_1", "tok_2"])
+        self.assertEqual(group["page_source_token_id"], "tok_1")
+        self.assertEqual(group["page_ids"], ["PAGE_A", "PAGE_B"])
 
     def test_token_group_requires_name(self):
         self.appmod.save_token_groups([{"id": "seed", "name": "Seed", "token_ids": []}])

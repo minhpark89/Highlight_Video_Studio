@@ -740,27 +740,31 @@ def _image_model_urls(models_url="", api_base=""):
 
 
 def _image_generation_candidates(generation_url="", api_base=""):
+    """Return only the OpenAI-compatible image-generation endpoint."""
     exact = str(generation_url or "").strip()
     if exact:
         url = _normalise_http_url(exact, "Endpoint tạo ảnh")
-        lower = url.lower().split("?", 1)[0]
-        if lower.endswith("/images/generations"):
-            return [(url, "images")]
-        if lower.endswith("/chat/completions"):
-            return [(url, "chat")]
-        return [(url, "auto")]
+        path = url.lower().split("?", 1)[0]
+        if not path.endswith("/v1/images/generations"):
+            raise ValueError("Endpoint tạo ảnh phải kết thúc bằng /v1/images/generations")
+        return [(url, "images")]
     base = _normalise_llm_base(api_base)
-    return [
-        (f"{base}/images/generations", "images"),
-        (f"{base}/chat/completions", "chat"),
-    ]
+    if not base.lower().endswith("/v1"):
+        raise ValueError("API base tạo ảnh phải kết thúc bằng /v1, hoặc nhập URL đầy đủ /v1/images/generations")
+    return [(f"{base}/images/generations", "images")]
 
 
-def _image_test_payload(model, endpoint_type):
-    prompt = "A simple blue circle on white background"
-    if endpoint_type == "chat":
-        return {"model": model, "messages": [{"role": "user", "content": prompt}]}
-    return {"model": model, "prompt": prompt, "n": 1, "size": "1024x1024"}
+def _image_test_payload(model, endpoint_type="images"):
+    return {
+        "model": model,
+        "prompt": "A simple blue circle on white background",
+        "n": 1,
+        "size": "auto",
+        "quality": "auto",
+        "background": "auto",
+        "image_detail": "high",
+        "output_format": "png",
+    }
 
 
 def _image_response_has_output(payload):
@@ -1071,9 +1075,10 @@ def api_image_provider_test():
     raw_base = data.get("api_base") or image_cfg.get("api_base")
     generation_url = data.get("generation_url") or image_cfg.get("generation_url")
     api_key = data.get("api_key") or image_cfg.get("api_key", "")
-    model = str(data.get("model") or image_cfg.get("model") or "").strip()
-    if not model or model == "__video_frame__":
-        return jsonify({"success": False, "error": "Vui lòng nhập model tạo ảnh"}), 400
+    selected_model = str(data.get("model") or image_cfg.get("model") or "").strip()
+    if not selected_model or selected_model == "__video_frame__":
+        return jsonify({"success": False, "error": "Vui lòng bật chế độ AI tạo ảnh"}), 400
+    model = "ag/gemini-3.1-flash-image"
     try:
         candidates = _image_generation_candidates(generation_url, raw_base)
     except ValueError as exc:
@@ -1081,9 +1086,9 @@ def api_image_provider_test():
     failures = []
     started = time.perf_counter()
     for url, endpoint_type in candidates:
-        request_type = endpoint_type if endpoint_type != "auto" else ("chat" if url.lower().split("?", 1)[0].endswith("/chat/completions") else "images")
+        request_type = "images"
         try:
-            response = requests.post(url, headers=_llm_headers(api_key), json=_image_test_payload(model, request_type), timeout=120)
+            response = requests.post(url, headers=_llm_headers(api_key), json=_image_test_payload(model), timeout=120)
             latency_ms = int((time.perf_counter() - started) * 1000)
             try:
                 payload = response.json()
@@ -1289,12 +1294,23 @@ def api_save_token_group():
     data = request.json or {}
     gid = data.get("id") or f"tgrp_{int(time.time())}"
     name = data.get("name", "").strip()
-    token_ids = data.get("token_ids", [])
+    token_ids = list(dict.fromkeys(str(tid) for tid in data.get("token_ids", []) if tid))
     strategy = data.get("strategy", "least_recently_used")
     note = data.get("note", "").strip()
+    page_source_token_id = str(data.get("page_source_token_id") or "").strip()
 
     if not name:
         return jsonify({"error": "Tên nhóm token không được rỗng"}), 400
+    vault_ids = {str(item.get("id")) for item in token_vault.list_tokens(mask=False)}
+    unknown_ids = sorted(set(token_ids) - vault_ids)
+    if unknown_ids:
+        return jsonify({"error": "Token không tồn tại trong Vault: " + ", ".join(unknown_ids)}), 404
+    if page_source_token_id and page_source_token_id not in vault_ids:
+        return jsonify({"error": "Token nguồn Page không tồn tại trong Vault"}), 404
+    page_ids = sorted({
+        str(page.get("page_id")) for page in page_manager.list_pages()
+        if page_source_token_id and str(page.get("token_id") or "") == page_source_token_id and page.get("page_id")
+    })
 
     groups = load_token_groups()
     existing = next((g for g in groups if g.get("id") == gid), None)
@@ -1303,6 +1319,8 @@ def api_save_token_group():
         existing["token_ids"] = token_ids
         existing["strategy"] = strategy
         existing["note"] = note
+        existing["page_source_token_id"] = page_source_token_id
+        existing["page_ids"] = page_ids
         existing["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     else:
         groups.append({
@@ -1311,6 +1329,8 @@ def api_save_token_group():
             "strategy": strategy,
             "token_ids": token_ids,
             "note": note,
+            "page_source_token_id": page_source_token_id,
+            "page_ids": page_ids,
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
     save_token_groups(groups)
@@ -1337,6 +1357,9 @@ def api_add_token():
     default_name = data.get("name", "").strip()
     kind = data.get("kind", "SYS")
     note = data.get("note", "").strip()
+    page_sync_mode = str(data.get("page_sync_mode") or "representative").strip().lower()
+    if page_sync_mode not in {"representative", "each", "none"}:
+        return jsonify({"error": "page_sync_mode không hợp lệ"}), 400
     
     if not raw_tokens_input:
         return jsonify({"error": "Thiếu mã token"}), 400
@@ -1366,7 +1389,8 @@ def api_add_token():
             item_name = f"Token {idx + 1}" if len(lines) > 1 else "System Token"
             
         try:
-            entry, pages = token_vault.add_token(item_name, item_token, kind, note)
+            discover_pages = page_sync_mode == "each" or (page_sync_mode == "representative" and idx == 0)
+            entry, pages = token_vault.add_token(item_name, item_token, kind, note, discover_pages=discover_pages)
             if pages:
                 page_manager.sync_pages_from_token(entry, pages)
                 for p in pages:
@@ -1378,7 +1402,8 @@ def api_add_token():
                 "name": entry.get("name"),
                 "status": entry.get("status"),
                 "error_msg": entry.get("error_msg", ""),
-                "pages_count": len(pages)
+                "pages_count": len(pages),
+                "page_sync": "synced" if discover_pages else "skipped"
             })
         except Exception as ex:
             results.append({
@@ -1393,7 +1418,22 @@ def api_add_token():
         "count": len(results),
         "results": results,
         "synced_pages": len(synced_page_ids),
+        "page_sync_mode": page_sync_mode,
         "token": results[0] if results else None
+    })
+
+@app.route("/api/tokens/<token_id>/refresh-pages", methods=["POST"])
+def api_refresh_token_pages(token_id):
+    entry, pages = token_vault.refresh_token_pages(token_id)
+    if entry is None:
+        return jsonify({"success": False, "error": "Token không tồn tại trong Vault"}), 404
+    if entry.get("status") != "ACTIVE":
+        return jsonify({"success": False, "error": entry.get("error_msg") or "Token không hợp lệ"}), 400
+    page_manager.sync_pages_from_token(entry, pages)
+    return jsonify({
+        "success": True,
+        "token_id": token_id,
+        "synced_pages": len({str(page.get("page_id")) for page in pages if page.get("page_id")}),
     })
 
 @app.route("/api/tokens/<token_id>", methods=["DELETE"])

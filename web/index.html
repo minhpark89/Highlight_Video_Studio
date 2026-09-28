@@ -1576,10 +1576,11 @@
                 <div style="margin-top:16px;padding:14px;border:1px solid rgba(236,72,153,.35);border-radius:10px;background:rgba(236,72,153,.05);">
                   <div style="font-size:12px;font-weight:800;color:#f472b6;margin-bottom:10px;"><i class="bi bi-image"></i> AI TẠO ẢNH RIÊNG (TÙY CHỌN)</div>
                   <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-                    <div style="grid-column:1/-1"><label class="lbl">Endpoint tạo ảnh (bắt buộc khi dùng AI ảnh)</label><input type="text" id="cfg_image_generation_url" class="form-control" placeholder="VD: https://api.example.com/v1/images/generations hoặc .../chat/completions"></div>
+                    <div style="grid-column:1/-1"><label class="lbl">Chế độ ảnh Hook</label><select id="cfg_image_mode" class="form-select" onchange="syncImageModeUi()"><option value="frame" selected>Trích frame video (mặc định · không gọi external API)</option><option value="ai">AI tạo ảnh qua OpenAI-compatible API</option></select></div>
+                    <div style="grid-column:1/-1"><label class="lbl">Endpoint tạo ảnh AI</label><input type="text" id="cfg_image_generation_url" class="form-control" placeholder="VD: https://api.example.com/v1/images/generations"></div>
                     <div style="grid-column:1/-1"><label class="lbl">Endpoint lấy model (tùy chọn, có thể khác endpoint tạo ảnh)</label><input type="text" id="cfg_image_models_url" class="form-control" placeholder="VD: https://api.example.com/v1/models — để trống nếu provider không hỗ trợ"></div>
                     <div><label class="lbl">Image API Key</label><input type="password" id="cfg_image_key" class="form-control" placeholder="Để trống nếu endpoint không cần key"></div>
-                    <div><label class="lbl">Model tạo ảnh Hook</label><input type="text" id="cfg_image_model" class="form-control" list="image-model-options" value="__video_frame__" placeholder="Nhập model thủ công"><datalist id="image-model-options"><option value="__video_frame__">Không dùng AI ảnh — trích frame video</option></datalist></div>
+                    <div><label class="lbl">Model tạo ảnh Hook</label><input type="text" id="cfg_image_model" class="form-control" list="image-model-options" value="ag/gemini-3.1-flash-image" placeholder="ag/gemini-3.1-flash-image"><datalist id="image-model-options"><option value="ag/gemini-3.1-flash-image"></option></datalist></div>
                   </div>
                   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
                     <button type="button" class="btn btn-secondary btn-sm" id="btn-check-image" onclick="checkImageEndpoint()"><i class="bi bi-cloud-download"></i> Lấy model (tùy chọn)</button>
@@ -2660,12 +2661,21 @@
     }
   }
 
+  function syncImageModeUi() {
+    const aiMode = document.getElementById('cfg_image_mode')?.value === 'ai';
+    ['cfg_image_generation_url','cfg_image_models_url','cfg_image_key','cfg_image_model','btn-check-image','btn-test-image'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.disabled = !aiMode;
+    });
+    const result = document.getElementById('image-test-result');
+    if (result && !aiMode) { result.style.color='#10b981'; result.textContent='Trích frame video: không gửi request ra ngoài.'; }
+  }
+
   function imageRequestPayload() {
     return {
       generation_url: (document.getElementById('cfg_image_generation_url')?.value || '').trim(),
       models_url: (document.getElementById('cfg_image_models_url')?.value || '').trim(),
       api_key: (document.getElementById('cfg_image_key')?.value || '').trim(),
-      model: (document.getElementById('cfg_image_model')?.value || '__video_frame__').trim()
+      model: document.getElementById('cfg_image_mode')?.value === 'ai' ? (document.getElementById('cfg_image_model')?.value || 'ag/gemini-3.1-flash-image').trim() : '__video_frame__'
     };
   }
 
@@ -2681,7 +2691,7 @@
       if (!response.ok || !data.success) throw new Error(data.error || 'Không lấy được model ảnh');
       document.getElementById('cfg_image_models_url').value = data.models_url;
       const list = document.getElementById('image-model-options');
-      list.innerHTML = '<option value="__video_frame__">Không dùng AI ảnh — trích frame video</option>';
+      list.innerHTML = '<option value="ag/gemini-3.1-flash-image"></option>';
       data.models.forEach(model => list.appendChild(new Option(model, model)));
       const modelInput = document.getElementById('cfg_image_model');
       if (modelInput && (!modelInput.value.trim() || modelInput.value === '__video_frame__') && data.models.length) {
@@ -2726,7 +2736,7 @@
       const image_generation_url = (document.getElementById('cfg_image_generation_url')?.value || '').trim();
       const image_models_url = (document.getElementById('cfg_image_models_url')?.value || '').trim();
       const image_api_key = (document.getElementById('cfg_image_key')?.value || '').trim();
-      const image_model = (document.getElementById('cfg_image_model')?.value || '__video_frame__').trim();
+      const image_model = document.getElementById('cfg_image_mode')?.value === 'ai' ? (document.getElementById('cfg_image_model')?.value || 'ag/gemini-3.1-flash-image').trim() : '__video_frame__';
       const whisper_mode = document.getElementById('cfg_whisper_mode')?.value || 'youtube_first';
       const encoder = document.getElementById('cfg_encoder')?.value || 'h264_nvenc';
       const crf = parseInt(document.getElementById('cfg_crf')?.value || '22');
@@ -2833,7 +2843,11 @@
         const modelInput = document.getElementById('cfg_image_model');
         if (generationInput) generationInput.value = cfg.image_provider.generation_url || (cfg.image_provider.api_base ? cfg.image_provider.api_base.replace(/\/$/, '') + '/images/generations' : '');
         if (modelsInput) modelsInput.value = cfg.image_provider.models_url || '';
-        if (modelInput) modelInput.value = cfg.image_provider.model || '__video_frame__';
+        const configuredImageModel = cfg.image_provider.model || '__video_frame__';
+        const modeInput = document.getElementById('cfg_image_mode');
+        if (modeInput) modeInput.value = configuredImageModel === '__video_frame__' ? 'frame' : 'ai';
+        if (modelInput) modelInput.value = configuredImageModel === '__video_frame__' ? 'ag/gemini-3.1-flash-image' : configuredImageModel;
+        syncImageModeUi();
       }
     } catch (e) {
       console.warn('Could not load hardware info:', e);
@@ -3070,6 +3084,7 @@
     const tokensInput = (document.getElementById('token-input-str')?.value || '').trim();
     const name = (document.getElementById('token-input-name')?.value || '').trim();
     const kind = document.getElementById('token-input-kind')?.value || 'SYS';
+    const pageSyncMode = document.getElementById('token-page-sync-mode')?.value || 'representative';
     if (!tokensInput) {
       alert('Vui lòng dán ít nhất một token.');
       return;
@@ -3084,7 +3099,7 @@
       const response = await fetch('/api/tokens', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({tokens_input: tokensInput, name, kind})
+        body: JSON.stringify({tokens_input: tokensInput, name, kind, page_sync_mode: pageSyncMode})
       });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || 'Không thể lưu token');
@@ -3094,7 +3109,8 @@
       closeAddTokenModal();
       await Promise.all([loadTokensOnly(), loadTokensAndPages()]);
       const failed = (data.results || []).filter(item => item.status !== 'ACTIVE');
-      const summary = `Đã lưu ${data.count || 0} token và đồng bộ ${data.synced_pages || 0} Page.`;
+      const skipped = (data.results || []).filter(item => item.page_sync === 'skipped').length;
+      const summary = `Đã lưu ${data.count || 0} token, đồng bộ ${data.synced_pages || 0} Page${skipped ? `; bỏ qua fetch Page trên ${skipped} token còn lại` : ''}.`;
       alert(failed.length ? `${summary}\n${failed.length} token cần kiểm tra trạng thái trong Token Vault.` : summary);
     } catch (error) {
       alert('Lưu & đồng bộ Page thất bại: ' + error.message);
@@ -3574,8 +3590,14 @@
     const m = document.getElementById('modal-token-group');
     if (!m) return;
     document.getElementById('tgrp-input-name').value = '';
+    const sourceSelect = document.getElementById('tgrp-page-source-token');
+    if (sourceSelect) {
+      sourceSelect.innerHTML = '<option value="">Không binding Page set</option>' + (globalTokensCatalog || []).map(t =>
+        `<option value="${t.id}">${t.name} · ${t.pages_count || 0} Page đã sync</option>`
+      ).join('');
+    }
 
-    // Render list of 31 tokens into checkbox box
+    // Render token vault into checkbox box
     const box = document.getElementById('tgrp-tokens-select-box');
     if (box) {
       box.innerHTML = (globalTokensCatalog || []).map((t, idx) => `
@@ -3625,6 +3647,7 @@
               <div style="font-weight: 700; font-size: 13px; color: #f59e0b;">${g.name}</div>
               <div style="font-size: 11px; color: #64748b; margin-top: 2px;">
                 <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">${(g.token_ids||[]).length} Token</span>
+                <span class="badge" style="background: rgba(16,185,129,0.12); color: #34d399;">${(g.page_ids||[]).length} Page binding</span>
                 <span style="margin-left: 6px;">Chiến lược: <strong>${g.strategy || 'least_recently_used'}</strong></span>
               </div>
             </div>
@@ -3642,6 +3665,7 @@
   async function submitCreateTokenGroup() {
     const name = document.getElementById('tgrp-input-name')?.value.trim();
     const strategy = document.getElementById('tgrp-input-strategy')?.value || 'least_recently_used';
+    const pageSourceTokenId = document.getElementById('tgrp-page-source-token')?.value || '';
     if (!name) {
       alert('Vui lòng nhập tên nhóm token!');
       return;
@@ -3656,7 +3680,7 @@
       const res = await fetch('/api/token-groups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, strategy, token_ids: tokenIds })
+        body: JSON.stringify({ name, strategy, token_ids: tokenIds, page_source_token_id: pageSourceTokenId })
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -3875,7 +3899,10 @@
               }
             </td>
             <td style="padding: 12px 16px;">${statusBadge}</td>
-            <td style="padding: 12px 16px; text-align: right;">
+            <td style="padding: 12px 16px; text-align: right; white-space: nowrap;">
+              <button class="btn btn-outline btn-sm" onclick="refreshTokenPages('${t.id}', this)" style="color:#38bdf8; border-color:rgba(56,189,248,.35); padding:4px 8px; font-size:12px;" title="Chủ động gọi Graph API và làm mới Page chỉ cho token này">
+                <i class="bi bi-arrow-repeat"></i> Sync Page
+              </button>
               <button class="btn btn-outline btn-sm" onclick="deleteSingleToken('${t.id}', '${tName}')" style="color: #ef4444; border-color: rgba(239,68,68,0.3); padding: 4px 8px; font-size: 12px;" title="Xóa Token">
                 <i class="bi bi-trash"></i> Xóa
               </button>
@@ -3889,6 +3916,22 @@
       console.error('Lỗi loadTokensOnly:', e);
       const tbody = document.getElementById('tokens-table-body');
       if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="color: #ef4444; padding: 20px; text-align: center;">Lỗi tải token: ${e.message}</td></tr>`;
+    }
+  }
+
+  async function refreshTokenPages(tokenId, button) {
+    const oldHtml = button?.innerHTML || '';
+    if (button) { button.disabled = true; button.innerHTML = '<i class="bi bi-arrow-repeat spin"></i> Đang sync...'; }
+    try {
+      const res = await fetch('/api/tokens/' + encodeURIComponent(tokenId) + '/refresh-pages', {method:'POST'});
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Không thể đồng bộ Page');
+      showToast(`Đã đồng bộ ${data.synced_pages || 0} Page từ token được chọn.`);
+      await Promise.all([loadTokensOnly(), loadTokensAndPages()]);
+    } catch (e) {
+      alert('Đồng bộ Page thất bại: ' + e.message);
+    } finally {
+      if (button) { button.disabled = false; button.innerHTML = oldHtml; }
     }
   }
 
@@ -5505,8 +5548,16 @@ async function loadPostsTable() {
             </div>
             <textarea id="token-input-str" class="form-control" rows="5" placeholder="Dán 1 hoặc nhiều token (mỗi dòng 1 token):&#10;EAAB...&#10;Hoặc định dạng: Tên|EAAB...&#10;Token_Chính|EAAB...&#10;Token_Phụ|EAAB..."></textarea>
           </div>
+          <div>
+            <label class="form-label" style="font-size:12px;font-weight:600;color:#94a3b8;">Cách đồng bộ Page khi import:</label>
+            <select id="token-page-sync-mode" class="form-control">
+              <option value="representative" selected>Sync Page bằng token đầu tiên; token còn lại chỉ xác minh danh tính (khuyên dùng)</option>
+              <option value="none">Chỉ lưu/xác minh token; chưa sync Page</option>
+              <option value="each">Sync riêng từng token (thủ công/điều tra quyền truy cập)</option>
+            </select>
+          </div>
           <div style="font-size: 11.5px; color: #38bdf8; line-height: 1.4; background: rgba(56,189,248,0.08); padding: 8px 12px; border-radius: 6px; border: 1px dashed rgba(56,189,248,0.3);">
-            <i class="bi bi-magic"></i> <b>Batch Auto-Sync:</b> Hệ thống sẽ tự động duyệt từng token, gọi Meta Graph API v22.0 kiểm tra trạng thái và đồng bộ tất cả Fanpage về một lượt!
+            <i class="bi bi-magic"></i> <b>Không fetch trùng:</b> mặc định chỉ token đại diện gọi <code>/me/accounts</code>. Có thể bấm “Sync Page” trên từng token bất kỳ lúc nào.
           </div>
         </div>
       </div>
@@ -6021,6 +6072,11 @@ async function loadPostsTable() {
               <option value="round_robin">Xoay vòng đều (Round Robin)</option>
               <option value="random">Ngẫu nhiên (Random)</option>
             </select>
+          </div>
+          <div style="margin-bottom:12px;">
+            <label class="form-label" style="font-size:12px;font-weight:600;color:#cbd5e1;">Dùng lại Page set đã sync từ:</label>
+            <select id="tgrp-page-source-token" class="form-select form-select-sm" style="background:#0b1329;border-color:#334155;"><option value="">Không binding Page set</option></select>
+            <div style="font-size:11px;color:#64748b;margin-top:4px;">Chỉ lưu binding tới Page hiện có; không gọi Graph API lại cho các token trong nhóm.</div>
           </div>
           <div style="margin-bottom: 14px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
