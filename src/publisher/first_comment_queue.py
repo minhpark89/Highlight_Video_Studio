@@ -31,7 +31,7 @@ def _save_unlocked(items):
     temporary.replace(QUEUE_FILE)
 
 
-def enqueue_first_comment(object_id, page_token, comment_text, due_at, token_id=None):
+def enqueue_first_comment(object_id, page_token, comment_text, due_at, token_id=None, post_id=None):
     item = {
         "id": f"fc_{uuid.uuid4().hex[:12]}",
         "object_id": str(object_id),
@@ -42,6 +42,7 @@ def enqueue_first_comment(object_id, page_token, comment_text, due_at, token_id=
         "attempts": 0,
         "status": "pending",
         "last_error": "",
+        "post_id": str(post_id or ""),
     }
     with _LOCK:
         items = _load_unlocked()
@@ -54,6 +55,7 @@ def process_due_first_comments(poster, now=None):
     current = int(now or time.time())
     changed = False
     completed = 0
+    outcomes = []
     with _LOCK:
         items = _load_unlocked()
         for item in items:
@@ -81,6 +83,15 @@ def process_due_first_comments(poster, now=None):
                 item["last_error"] = result.get("error", "Unknown error")
                 delay = min(900, 30 * (2 ** (item["attempts"] - 1)))
                 item["due_at"] = current + delay
+            outcomes.append({
+                "queue_id": item.get("id"),
+                "post_id": item.get("post_id") or "",
+                "status": item.get("status"),
+                "attempts": item.get("attempts"),
+                "comment_id": item.get("comment_id"),
+                "last_error": item.get("last_error", ""),
+                "due_at": item.get("due_at"),
+            })
             changed = True
         # Retain a compact audit trail and discard old successful entries.
         items = [
@@ -89,4 +100,4 @@ def process_due_first_comments(poster, now=None):
         ]
         if changed:
             _save_unlocked(items)
-    return {"processed": completed, "changed": changed}
+    return {"processed": completed, "changed": changed, "outcomes": outcomes}

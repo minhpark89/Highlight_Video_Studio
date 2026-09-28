@@ -533,7 +533,17 @@ def get_all_clips():
 
 @app.route("/api/clips/play/<path:filename>")
 def play_clip(filename):
-    return send_from_directory(str(OUTPUT_DIR), filename)
+    safe_name = Path(str(filename).replace("\\", "/")).name
+    if safe_name != filename or not safe_name.lower().endswith(".mp4"):
+        return jsonify({"error": "Tên video không hợp lệ"}), 400
+    target = (OUTPUT_DIR / safe_name).resolve()
+    if target.parent != OUTPUT_DIR.resolve() or not target.is_file():
+        return jsonify({"error": "Không tìm thấy video"}), 404
+    return send_from_directory(
+        str(OUTPUT_DIR), safe_name,
+        as_attachment=request.args.get("download") == "1",
+        conditional=True,
+    )
 
 
 @app.route("/api/clips/<path:filename>", methods=["DELETE"])
@@ -1634,6 +1644,7 @@ def api_publish_reel():
     results = []
     success_count = 0
     pages_updated = False
+    scheduled_posts = load_posts() if schedule_time else []
 
     # Tinh toan thoi gian hen gio co stagger cho tung page
     base_schedule_ts = None
@@ -1665,6 +1676,55 @@ def api_publish_reel():
         curr_sched = None
         if base_schedule_ts:
             curr_sched = base_schedule_ts + (idx * stagger_minutes * 60)
+
+        if curr_sched:
+            duplicate = next((post for post in scheduled_posts if
+                post.get("page_id") == pid and
+                (post.get("media_file") or post.get("clip_filename")) == clip_filename and
+                post.get("status") in ("scheduled", "publishing", "published")
+            ), None)
+            if duplicate:
+                results.append({
+                    "page_id": pid,
+                    "page_name": p_info.get("page_name"),
+                    "success": False,
+                    "error": "Video này đã có trong hàng đợi hoặc đã đăng cho Page",
+                    "duplicate_post_id": duplicate.get("id"),
+                })
+                continue
+            scheduled_dt = datetime.fromtimestamp(curr_sched).strftime("%Y-%m-%d %H:%M:%S")
+            post_entry = {
+                "id": f"post_{int(time.time())}_{uuid.uuid4().hex[:6]}",
+                "title": title,
+                "content": caption,
+                "page_id": pid,
+                "page_name": p_info.get("page_name", pid),
+                "type": "reel",
+                "media_file": clip_filename,
+                "first_comment": first_comment,
+                "first_comment_status": "ready" if first_comment.strip() else "not_configured",
+                "first_comment_error": "",
+                "article_url": str(data.get("article_url") or data.get("website_url") or "").strip(),
+                "website_status": "ready" if (data.get("article_url") or data.get("website_url")) else "not_configured",
+                "website_error": "",
+                "auto_first_comment": bool(data.get("auto_first_comment", False)),
+                "use_llm_comment": bool(data.get("use_llm_comment", True)),
+                "status": "scheduled",
+                "scheduled_time": scheduled_dt,
+                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "token": p_token,
+            }
+            scheduled_posts.append(post_entry)
+            success_count += 1
+            results.append({
+                "page_id": pid,
+                "page_name": p_info.get("page_name"),
+                "success": True,
+                "status": "SCHEDULED_LOCAL",
+                "post_id": post_entry["id"],
+                "scheduled_publish_time": curr_sched,
+            })
+            continue
 
         res = reel_poster.publish_reel(
             page_id=pid,
@@ -1698,6 +1758,8 @@ def api_publish_reel():
 
     if pages_updated:
         page_manager.save_pages(pages)
+    if schedule_time and success_count:
+        save_posts(scheduled_posts)
 
     return jsonify({
         "success": success_count > 0,
@@ -1823,6 +1885,15 @@ def api_clear_posts():
 @app.route("/api/posts", methods=["GET"])
 def api_get_posts():
     posts = load_posts()
+    for post in posts:
+        media_file = post.get("media_file") or post.get("clip_filename")
+        if media_file:
+            post["local_video_url"] = f"/api/clips/play/{media_file}"
+            post["local_download_url"] = f"/api/clips/play/{media_file}?download=1"
+            post["local_video_available"] = (OUTPUT_DIR / Path(media_file).name).is_file()
+        facebook_id = post.get("post_fb_id") or post.get("reel_id")
+        if facebook_id and not post.get("fb_url"):
+            post["fb_url"] = f"https://www.facebook.com/reel/{facebook_id}"
     # Sắp xếp bài mới lên lịch / mới đăng lên đầu danh sách (Newest First)
     def _sort_key(p):
         # Ưu tiên sắp xếp theo thời điểm tạo bài hoặc lên lịch
@@ -1851,6 +1922,13 @@ def api_save_post():
         "type": data.get("type", "reel"),
         "media_file": data.get("media_file", ""),
         "first_comment": data.get("first_comment", ""),
+        "first_comment_status": data.get("first_comment_status") or ("ready" if data.get("first_comment") else "not_configured"),
+        "first_comment_error": data.get("first_comment_error", ""),
+        "article_url": data.get("article_url") or data.get("website_url") or "",
+        "website_status": data.get("website_status") or ("ready" if (data.get("article_url") or data.get("website_url")) else "not_configured"),
+        "website_error": data.get("website_error", ""),
+        "post_fb_id": data.get("post_fb_id", ""),
+        "fb_url": data.get("fb_url") or data.get("url", ""),
         "status": data.get("status", "scheduled"),
         "scheduled_time": data.get("scheduled_time", ""),
         "posted_at": data.get("posted_at", ""),
@@ -1882,6 +1960,8 @@ def api_distribute_batch():
     stagger_minutes = int(data.get("stagger_minutes", 15))
     auto_first_comment = data.get("auto_first_comment", True)
     use_llm_comment = data.get("use_llm_comment", True)
+    configured_first_comment = str(data.get("first_comment") or "").strip()
+    configured_website_url = str(data.get("article_url") or data.get("website_url") or "").strip()
 
     if not group_id:
         return jsonify({"error": "Thiếu group_id"}), 400
@@ -1996,8 +2076,12 @@ def api_distribute_batch():
                 "group_name": group.get("name", "Nhóm Fanpage"),
                 "type": "reel",
                 "media_file": clip_fn,
-                "article_url": "",
-                "first_comment": "",
+                "article_url": configured_website_url,
+                "website_status": "ready" if configured_website_url else ("pending_generation" if auto_first_comment else "not_configured"),
+                "website_error": "",
+                "first_comment": configured_first_comment,
+                "first_comment_status": "ready" if configured_first_comment else ("pending_generation" if auto_first_comment else "not_configured"),
+                "first_comment_error": "",
                 "auto_first_comment": bool(auto_first_comment),
                 "use_llm_comment": bool(use_llm_comment),
                 "status": "scheduled",

@@ -4646,7 +4646,8 @@
     try {
       const res = await fetch('/api/website-config');
       const d = await res.json();
-      const siteUrl = d.site_url || 'https://';
+      const siteUrl = d?.config?.base_url || '';
+      if (!siteUrl) throw new Error('Chưa cấu hình Website URL');
       const commentInput = document.getElementById('pub-first-comment');
       const current = commentInput.value.trim();
       const linkText = `Xem chi tiết và cập nhật thêm tại: ${siteUrl}`;
@@ -5403,9 +5404,19 @@ async function loadPostsTable() {
 
       let html = '';
       posts.forEach((p, index) => {
+        const safeTitle = escapeHtml(p.title || 'Reel Highlight');
+        const safeMedia = escapeHtml(p.media_file || '');
+        const safePageName = escapeHtml(p.page_name || p.page_id || '');
+        const safePageId = escapeHtml(String(p.page_id || ''));
+        const safeTokenName = escapeHtml(p.token_name || 'System User');
+        const safeComment = escapeHtml(p.first_comment || '');
+        const safeArticleUrl = /^https?:\/\//i.test(p.article_url || '') ? escapeHtml(p.article_url) : '';
+        const safeFacebookUrl = /^https?:\/\//i.test(p.fb_url || '') ? escapeHtml(p.fb_url) : '';
+        const safeLocalVideoUrl = p.local_video_available ? escapeHtml(p.local_video_url || '') : '';
+        const safeLocalDownloadUrl = p.local_video_available ? escapeHtml(p.local_download_url || '') : '';
         let statusBadge = '';
         if (p.status === 'published' || p.status === 'success') {
-          const reelUrl = p.post_fb_id ? `https://www.facebook.com/reel/${p.post_fb_id}` : (p.fb_url || '');
+          const reelUrl = safeFacebookUrl || (p.post_fb_id ? `https://www.facebook.com/reel/${encodeURIComponent(p.post_fb_id)}` : '');
           statusBadge = `
             <div>
               <span style="background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px; display: inline-flex; align-items: center; gap: 4px;">
@@ -5421,35 +5432,56 @@ async function loadPostsTable() {
             </div>
           `;
         } else if (p.status === 'failed') {
-          statusBadge = '<span style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-x-circle"></i> Lỗi</span>';
+          statusBadge = `<span style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;" title="${escapeHtml(p.error || p.website_error || '')}"><i class="bi bi-x-circle"></i> Lỗi · Có thể thử lại</span>`;
         } else {
           statusBadge = '<span style="background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-clock-history"></i> Đang hẹn lịch</span>';
         }
 
-        const commentSnippet = p.first_comment ? (p.first_comment.length > 50 ? p.first_comment.substring(0, 50) + '...' : p.first_comment) : '<span style="color: #64748b;">(Không có)</span>';
+        let commentSnippet = '';
+        if (safeComment) {
+          commentSnippet = safeComment.length > 50 ? safeComment.substring(0, 50) + '...' : safeComment;
+        } else if (p.first_comment_status === 'pending_generation' || p.first_comment_status === 'generating') {
+          commentSnippet = '<span style="color:#f59e0b;">Chờ tạo khi đến giờ đăng</span>';
+        } else if (p.first_comment_status === 'generation_failed' || p.first_comment_status === 'pending_retry' || p.first_comment_status === 'failed') {
+          commentSnippet = `<span style="color:#ef4444;" title="${escapeHtml(p.first_comment_error || '')}">Lỗi First Comment · sẽ thử lại</span>`;
+        } else {
+          commentSnippet = '<span style="color: #64748b;">Không cấu hình</span>';
+        }
+        const articleLink = safeArticleUrl
+          ? `<a href="${safeArticleUrl}" target="_blank" rel="noopener" style="display:block;color:#38bdf8;margin-top:5px;"><i class="bi bi-link-45deg"></i> Mở bài website</a>`
+          : (p.website_status === 'pending_generation' || p.website_status === 'generating')
+            ? '<div style="color:#f59e0b;margin-top:5px;">Website: chờ tạo</div>'
+            : (p.website_status === 'failed')
+              ? `<div style="color:#ef4444;margin-top:5px;" title="${escapeHtml(p.website_error || '')}">Website: tạo thất bại</div>`
+              : '<div style="color:#64748b;margin-top:5px;">Website: không cấu hình</div>';
+        const videoActions = safeLocalVideoUrl
+          ? `<div style="margin-top:5px;display:flex;gap:8px;"><a href="${safeLocalVideoUrl}" target="_blank" rel="noopener" style="color:#22d3ee;"><i class="bi bi-play-circle"></i> Xem video</a><a href="${safeLocalDownloadUrl}" style="color:#94a3b8;"><i class="bi bi-download"></i> Tải</a></div>`
+          : '<div style="margin-top:5px;color:#ef4444;font-size:11px;">Video local không còn khả dụng</div>';
 
         html += `
           <tr style="border-bottom: 1px solid var(--border); transition: background 0.15s ease;" onmouseover="this.style.background='rgba(255,255,255,0.02)'" onmouseout="this.style.background='transparent'">
             <td style="padding: 12px 14px; color: #64748b; font-weight: 600;">${index + 1}</td>
             <td style="padding: 12px 14px;">
-              <div style="font-weight: 700; color: #f8fafc; font-size: 13.5px;">${p.title || 'Reel Highlight'}</div>
-              <div style="font-size: 11.5px; color: #94a3b8; font-family: monospace; margin-top: 2px;"><i class="bi bi-film"></i> ${p.media_file}</div>
+              <div style="font-weight: 700; color: #f8fafc; font-size: 13.5px;">${safeTitle}</div>
+              <div style="font-size: 11.5px; color: #94a3b8; font-family: monospace; margin-top: 2px;"><i class="bi bi-film"></i> ${safeMedia}</div>
+              ${videoActions}
             </td>
             <td style="padding: 12px 14px;">
               <div style="font-weight: 700; color: #60a5fa; display: flex; align-items: center; gap: 6px;">
-                <i class="bi bi-facebook" style="color: #1877f2;"></i> ${p.page_name || p.page_id}
+                <i class="bi bi-facebook" style="color: #1877f2;"></i> ${safePageName}
               </div>
-              <div style="font-size: 11px; color: #64748b;">ID: ${p.page_id}</div>
+              <div style="font-size: 11px; color: #64748b;">ID: ${safePageId}</div>
             </td>
             <td style="padding: 12px 14px;">
               <span style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); padding: 2px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 700;">
-                <i class="bi bi-key-fill"></i> ${p.token_name || 'System User'}
+                <i class="bi bi-key-fill"></i> ${safeTokenName}
               </span>
             </td>
             <td style="padding: 12px 14px; max-width: 250px;">
-              <div style="font-size: 11.5px; color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${p.first_comment || ''}">
+              <div style="font-size: 11.5px; color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${safeComment}">
                 <i class="bi bi-chat-quote-fill" style="color: #06b6d4;"></i> ${commentSnippet}
               </div>
+              ${articleLink}
             </td>
             <td style="padding: 12px 14px;">${statusBadge}</td>
             <td style="padding: 12px 14px; font-size: 12px; color: #e2e8f0; font-family: monospace;">

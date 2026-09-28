@@ -120,6 +120,7 @@ class MetaReelPoster:
             return {
                 "success": True,
                 "video_id": video_id,
+                "fb_url": finish_data.get("permalink_url") or f"https://www.facebook.com/reel/{video_id}",
                 "status": "SCHEDULED" if is_scheduled else "PUBLISHED",
                 "scheduled_publish_time": finish_payload.get("scheduled_publish_time"),
                 "comment_result": comment_result
