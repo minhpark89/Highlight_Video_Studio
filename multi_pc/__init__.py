@@ -1,5 +1,7 @@
-"""Phase 1 multi-PC control-plane and connector components."""
+"""Phase 1 local-first desktop components and optional cloud control plane.
 
-from .control_plane import create_app
+Import submodules directly (for example ``multi_pc.hardware``) so the local
+renderer never requires the optional cloud control plane to be importable.
+"""
 
-__all__ = ["create_app"]
+__all__ = ["hardware", "profile_cache", "adapter", "connector", "control_plane"]

@@ -4,12 +4,30 @@ from typing import Any
 
 import requests
 
-from .adapter import AdapterError, SafeLocalAdapter
+from .adapter import SafeLocalAdapter
 from .security import redact
 
 
 class ConnectorError(RuntimeError):
     pass
+
+
+# Phase 1 keeps the cloud scope intentionally tiny: login/licence/update and
+# optional lightweight metadata sync only. Rendering, transcription, downloads,
+# publishing, and local credentials never depend on the control plane.
+SUPPORTED_CLOUD_ACTIONS = frozenset(SafeLocalAdapter.ALLOWED_ACTIONS)
+
+
+def adapter_capabilities() -> dict:
+    actions = sorted(SUPPORTED_CLOUD_ACTIONS)
+    return {
+        "connector": "phase1",
+        "transport": "https-poll",
+        "mode": "local-first",
+        "supported_actions": actions,
+        "actions": actions,
+        "offline_capable": True,
+    }
 
 
 class ControlPlaneClient:
@@ -34,6 +52,9 @@ class ControlPlaneClient:
         return response.json()
 
     def heartbeat(self, capabilities: dict[str, Any]):
+        # Local-first deployment: this optional heartbeat publishes only coarse
+        # hardware/profile facts. It may fail without stopping local rendering
+        # and must never carry credentials, media, or local filesystem detail.
         return self._request("POST", "/v1/device/heartbeat", json={"capabilities": capabilities})
 
     def lease(self):
@@ -91,16 +112,18 @@ class Connector:
             self.log.warning("job success acknowledgement deferred after connection failure")
         return True
 
-    def run_forever(self, poll_seconds: float = 5, max_backoff_seconds: float = 60):
+    def run_forever(self, poll_seconds: float = 5, max_backoff_seconds: float = 60, capabilities: dict | None = None):
         backoff = poll_seconds
+        facts = capabilities or adapter_capabilities()
         while True:
             try:
-                self.client.heartbeat({"connector": "phase1", "transport": "https-poll"})
+                self.client.heartbeat(facts)
                 worked = self.poll_once()
                 backoff = poll_seconds
                 if not worked:
                     time.sleep(poll_seconds)
             except (requests.RequestException, ConnectorError):
-                self.log.warning("control plane unavailable; retrying with backoff")
+                # Local rendering continues offline; only cloud sync pauses.
+                self.log.warning("control plane unavailable; local mode continues and sync retries with backoff")
                 time.sleep(backoff)
                 backoff = min(max_backoff_seconds, max(poll_seconds, backoff * 2))
