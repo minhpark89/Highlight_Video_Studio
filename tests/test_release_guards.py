@@ -37,29 +37,29 @@ class ReleaseGuardTests(unittest.TestCase):
         }), encoding="utf-8")
         return WebsiteArticleService(str(config))
 
-    def test_cms_video_upload_falls_back_from_feature_gated_social_planner(self):
+    def test_cms_video_upload_uses_generic_media_uploader_by_default(self):
         with tempfile.TemporaryDirectory() as folder:
             service = self.make_service(folder, {"method": "cms"})
             video = Path(folder) / "video.mp4"
             video.write_bytes(b"video")
-            feature_gated = FakeResponse(403, {"message": "Gói hiện tại không có quyền sử dụng tính năng này"})
             generic_upload = FakeResponse(200, {"data": {
                 "upload": {"url": "https://storage.test/upload", "method": "PUT", "headers": {}},
                 "fileUrl": "https://cdn.test/video.mp4",
             }})
             fake_session = mock.Mock()
             fake_session.authenticated = True
-            fake_session.http.post.side_effect = [feature_gated, generic_upload]
+            fake_session.http.post.return_value = generic_upload
             uploaded = FakeResponse(200)
             with mock.patch("core.website_article_service._BackendSession", return_value=fake_session), mock.patch(
                 "core.website_article_service.requests.request", return_value=uploaded
             ) as request, mock.patch.object(service, "verify_public_media") as verify:
                 public_url = service.upload_video(str(video))
-            called_urls = [call.args[0] for call in fake_session.http.post.call_args_list]
-            self.assertEqual(called_urls, [
-                "https://example.test/admin/api/v1/social-planner/media/presign-upload",
+            fake_session.http.post.assert_called_once()
+            self.assertEqual(
+                fake_session.http.post.call_args.args[0],
                 "https://example.test/admin/api/v1/uploads/presigned-image-url",
-            ])
+            )
+            self.assertNotIn("social-planner", fake_session.http.post.call_args.args[0])
             self.assertEqual(public_url, "https://cdn.test/video.mp4")
             request.assert_called_once()
             verify.assert_called_once_with(public_url, require_range=True)
@@ -71,13 +71,13 @@ class ReleaseGuardTests(unittest.TestCase):
             video.write_bytes(b"video")
             fake_session = mock.Mock()
             fake_session.authenticated = True
-            fake_session.http.post.side_effect = [
-                FakeResponse(403, {"message": "feature gated"}),
-                FakeResponse(403, {"message": "generic upload forbidden"}),
-            ]
+            fake_session.http.post.return_value = FakeResponse(
+                403, {"message": "generic upload forbidden"}
+            )
             with mock.patch("core.website_article_service._BackendSession", return_value=fake_session):
                 with self.assertRaisesRegex(WebsiteServiceError, "generic upload forbidden"):
                     service.upload_video(str(video))
+            fake_session.http.post.assert_called_once()
 
     def test_scp_failure_never_returns_fabricated_url(self):
         with tempfile.TemporaryDirectory() as folder:

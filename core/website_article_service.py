@@ -179,30 +179,14 @@ class WebsiteArticleService:
             },
         }
 
-        if is_video:
-            endpoint = f"{self.cfg.api_base_url}/social-planner/media/presign-upload"
-            request_data = {
-                "content_type": content_type,
-                "size_bytes": path.stat().st_size,
-                "filename": path.name,
-            }
-            presign = session.http.post(endpoint, json=request_data, timeout=self.cfg.timeout)
-            # Social Planner is a separately licensed CMS feature. Website article
-            # publishing worked before it was introduced, so a package-level 403
-            # must fall back to the CMS' generic asset uploader rather than block
-            # the otherwise-authorized Website workflow.
-            if presign.status_code == 403:
-                presign = session.http.post(
-                    generic_endpoint,
-                    json=generic_request,
-                    timeout=self.cfg.timeout,
-                )
-        else:
-            presign = session.http.post(
-                generic_endpoint,
-                json=generic_request,
-                timeout=self.cfg.timeout,
-            )
+        # Website article media always uses the CMS' generic uploader. The
+        # Social Planner endpoint belongs to a separately licensed feature and
+        # must not be part of the default Website publishing path.
+        presign = session.http.post(
+            generic_endpoint,
+            json=generic_request,
+            timeout=self.cfg.timeout,
+        )
 
         payload = self._response_payload(presign)
         data = payload.get("data") or payload
