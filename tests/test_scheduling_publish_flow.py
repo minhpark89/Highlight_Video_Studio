@@ -64,17 +64,82 @@ class SchedulingPublishFlowTests(unittest.TestCase):
                 web_app.page_manager, "list_groups", return_value=groups
             ), mock.patch.object(web_app.page_manager, "list_pages", return_value=pages), mock.patch.object(
                 web_app, "get_clip_metadata", return_value={"video_title": "Fixture title"}
+            ), mock.patch.object(
+                web_app, "publish_clip_to_website_cms", return_value=("https://example.test/article", "")
+            ), mock.patch.object(
+                web_app, "generate_curiosity_comment_with_llm", return_value="Read https://example.test/article"
             ):
                 response = client.post("/api/distribute/batch", json={
                     "group_id": "group-1", "posts_per_page": 1, "auto_first_comment": True,
                 })
             self.assertEqual(response.status_code, 200)
             saved = json.loads(posts_file.read_text(encoding="utf-8"))
-        self.assertEqual(saved[0]["first_comment_status"], "pending_generation")
-        self.assertEqual(saved[0]["website_status"], "pending_generation")
-        self.assertEqual(saved[0]["first_comment"], "")
+        self.assertEqual(saved[0]["first_comment_status"], "ready")
+        self.assertEqual(saved[0]["website_status"], "ready")
+        self.assertEqual(saved[0]["article_url"], "https://example.test/article")
+        self.assertIn("https://example.test/article", saved[0]["first_comment"])
 
-    def test_worker_publishes_before_comment_and_persists_urls(self):
+    def test_schedule_cms_failure_is_recorded_without_dropping_facebook_queue(self):
+        from web import app as web_app
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "output"
+            output.mkdir()
+            (output / "clip.mp4").write_bytes(b"video")
+            posts_file = root / "posts.json"
+            pages = [{"page_id": "page-1", "page_name": "Page One", "page_token": "fixture-token"}]
+            client = web_app.app.test_client()
+            with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
+                web_app, "POSTS_FILE", posts_file
+            ), mock.patch.object(web_app.page_manager, "list_pages", return_value=pages), mock.patch.object(
+                web_app.page_manager, "list_groups", return_value=[]
+            ), mock.patch.object(
+                web_app, "publish_clip_to_website_cms", side_effect=RuntimeError("CMS upload unavailable")
+            ), mock.patch.object(web_app.reel_poster, "publish_reel") as publish:
+                response = client.post("/api/publish/reel", json={
+                    "page_id": "page-1", "filename": "clip.mp4", "title": "Fixture title",
+                    "caption": "Fixture caption", "auto_first_comment": True,
+                    "schedule_time": "2099-01-02T03:04",
+                })
+            publish.assert_not_called()
+            saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["success"])
+        self.assertEqual(saved["status"], "scheduled")
+        self.assertEqual(saved["website_status"], "failed")
+        self.assertIn("CMS upload unavailable", saved["website_error"])
+
+    def test_manual_website_retry_updates_article_without_touching_facebook_schedule(self):
+        from web import app as web_app
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            posts_file = Path(folder) / "posts.json"
+            posts_file.write_text(json.dumps([{
+                "id": "post-1", "status": "scheduled", "scheduled_time": "2099-01-02 03:04:00",
+                "page_id": "page-1", "token": "fixture-token", "media_file": "clip.mp4",
+                "title": "Fixture title", "auto_first_comment": True,
+                "website_status": "failed", "website_error": "old failure",
+                "article_url": "", "first_comment": "", "first_comment_status": "generation_failed",
+            }]), encoding="utf-8")
+            client = web_app.app.test_client()
+            with mock.patch.object(web_app, "POSTS_FILE", posts_file), mock.patch.object(
+                web_app, "publish_clip_to_website_cms", return_value=("https://example.test/retried", "")
+            ), mock.patch.object(
+                web_app, "generate_curiosity_comment_with_llm", return_value="Read https://example.test/retried"
+            ), mock.patch.object(web_app.reel_poster, "publish_reel") as publish:
+                response = client.post("/api/posts/post-1/retry-website")
+            saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+        self.assertEqual(response.status_code, 200)
+        publish.assert_not_called()
+        self.assertEqual(saved["status"], "scheduled")
+        self.assertEqual(saved["scheduled_time"], "2099-01-02 03:04:00")
+        self.assertEqual(saved["article_url"], "https://example.test/retried")
+        self.assertEqual(saved["website_status"], "ready")
+
+    def test_worker_reuses_saved_article_without_duplicate_website_publish(self):
         from src.publisher import first_comment_queue
         from web import scheduled_publisher as worker
 
@@ -102,17 +167,19 @@ class SchedulingPublishFlowTests(unittest.TestCase):
                 "page_id": "page-1", "page_name": "Page One", "token": "fixture-token",
                 "media_file": "clip.mp4", "title": "Title", "content": "Caption",
                 "auto_first_comment": True, "use_llm_comment": True,
+                "article_url": "https://example.test/article", "website_status": "ready",
+                "first_comment": "Read: https://example.test/article", "first_comment_status": "ready",
             }]), encoding="utf-8")
+            website_publish = mock.Mock(side_effect=AssertionError("due-time CMS publish must not run"))
+            comment_generate = mock.Mock(side_effect=AssertionError("due-time comment generation must not run"))
             with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
                 worker, "POSTED_CLIPS_FILE", posted_file
             ), mock.patch.object(worker, "OUTPUT_DIR", output), mock.patch.object(
                 first_comment_queue, "QUEUE_FILE", queue_file
             ):
                 result = worker.process_scheduled_posts_once(
-                    poster=Poster(),
-                    now=datetime(2026, 1, 1, 1, 0, 0),
-                    website_publisher=lambda filename, title: ("https://example.test/article", ""),
-                    comment_generator=lambda title, url, enable_llm=True: f"Read: {url}",
+                    poster=Poster(), now=datetime(2026, 1, 1, 1, 0, 0),
+                    website_publisher=website_publish, comment_generator=comment_generate,
                 )
         post = result["posts"][0]
         self.assertEqual(calls[0], ("publish", ""))
@@ -121,6 +188,46 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         self.assertEqual(post["article_url"], "https://example.test/article")
         self.assertEqual(post["fb_url"], "https://facebook.test/reel/123")
         self.assertEqual(post["first_comment_status"], "posted")
+        website_publish.assert_not_called()
+        comment_generate.assert_not_called()
+
+    def test_worker_publishes_facebook_after_saved_website_failure(self):
+        from src.publisher import first_comment_queue
+        from web import scheduled_publisher as worker
+
+        class Poster:
+            def publish_reel(self, **kwargs):
+                return {"success": True, "video_id": "video-website-failed"}
+
+            def post_first_comment(self, *args, **kwargs):
+                raise AssertionError("No comment exists after website failure")
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "output"
+            output.mkdir()
+            (output / "clip.mp4").write_bytes(b"video")
+            posts_file = root / "posts.json"
+            posts_file.write_text(json.dumps([{
+                "id": "post-1", "status": "scheduled", "scheduled_time": "2026-01-01 00:00:00",
+                "page_id": "page-1", "token": "fixture-token", "media_file": "clip.mp4",
+                "title": "Title", "content": "Caption", "auto_first_comment": True,
+                "website_status": "failed", "website_error": "CMS unavailable",
+                "first_comment": "", "first_comment_status": "generation_failed",
+            }]), encoding="utf-8")
+            with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
+                worker, "POSTED_CLIPS_FILE", root / "posted.json"
+            ), mock.patch.object(worker, "OUTPUT_DIR", output), mock.patch.object(
+                first_comment_queue, "QUEUE_FILE", root / "queue.json"
+            ):
+                result = worker.process_scheduled_posts_once(
+                    poster=Poster(), now=datetime(2026, 1, 1, 1, 0, 0),
+                    website_publisher=mock.Mock(side_effect=AssertionError("must not retry automatically")),
+                )
+        post = result["posts"][0]
+        self.assertEqual(post["status"], "published")
+        self.assertEqual(post["post_fb_id"], "video-website-failed")
+        self.assertEqual(post["website_status"], "failed")
 
     def test_comment_failure_is_explicit_and_retryable(self):
         from src.publisher import first_comment_queue

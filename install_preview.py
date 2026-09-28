@@ -8,7 +8,7 @@ Scope:
 - Records build identity and SHA256 of the payload archive for verification.
 
 Usage:
-    python install_preview.py --payload Highlight_Desktop_Preview_v1.0.19-preview.6.zip
+    python install_preview.py --payload Highlight_Desktop_Preview_v1.0.19-preview.7.zip
 """
 
 from __future__ import annotations

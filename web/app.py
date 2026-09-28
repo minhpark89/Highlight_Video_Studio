@@ -91,6 +91,69 @@ JOBS_FILE = BASE_DIR / "jobs.json"
 POSTS_FILE = BASE_DIR / "posts.json"
 CRAWLED_VIDEOS_FILE = BASE_DIR / "crawled_videos.json"
 
+
+def prepare_website_article_for_schedule(
+    clip_filename,
+    title,
+    *,
+    article_url="",
+    first_comment="",
+    auto_first_comment=True,
+    use_llm_comment=True,
+):
+    """Create website content before a schedule is acknowledged.
+
+    Website failures are returned as schedule metadata instead of raising, so a
+    valid Facebook schedule is never dropped because CMS upload/publish failed.
+    """
+    article_url = str(article_url or "").strip()
+    first_comment = str(first_comment or "").strip()
+    result = {
+        "article_url": article_url,
+        "website_status": "ready" if article_url else "not_configured",
+        "website_error": "",
+        "first_comment": first_comment,
+        "first_comment_status": "ready" if first_comment else "not_configured",
+        "first_comment_error": "",
+    }
+    if not auto_first_comment:
+        return result
+    try:
+        if not article_url:
+            cms_result = publish_clip_to_website_cms(clip_filename, title)
+            article_url = cms_result[0] if isinstance(cms_result, tuple) else str(cms_result or "")
+            if not article_url:
+                raise WebsiteServiceError("CMS không trả Website URL")
+        if not first_comment:
+            try:
+                first_comment = generate_curiosity_comment_with_llm(
+                    title,
+                    article_url,
+                    enable_llm=bool(use_llm_comment),
+                )
+            except Exception:
+                first_comment = (
+                    f"🔥 Watch the full uncut footage and breakdown here: {article_url}\n"
+                    "👉 Scroll down the article to stream the complete high-definition video!"
+                )
+        result.update({
+            "article_url": article_url,
+            "website_status": "ready",
+            "website_error": "",
+            "first_comment": first_comment,
+            "first_comment_status": "ready" if first_comment else "not_configured",
+            "first_comment_error": "",
+        })
+    except Exception as exc:
+        error = str(exc)
+        result.update({
+            "website_status": "failed",
+            "website_error": error,
+            "first_comment_status": "generation_failed" if not first_comment else "ready",
+            "first_comment_error": error if not first_comment else "",
+        })
+    return result
+
 def load_crawled_videos():
     if not CRAWLED_VIDEOS_FILE.exists():
         return []
@@ -1641,6 +1704,7 @@ def api_publish_reel():
     success_count = 0
     pages_updated = False
     scheduled_posts = load_posts() if schedule_time else []
+    website_fields = None
 
     # Tinh toan thoi gian hen gio co stagger cho tung page
     base_schedule_ts = None
@@ -1656,6 +1720,15 @@ def api_publish_reel():
                 base_schedule_ts = int(schedule_time)
             except Exception:
                 pass
+
+        website_fields = prepare_website_article_for_schedule(
+            clip_filename,
+            title,
+            article_url=data.get("article_url") or data.get("website_url"),
+            first_comment=first_comment,
+            auto_first_comment=bool(data.get("auto_first_comment", False)),
+            use_llm_comment=bool(data.get("use_llm_comment", True)),
+        )
 
     for idx, pid in enumerate(target_page_ids):
         p_info = next((p for p in pages if p.get("page_id") == pid), None)
@@ -1697,12 +1770,12 @@ def api_publish_reel():
                 "page_name": p_info.get("page_name", pid),
                 "type": "reel",
                 "media_file": clip_filename,
-                "first_comment": first_comment,
-                "first_comment_status": "ready" if first_comment.strip() else "not_configured",
-                "first_comment_error": "",
-                "article_url": str(data.get("article_url") or data.get("website_url") or "").strip(),
-                "website_status": "ready" if (data.get("article_url") or data.get("website_url")) else "not_configured",
-                "website_error": "",
+                "first_comment": website_fields["first_comment"],
+                "first_comment_status": website_fields["first_comment_status"],
+                "first_comment_error": website_fields["first_comment_error"],
+                "article_url": website_fields["article_url"],
+                "website_status": website_fields["website_status"],
+                "website_error": website_fields["website_error"],
                 "auto_first_comment": bool(data.get("auto_first_comment", False)),
                 "use_llm_comment": bool(data.get("use_llm_comment", True)),
                 "status": "scheduled",
@@ -1719,6 +1792,9 @@ def api_publish_reel():
                 "status": "SCHEDULED_LOCAL",
                 "post_id": post_entry["id"],
                 "scheduled_publish_time": curr_sched,
+                "article_url": post_entry["article_url"],
+                "website_status": post_entry["website_status"],
+                "website_error": post_entry["website_error"],
             })
             continue
 
@@ -1782,10 +1858,18 @@ def load_website_config():
     if os.path.exists(WEBSITE_CFG_FILE):
         try:
             with open(WEBSITE_CFG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                cfg = json.load(f)
+            video = dict(cfg.get("video_upload") or {})
+            if str(video.get("method") or "").strip().lower() == "scp" and not any(
+                str(video.get(key) or "").strip()
+                for key in ("host", "username", "private_key_path", "remote_dir", "public_base_url")
+            ):
+                video["method"] = "cms"
+                cfg["video_upload"] = video
+            return cfg
         except Exception:
             pass
-    return {"base_url": "", "username": "", "password": "", "video_upload": {"method": "scp", "port": 22}}
+    return {"base_url": "", "username": "", "password": "", "video_upload": {"method": "cms", "port": 22}}
 
 def save_website_config(cfg):
     os.makedirs(os.path.dirname(WEBSITE_CFG_FILE), exist_ok=True)
@@ -1801,7 +1885,7 @@ def api_get_website_config():
             "base_url": cfg.get("base_url", ""),
             "username": cfg.get("username", ""),
             "has_password": bool(cfg.get("password")),
-            "video_upload": cfg.get("video_upload") or {"method": "scp", "port": 22}
+            "video_upload": cfg.get("video_upload") or {"method": "cms", "port": 22}
         }
     })
 
@@ -2024,6 +2108,32 @@ def api_delete_post(post_id):
     return jsonify({"success": True})
 
 
+@app.route("/api/posts/<post_id>/retry-website", methods=["POST"])
+def api_retry_post_website(post_id):
+    """Retry only CMS preparation; never publish or reschedule Facebook."""
+    posts = load_posts()
+    post = next((item for item in posts if item.get("id") == post_id), None)
+    if not post:
+        return jsonify({"success": False, "error": "Không tìm thấy bài đã lên lịch"}), 404
+    if post.get("article_url") and post.get("website_status") == "ready":
+        return jsonify({"success": True, "post": post, "already_ready": True})
+
+    fields = prepare_website_article_for_schedule(
+        post.get("media_file") or post.get("clip_filename"),
+        post.get("title", ""),
+        article_url=post.get("article_url"),
+        first_comment=post.get("first_comment"),
+        auto_first_comment=True,
+        use_llm_comment=post.get("use_llm_comment", True),
+    )
+    post.update(fields)
+    post["website_retried_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    save_posts(posts)
+    if post.get("website_status") != "ready":
+        return jsonify({"success": False, "error": post.get("website_error"), "post": post}), 502
+    return jsonify({"success": True, "post": post})
+
+
 @app.route("/api/distribute/batch", methods=["POST"])
 def api_distribute_batch():
     import re
@@ -2139,6 +2249,14 @@ def api_distribute_batch():
             # Lấy thông tin video bám sát nội dung gốc
             meta = get_clip_metadata(clip_fn)
             video_title = meta.get("video_title") or meta.get("clean_title") or f"Highlight Moments #{scheduled_count+1}"
+            website_fields = prepare_website_article_for_schedule(
+                clip_fn,
+                video_title,
+                article_url=configured_website_url,
+                first_comment=configured_first_comment,
+                auto_first_comment=bool(auto_first_comment),
+                use_llm_comment=bool(use_llm_comment),
+            )
 
             post_entry = {
                 "id": post_id,
@@ -2151,12 +2269,12 @@ def api_distribute_batch():
                 "group_name": group.get("name", "Nhóm Fanpage"),
                 "type": "reel",
                 "media_file": clip_fn,
-                "article_url": configured_website_url,
-                "website_status": "ready" if configured_website_url else ("pending_generation" if auto_first_comment else "not_configured"),
-                "website_error": "",
-                "first_comment": configured_first_comment,
-                "first_comment_status": "ready" if configured_first_comment else ("pending_generation" if auto_first_comment else "not_configured"),
-                "first_comment_error": "",
+                "article_url": website_fields["article_url"],
+                "website_status": website_fields["website_status"],
+                "website_error": website_fields["website_error"],
+                "first_comment": website_fields["first_comment"],
+                "first_comment_status": website_fields["first_comment_status"],
+                "first_comment_error": website_fields["first_comment_error"],
                 "auto_first_comment": bool(auto_first_comment),
                 "use_llm_comment": bool(use_llm_comment),
                 "status": "scheduled",
@@ -2173,6 +2291,7 @@ def api_distribute_batch():
         "success": True,
         "scheduled_count": scheduled_count,
         "posts_per_page": posts_per_page,
+        "website_failed_count": sum(1 for post in posts[-scheduled_count:] if post.get("website_status") == "failed"),
         "message": f"Đã phân bổ thành công {scheduled_count} bài viết cho {len(page_ids)} Fanpage ({posts_per_page} bài/page)!"
     })
 

@@ -3,7 +3,7 @@
   "username": "",
   "password": "",
   "video_upload": {
-    "method": "scp",
+    "method": "cms",
     "host": "",
     "port": 22,
     "username": "",

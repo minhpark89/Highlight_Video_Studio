@@ -14,7 +14,7 @@ python run_local.py                                      # loopback-only desktop
 
 - `run_local.py` binds an OS-assigned ephemeral loopback port (never 5080) and requires the per-run session token from `%LOCALAPPDATA%\HighlightVideoStudio\run\runtime.json` in `X-Highlight-Session`.
 - `install_preview.py` refuses any target equal to or inside `D:\Highlight_Video_Studio`, and never stops or signals production processes.
-- Build identity: `PRERELEASE_NAME = highlight-desktop-offline-preview`, `PRERELEASE_BUILD = 1.0.19-preview.6`, while `APP_VERSION` stays `1.0.19`.
+- Build identity: `PRERELEASE_NAME = highlight-desktop-offline-preview`, `PRERELEASE_BUILD = 1.0.19-preview.7`, while `APP_VERSION` stays `1.0.19`.
 
 ```powershell
 python -c "import json; from multi_pc.environment import environment_report; print(json.dumps(environment_report()['render_profile'], indent=2))"

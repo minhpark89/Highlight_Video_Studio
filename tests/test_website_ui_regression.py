@@ -12,6 +12,7 @@ TEMPLATE_PATHS = (
 )
 WEBSITE_FUNCTIONS = (
     "loadWebsiteConfig",
+    "updateVideoUploadAdvancedVisibility",
     "saveWebsiteConfig",
     "testWebsiteConnection",
     "testVideoUploader",
@@ -78,6 +79,36 @@ class WebsiteUiRegressionTests(unittest.TestCase):
             TEMPLATE_PATHS[1].read_bytes(),
             "web/index.html and web/templates/index.html must ship the same Website/CMS UI",
         )
+
+    def test_cms_is_default_and_scp_is_advanced_legacy_option(self):
+        for path in TEMPLATE_PATHS:
+            with self.subTest(template=path.relative_to(BASE_DIR)):
+                html = path.read_text(encoding="utf-8")
+                self.assertIn('<option value="cms" selected>Upload trực tiếp qua CMS (mặc định)</option>', html)
+                self.assertIn('<option value="scp">SCP/SSH (nâng cao / tương thích cấu hình cũ)</option>', html)
+                self.assertIn('id="cfg_video_advanced" style="display:none', html)
+                self.assertIn("advanced.style.display = method === 'scp' ? 'block' : 'none'", html)
+                self.assertIn("cfg_video_method: video.method || 'cms'", html)
+
+    def test_group_page_select_all_is_scoped_to_current_filter(self):
+        for path in TEMPLATE_PATHS:
+            with self.subTest(template=path.relative_to(BASE_DIR)):
+                html = path.read_text(encoding="utf-8")
+                self.assertIn('id="group-pages-filter"', html)
+                self.assertIn('class="group-page-choice"', html)
+                body = function_body(html, "setFilteredGroupPagesChecked")
+                self.assertIn("getFilteredGroupPageChoices()", body)
+                self.assertNotIn("querySelectorAll('.group-page-checkbox')", body)
+                self.assertIn("setFilteredGroupPagesChecked(true)", html)
+                self.assertIn("setFilteredGroupPagesChecked(false)", html)
+
+    def test_failed_website_ui_offers_safe_manual_retry(self):
+        for path in TEMPLATE_PATHS:
+            with self.subTest(template=path.relative_to(BASE_DIR)):
+                html = path.read_text(encoding="utf-8")
+                self.assertIn("Thử lại Website", html)
+                self.assertIn("/retry-website", html)
+                self.assertIn("Lịch Facebook vẫn được giữ nguyên", html)
 
 
 if __name__ == "__main__":

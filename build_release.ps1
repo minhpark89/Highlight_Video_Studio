@@ -1,6 +1,6 @@
 param(
     [string]$Version = "1.0.19",
-    [string]$PreviewRevision = "preview.6",
+    [string]$PreviewRevision = "preview.7",
     [string]$BuildChannel = "desktop-test",
     [switch]$SkipTests,
     [string]$ToolSource = "D:\Highlight_Video_Studio\bin",

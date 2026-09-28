@@ -236,8 +236,15 @@ class WebsiteArticleService:
 
     def _video_settings(self) -> Dict[str, Any]:
         raw = dict(self.cfg.video_upload or {})
+        method = str(raw.get("method") or "cms").strip().lower()
+        # preview.5/6 shipped an empty SCP placeholder. Treat only that empty
+        # legacy placeholder as CMS-native upload; preserve real SCP configs.
+        if method == "scp" and not any(str(raw.get(key) or "").strip() for key in (
+            "host", "username", "private_key_path", "remote_dir", "public_base_url",
+        )):
+            method = "cms"
         return {
-            "method": str(raw.get("method") or "scp").strip().lower(),
+            "method": method,
             "host": str(raw.get("host") or "").strip(),
             "port": int(raw.get("port") or 22),
             "username": str(raw.get("username") or "").strip(),

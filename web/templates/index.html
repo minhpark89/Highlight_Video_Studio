@@ -1719,15 +1719,21 @@
               <i class="bi bi-shield-lock"></i> Để trống mật khẩu nếu không muốn thay đổi giá trị đang lưu.
             </div>
             <div style="border-top:1px solid #23304d; margin:20px 0 16px; padding-top:18px;">
-              <div style="font-weight:800; margin-bottom:12px;"><i class="bi bi-camera-video"></i> Máy chủ phát video công khai</div>
+              <div style="font-weight:800; margin-bottom:6px;"><i class="bi bi-camera-video"></i> Upload video bài viết</div>
+              <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;">Mặc định dùng upload trực tiếp qua CMS. SCP/SSH chỉ dành cho cấu hình nâng cao hoặc hệ thống cũ.</div>
               <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-                <div><label class="form-label">Phương thức upload</label><select id="cfg_video_method" class="form-control"><option value="scp">SCP/SFTP (khuyến nghị)</option><option value="cms">CMS presigned upload</option></select></div>
-                <div><label class="form-label">SSH Host</label><input id="cfg_video_host" class="form-control" placeholder="157.173.116.71"></div>
-                <div><label class="form-label">SSH Port</label><input id="cfg_video_port" type="number" class="form-control" value="22" min="1" max="65535"></div>
-                <div><label class="form-label">SSH Username</label><input id="cfg_video_user" class="form-control" placeholder="root"></div>
-                <div style="grid-column:1/-1"><label class="form-label">Đường dẫn private key trên máy</label><input id="cfg_video_key" class="form-control" placeholder="C:\Users\Bạn\.ssh\id_ed25519"></div>
-                <div style="grid-column:1/-1"><label class="form-label">Thư mục video trên server</label><input id="cfg_video_remote" class="form-control" placeholder="/var/www/portfolio/videos"></div>
-                <div style="grid-column:1/-1"><label class="form-label">Public video URL</label><input id="cfg_video_public" class="form-control" placeholder="https://studio.example.com/videos"></div>
+                <div style="grid-column:1/-1"><label class="form-label">Phương thức upload</label><select id="cfg_video_method" class="form-control" onchange="updateVideoUploadAdvancedVisibility()"><option value="cms" selected>Upload trực tiếp qua CMS (mặc định)</option><option value="scp">SCP/SSH (nâng cao / tương thích cấu hình cũ)</option></select></div>
+              </div>
+              <div id="cfg_video_advanced" style="display:none;margin-top:12px;padding:14px;border:1px solid #334155;border-radius:8px;background:#0b1329;">
+                <div style="font-size:12px;font-weight:700;color:#f59e0b;margin-bottom:10px;"><i class="bi bi-sliders"></i> Cấu hình SCP/SSH nâng cao</div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                  <div><label class="form-label">SSH Host</label><input id="cfg_video_host" class="form-control" placeholder="157.173.116.71"></div>
+                  <div><label class="form-label">SSH Port</label><input id="cfg_video_port" type="number" class="form-control" value="22" min="1" max="65535"></div>
+                  <div><label class="form-label">SSH Username</label><input id="cfg_video_user" class="form-control" placeholder="root"></div>
+                  <div style="grid-column:1/-1"><label class="form-label">Đường dẫn private key trên máy</label><input id="cfg_video_key" class="form-control" placeholder="C:\Users\Bạn\.ssh\id_ed25519"></div>
+                  <div style="grid-column:1/-1"><label class="form-label">Thư mục video trên server</label><input id="cfg_video_remote" class="form-control" placeholder="/var/www/portfolio/videos"></div>
+                  <div style="grid-column:1/-1"><label class="form-label">Public video URL</label><input id="cfg_video_public" class="form-control" placeholder="https://studio.example.com/videos"></div>
+                </div>
               </div>
               <div id="cfg_video_status" style="font-size:12px;color:#94a3b8;margin-top:10px;">Chưa kiểm tra máy chủ video.</div>
             </div>
@@ -3493,6 +3499,9 @@
     document.getElementById('group-input-name').value = '';
     m.style.display = 'flex';
 
+    const filterInput = document.getElementById('group-pages-filter');
+    if (filterInput) filterInput.value = '';
+
     // Nạp danh sách checkbox các Fanpage
     const box = document.getElementById('group-pages-select-box');
     if (box) {
@@ -3509,7 +3518,7 @@
           const hasToken = !!(p.page_token || p.has_token);
 
           return `
-            <label style="display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; color: #cbd5e1; cursor: pointer; padding: 8px 12px; border-radius: 8px; background: #0f172a; border: 1px solid #1e293b; margin-bottom: 4px; transition: background 0.15s;">
+            <label class="group-page-choice" data-page-search="${escapeHtml(`${pName} ${pId}`.toLowerCase())}" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; color: #cbd5e1; cursor: pointer; padding: 8px 12px; border-radius: 8px; background: #0f172a; border: 1px solid #1e293b; margin-bottom: 4px; transition: background 0.15s;">
               <div style="display: flex; align-items: center; gap: 10px; flex: 1; overflow: hidden;">
                 <input type="checkbox" class="group-page-checkbox" value="${pId}" style="width: 17px; height: 17px; accent-color: #8b5cf6; cursor: pointer; flex-shrink: 0;">
                 <div style="width: 32px; height: 32px; border-radius: 50%; overflow: hidden; background: ${avatarBg}; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
@@ -3529,6 +3538,30 @@
         }).join('');
       }
     }
+    filterGroupPageChoices();
+  }
+
+  function getFilteredGroupPageChoices() {
+    return Array.from(document.querySelectorAll('#group-pages-select-box .group-page-choice'))
+      .filter(row => row.style.display !== 'none');
+  }
+
+  function filterGroupPageChoices() {
+    const query = (document.getElementById('group-pages-filter')?.value || '').trim().toLowerCase();
+    const rows = Array.from(document.querySelectorAll('#group-pages-select-box .group-page-choice'));
+    rows.forEach(row => {
+      row.style.display = !query || (row.dataset.pageSearch || '').includes(query) ? 'flex' : 'none';
+    });
+    const visible = getFilteredGroupPageChoices().length;
+    const count = document.getElementById('group-pages-filter-count');
+    if (count) count.textContent = `${visible} / ${rows.length} Fanpage trong phạm vi hiện tại`;
+  }
+
+  function setFilteredGroupPagesChecked(checked) {
+    getFilteredGroupPageChoices().forEach(row => {
+      const checkbox = row.querySelector('.group-page-checkbox');
+      if (checkbox) checkbox.checked = Boolean(checked);
+    });
   }
 
   function closeAddGroupModal() {
@@ -4515,12 +4548,13 @@
         if (document.getElementById('cfg_web_user')) document.getElementById('cfg_web_user').value = d.config.username || '';
         const video = d.config.video_upload || {};
         const videoFields = {
-          cfg_video_method: video.method || 'scp', cfg_video_host: video.host || '',
+          cfg_video_method: video.method || 'cms', cfg_video_host: video.host || '',
           cfg_video_port: video.port || 22, cfg_video_user: video.username || '',
           cfg_video_key: video.private_key_path || '', cfg_video_remote: video.remote_dir || '',
           cfg_video_public: video.public_base_url || ''
         };
         Object.entries(videoFields).forEach(([id, value]) => { const el = document.getElementById(id); if (el) el.value = value; });
+        updateVideoUploadAdvancedVisibility();
         if (document.getElementById('cfg_web_status')) {
           if (d.config.has_password) {
             document.getElementById('cfg_web_status').innerHTML = '<span style="color:#22c55e;"><i class="bi bi-check-circle-fill"></i> Đã có mật khẩu. Để trống ô mật khẩu nếu không đổi.</span>';
@@ -4532,6 +4566,11 @@
     } catch (e) {
       console.warn('Lỗi loadWebsiteConfig:', e);
     }
+  }
+  function updateVideoUploadAdvancedVisibility() {
+    const method = document.getElementById('cfg_video_method')?.value || 'cms';
+    const advanced = document.getElementById('cfg_video_advanced');
+    if (advanced) advanced.style.display = method === 'scp' ? 'block' : 'none';
   }
   async function saveWebsiteConfig(e) {
     e.preventDefault();
@@ -4764,8 +4803,11 @@
     banner.innerHTML = '<i class="bi bi-hourglass-split"></i> Đang kết nối Meta Graph API v22.0 để tải video và xuất bản...';
     const payload = {
       filename: filename,
+      title: currentPublishContext.title || '',
       caption: caption,
       first_comment: firstComment,
+      auto_first_comment: mode === 'schedule',
+      use_llm_comment: true,
       group_id: groupId || null,
       page_id: singlePageId || null,
       schedule_time: (mode === 'schedule') ? scheduleDt : null,
@@ -5622,7 +5664,7 @@
           : (p.website_status === 'pending_generation' || p.website_status === 'generating')
             ? '<div style="color:#f59e0b;margin-top:5px;">Website: chờ tạo</div>'
             : (p.website_status === 'failed')
-              ? `<div style="color:#ef4444;margin-top:5px;" title="${escapeHtml(p.website_error || '')}">Website: tạo thất bại</div>`
+              ? `<div style="color:#ef4444;margin-top:5px;" title="${escapeHtml(p.website_error || '')}">Website: tạo thất bại</div><button type="button" onclick="retryWebsiteForPost('${p.id}')" style="margin-top:4px;background:#7c3aed;color:#fff;border:none;padding:3px 8px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;"><i class="bi bi-arrow-repeat"></i> Thử lại Website</button>`
               : '<div style="color:#64748b;margin-top:5px;">Website: không cấu hình</div>';
         const videoActions = safeLocalVideoUrl
           ? `<div style="margin-top:5px;display:flex;gap:8px;"><a href="${safeLocalVideoUrl}" target="_blank" rel="noopener" style="color:#22d3ee;"><i class="bi bi-play-circle"></i> Xem video</a><a href="${safeLocalDownloadUrl}" style="color:#94a3b8;"><i class="bi bi-download"></i> Tải</a></div>`
@@ -5670,6 +5712,19 @@
     } catch (e) {
       console.error(e);
       tbody.innerHTML = `<tr><td colspan="8" style="color: #ef4444; padding: 20px; text-align: center;">Lỗi tải bài đăng: ${e.message}</td></tr>`;
+    }
+  }
+
+  async function retryWebsiteForPost(postId) {
+    try {
+      const res = await fetch(`/api/posts/${postId}/retry-website`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Không thể tạo bài Website');
+      showToast(data.already_ready ? 'Website article đã sẵn sàng.' : 'Đã tạo lại Website article thành công!');
+      loadPostsTable();
+    } catch (err) {
+      alert('Website vẫn lỗi: ' + err.message + '\nLịch Facebook vẫn được giữ nguyên.');
+      loadPostsTable();
     }
   }
 
@@ -5831,7 +5886,15 @@
             <span style="font-size: 11px; color: #64748b;">Video render xong từ studio sẽ tự động sẵn sàng cho nhóm này đăng bài.</span>
           </div>
           <div>
-            <label class="form-label" style="font-size: 12px; font-weight: 600; color: #94a3b8;">Chọn các Fanpage thuộc nhóm:</label>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px;">
+              <label class="form-label" style="font-size: 12px; font-weight: 600; color: #94a3b8;margin:0;">Chọn các Fanpage thuộc nhóm:</label>
+              <div style="display:flex;gap:6px;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="setFilteredGroupPagesChecked(true)">Chọn tất cả</button>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="setFilteredGroupPagesChecked(false)">Bỏ chọn tất cả</button>
+              </div>
+            </div>
+            <input type="search" id="group-pages-filter" class="form-control" placeholder="Lọc theo tên hoặc Page ID..." oninput="filterGroupPageChoices()" style="margin-bottom:8px;font-size:12px;">
+            <div id="group-pages-filter-count" style="font-size:11px;color:#64748b;margin-bottom:6px;"></div>
             <div id="group-pages-select-box" style="max-height: 280px; overflow-y: auto; background: #0b1329; border: 1px solid #23304d; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 6px;">
               <span style="font-size: 11px; color: #64748b;">Đang tải danh sách page...</span>
             </div>

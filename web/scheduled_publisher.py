@@ -215,44 +215,13 @@ def _process_scheduled_posts_once(
             })
             continue
 
-        if post.get("auto_first_comment", True):
-            post["website_status"] = "generating"
-            post["first_comment_status"] = "generating"
-            try:
-                cms_result = website_publisher(clip_filename, title)
-                article_url = cms_result[0] if isinstance(cms_result, tuple) else str(cms_result)
-                if not article_url:
-                    raise RuntimeError("CMS không trả Website URL")
-                post["article_url"] = article_url
-                try:
-                    first_comment = comment_generator(
-                        title,
-                        article_url,
-                        enable_llm=post.get("use_llm_comment", True),
-                    )
-                except Exception:
-                    first_comment = (
-                        f"🔥 Watch the full uncut footage and breakdown here: {article_url}\n"
-                        "👉 Scroll down the article to stream the complete high-definition video!"
-                    )
-                post["first_comment"] = first_comment
-                post["website_status"] = "ready"
-                post["first_comment_status"] = "ready"
-            except Exception as exc:
-                post.update({
-                    "status": "failed",
-                    "retryable": True,
-                    "retry_stage": "website",
-                    "website_status": "failed",
-                    "website_error": str(exc),
-                    "first_comment_status": "generation_failed",
-                    "first_comment_error": str(exc),
-                })
-                continue
-        elif first_comment:
+        # Website creation belongs to schedule confirmation. Due-time publishing
+        # only consumes persisted article_url/first_comment and must never create
+        # a duplicate CMS article. A prior CMS failure does not cancel Facebook.
+        if first_comment:
             post["first_comment_status"] = "ready"
         else:
-            post["first_comment_status"] = "not_configured"
+            post["first_comment_status"] = post.get("first_comment_status") or "not_configured"
 
         try:
             # The worker publishes first, then comments. Passing an empty comment
