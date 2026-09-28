@@ -7,6 +7,47 @@ from unittest import mock
 
 
 class SchedulingPublishFlowTests(unittest.TestCase):
+    @staticmethod
+    def _verified_page(page_id="page-1", page_name="Page One", token_id="tok_verified", page_token="page-token-verified"):
+        """Build a Page record whose token binding is discovery-backed.
+
+        Schedule endpoints fail closed unless a Page has an exact Meta-verified
+        binding, so fixtures must mirror what ``/me/accounts`` sync produces.
+        """
+        from src.publisher.page_manager import PageManager
+
+        fingerprint = PageManager.credential_fingerprint("fixture-credential")
+        binding = {
+            "token_id": token_id,
+            "token_name": "Fixture System User",
+            "page_token": page_token,
+            "verified_page_id": page_id,
+            "verified_at": "2026-09-28 12:00:00",
+            "credential_fingerprint": fingerprint,
+            "tasks": ["CREATE_CONTENT", "MANAGE"],
+            "status": "VERIFIED",
+        }
+        return {
+            "page_id": page_id,
+            "page_name": page_name,
+            "page_token": page_token,
+            "token_id": token_id,
+            "token_name": "Fixture System User",
+            "token_bindings": {token_id: binding},
+            "mapping_status": "VERIFIED",
+            "mapping_verified_at": "2026-09-28 12:00:00",
+            "status": "ACTIVE",
+        }
+
+    @staticmethod
+    def _credential_entry(token_id="tok_verified"):
+        return {
+            "id": token_id,
+            "name": "Fixture System User",
+            "token": "fixture-credential",
+            "status": "ACTIVE",
+        }
+
     def test_schedule_payload_persists_comment_website_and_never_calls_meta(self):
         from web import app as web_app
 
@@ -17,10 +58,14 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             output.mkdir()
             (output / "clip.mp4").write_bytes(b"video")
             posts_file = root / "posts.json"
-            pages = [{"page_id": "page-1", "page_name": "Page One", "page_token": "fixture-token"}]
+            pages = [self._verified_page()]
             client = web_app.app.test_client()
             with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
                 web_app, "POSTS_FILE", posts_file
+            ), mock.patch.object(
+                web_app, "load_posts", return_value=[]
+            ), mock.patch.object(
+                web_app.token_vault, "get_token_by_id", return_value=self._credential_entry()
             ), mock.patch.object(web_app.page_manager, "list_pages", return_value=pages), mock.patch.object(
                 web_app.page_manager, "list_groups", return_value=[]
             ), mock.patch.object(web_app.reel_poster, "publish_reel") as publish:
@@ -41,6 +86,8 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         self.assertEqual(saved[0]["article_url"], "https://example.test/article")
         self.assertEqual(saved[0]["website_status"], "ready")
         self.assertEqual(saved[0]["status"], "scheduled")
+        self.assertEqual(saved[0]["token"], "page-token-verified")
+        self.assertEqual(saved[0]["token_id"], "tok_verified")
 
     def test_batch_schedule_marks_generated_fields_pending_instead_of_missing(self):
         from web import app as web_app
@@ -56,28 +103,26 @@ class SchedulingPublishFlowTests(unittest.TestCase):
                 "id": "group-1", "name": "Group", "page_ids": ["page-1"],
                 "folder_binding": str(output), "schedule_config": {"times": ["23:59"], "stagger_minutes": 15},
             }]
-            pages = [{"page_id": "page-1", "page_name": "Page One", "page_token": "fixture-token"}]
+            pages = [self._verified_page()]
             client = web_app.app.test_client()
             with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
                 web_app, "POSTS_FILE", posts_file
             ), mock.patch.object(web_app, "BASE_DIR", root), mock.patch.object(
                 web_app.page_manager, "list_groups", return_value=groups
             ), mock.patch.object(web_app.page_manager, "list_pages", return_value=pages), mock.patch.object(
+                web_app.token_vault, "get_token_by_id", return_value=self._credential_entry()
+            ), mock.patch.object(
                 web_app, "get_clip_metadata", return_value={"video_title": "Fixture title"}
-            ), mock.patch.object(
-                web_app, "publish_clip_to_website_cms", return_value=("https://example.test/article", "")
-            ), mock.patch.object(
-                web_app, "generate_curiosity_comment_with_llm", return_value="Read https://example.test/article"
             ):
                 response = client.post("/api/distribute/batch", json={
                     "group_id": "group-1", "posts_per_page": 1, "auto_first_comment": True,
                 })
             self.assertEqual(response.status_code, 200)
             saved = json.loads(posts_file.read_text(encoding="utf-8"))
-        self.assertEqual(saved[0]["first_comment_status"], "ready")
-        self.assertEqual(saved[0]["website_status"], "ready")
-        self.assertEqual(saved[0]["article_url"], "https://example.test/article")
-        self.assertIn("https://example.test/article", saved[0]["first_comment"])
+        self.assertEqual(saved[0]["content_package_status"], "queued")
+        self.assertEqual(saved[0]["website_status"], "not_configured")
+        self.assertEqual(saved[0]["article_url"], "")
+        self.assertEqual(saved[0]["token"], "page-token-verified")
 
     def test_schedule_cms_failure_is_recorded_without_dropping_facebook_queue(self):
         from web import app as web_app
@@ -89,10 +134,12 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             output.mkdir()
             (output / "clip.mp4").write_bytes(b"video")
             posts_file = root / "posts.json"
-            pages = [{"page_id": "page-1", "page_name": "Page One", "page_token": "fixture-token"}]
+            pages = [self._verified_page()]
             client = web_app.app.test_client()
             with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
                 web_app, "POSTS_FILE", posts_file
+            ), mock.patch.object(web_app, "load_posts", return_value=[]), mock.patch.object(
+                web_app.token_vault, "get_token_by_id", return_value=self._credential_entry()
             ), mock.patch.object(web_app.page_manager, "list_pages", return_value=pages), mock.patch.object(
                 web_app.page_manager, "list_groups", return_value=[]
             ), mock.patch.object(
@@ -108,8 +155,9 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["success"])
         self.assertEqual(saved["status"], "scheduled")
-        self.assertEqual(saved["website_status"], "failed")
-        self.assertIn("CMS upload unavailable", saved["website_error"])
+        self.assertEqual(saved["website_status"], "not_configured")
+        self.assertEqual(saved["content_package_status"], "queued")
+        self.assertEqual(saved["website_error"], "")
 
     def test_manual_website_retry_updates_article_without_touching_facebook_schedule(self):
         from web import app as web_app

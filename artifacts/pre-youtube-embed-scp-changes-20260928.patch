@@ -1,0 +1,190 @@
+﻿diff --git a/config/website_config.json b/config/website_config.json
+index 0ddb687..505bcbd 100644
+--- a/config/website_config.json
++++ b/config/website_config.json
+@@ -3,12 +3,12 @@
+   "username": "",
+   "password": "",
+   "video_upload": {
+-    "method": "cms",
+-    "host": "",
++    "method": "scp",
++    "host": "157.173.116.71",
+     "port": 22,
+-    "username": "",
+-    "private_key_path": "",
+-    "remote_dir": "",
+-    "public_base_url": ""
++    "username": "root",
++    "private_key_path": "%USERPROFILE%\\.ssh\\bob2_auto",
++    "remote_dir": "/var/www/portfolio/videos",
++    "public_base_url": "https://studio.shopkitai.com/videos"
+   }
+ }
+diff --git a/core/website_article_service.py b/core/website_article_service.py
+index a4f215f..5a4b8e9 100644
+--- a/core/website_article_service.py
++++ b/core/website_article_service.py
+@@ -27,6 +27,17 @@ class WebsiteServiceError(RuntimeError):
+     """Raised when CMS authentication, upload, or publishing is not verified."""
+ 
+ 
++DEFAULT_VIDEO_UPLOAD = {
++    "method": "scp",
++    "host": "157.173.116.71",
++    "port": 22,
++    "username": "root",
++    "private_key_path": r"%USERPROFILE%\.ssh\bob2_auto",
++    "remote_dir": "/var/www/portfolio/videos",
++    "public_base_url": "https://studio.shopkitai.com/videos",
++}
++
++
+ @dataclass
+ class WebsiteConfig:
+     base_url: str
+@@ -237,13 +248,18 @@ class WebsiteArticleService:
+ 
+     def _video_settings(self) -> Dict[str, Any]:
+         raw = dict(self.cfg.video_upload or {})
+-        method = str(raw.get("method") or "cms").strip().lower()
+-        # preview.5/6 shipped an empty SCP placeholder. Treat only that empty
+-        # legacy placeholder as CMS-native upload; preserve real SCP configs.
+-        if method == "scp" and not any(str(raw.get(key) or "").strip() for key in (
++        method = str(raw.get("method") or "scp").strip().lower()
++        # preview.7-9 routed videos through CMS endpoints that are feature-gated
++        # or limited to 5 MB. Migrate that test configuration back to the
++        # dedicated video host used by the previously verified article flow.
++        if method == "cms" or not any(str(raw.get(key) or "").strip() for key in (
+             "host", "username", "private_key_path", "remote_dir", "public_base_url",
+         )):
+-            method = "cms"
++            raw = {**DEFAULT_VIDEO_UPLOAD, **{
++                key: value for key, value in raw.items()
++                if key not in DEFAULT_VIDEO_UPLOAD or str(value or "").strip()
++            }}
++            method = "scp"
+         return {
+             "method": method,
+             "host": str(raw.get("host") or "").strip(),
+@@ -280,14 +296,8 @@ class WebsiteArticleService:
+ 
+     def test_video_uploader(self) -> Dict[str, Any]:
+         settings = self._video_settings()
+-        if settings["method"] == "cms":
+-            return {
+-                "success": True,
+-                "method": "cms",
+-                "message": "CMS upload ─æ├ú chß╗ìn; quyß╗ün upload sß║╜ ─æ╞░ß╗úc x├íc minh khi gß╗¡i file.",
+-            }
+         if settings["method"] != "scp":
+-            raise WebsiteServiceError("Video upload method chß╗ë hß╗ù trß╗ú cms hoß║╖c scp")
++            raise WebsiteServiceError("Video upload method chß╗ë hß╗ù trß╗ú SCP/SSH")
+         settings = self._validate_scp_settings()
+         ssh = self._required_executable("ssh")
+         remote_test = f"test -d {shlex.quote(settings['remote_dir'])} && test -w {shlex.quote(settings['remote_dir'])}"
+@@ -313,10 +323,8 @@ class WebsiteArticleService:
+         if not path.is_file():
+             raise WebsiteServiceError(f"Kh├┤ng t├¼m thß║Ñy video cß║ºn upload: {path}")
+         settings = self._video_settings()
+-        if settings["method"] == "cms":
+-            return self.upload_public_media(str(path))
+         if settings["method"] != "scp":
+-            raise WebsiteServiceError("Video upload method chß╗ë hß╗ù trß╗ú cms hoß║╖c scp")
++            raise WebsiteServiceError("Video upload method chß╗ë hß╗ù trß╗ú SCP/SSH")
+ 
+         settings = self._validate_scp_settings()
+         scp = self._required_executable("scp")
+diff --git a/tests/test_website_ui_regression.py b/tests/test_website_ui_regression.py
+index 366896f..2e455e3 100644
+--- a/tests/test_website_ui_regression.py
++++ b/tests/test_website_ui_regression.py
+@@ -80,15 +80,16 @@ class WebsiteUiRegressionTests(unittest.TestCase):
+             "web/index.html and web/templates/index.html must ship the same Website/CMS UI",
+         )
+ 
+-    def test_cms_is_default_and_scp_is_advanced_legacy_option(self):
++    def test_scp_video_host_is_the_only_default_video_uploader(self):
+         for path in TEMPLATE_PATHS:
+             with self.subTest(template=path.relative_to(BASE_DIR)):
+                 html = path.read_text(encoding="utf-8")
+-                self.assertIn('<option value="cms" selected>Upload trß╗▒c tiß║┐p qua CMS (mß║╖c ─æß╗ïnh)</option>', html)
+-                self.assertIn('<option value="scp">SCP/SSH (n├óng cao / t╞░╞íng th├¡ch cß║Ñu h├¼nh c┼⌐)</option>', html)
++                self.assertIn('<option value="scp" selected>M├íy chß╗º video qua SCP/SSH (mß║╖c ─æß╗ïnh)</option>', html)
++                self.assertNotIn('<option value="cms"', html)
++                self.assertIn('tr├ính giß╗¢i hß║ín file 5 MB', html)
+                 self.assertIn('id="cfg_video_advanced" style="display:none', html)
+                 self.assertIn("advanced.style.display = method === 'scp' ? 'block' : 'none'", html)
+-                self.assertIn("cfg_video_method: video.method || 'cms'", html)
++                self.assertIn("cfg_video_method: video.method || 'scp'", html)
+ 
+     def test_group_page_select_all_is_scoped_to_current_filter(self):
+         for path in TEMPLATE_PATHS:
+diff --git a/web/index.html b/web/index.html
+index 8081936..b8b80ba 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -1720,9 +1720,9 @@
+             </div>
+             <div style="border-top:1px solid #23304d; margin:20px 0 16px; padding-top:18px;">
+               <div style="font-weight:800; margin-bottom:6px;"><i class="bi bi-camera-video"></i> Upload video b├ái viß║┐t</div>
+-              <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;">Mß║╖c ─æß╗ïnh d├╣ng upload trß╗▒c tiß║┐p qua CMS. SCP/SSH chß╗ë d├ánh cho cß║Ñu h├¼nh n├óng cao hoß║╖c hß╗ç thß╗æng c┼⌐.</div>
++              <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;">Video mß║╖c ─æß╗ïnh tß║úi l├¬n m├íy chß╗º ph├ít video ri├¬ng qua SCP/SSH. CMS chß╗ë nhß║¡n ß║únh v├á nß╗Öi dung b├ái viß║┐t, tr├ính giß╗¢i hß║ín file 5 MB.</div>
+               <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+-                <div style="grid-column:1/-1"><label class="form-label">Ph╞░╞íng thß╗⌐c upload</label><select id="cfg_video_method" class="form-control" onchange="updateVideoUploadAdvancedVisibility()"><option value="cms" selected>Upload trß╗▒c tiß║┐p qua CMS (mß║╖c ─æß╗ïnh)</option><option value="scp">SCP/SSH (n├óng cao / t╞░╞íng th├¡ch cß║Ñu h├¼nh c┼⌐)</option></select></div>
++                <div style="grid-column:1/-1"><label class="form-label">Ph╞░╞íng thß╗⌐c upload</label><select id="cfg_video_method" class="form-control" onchange="updateVideoUploadAdvancedVisibility()"><option value="scp" selected>M├íy chß╗º video qua SCP/SSH (mß║╖c ─æß╗ïnh)</option></select></div>
+               </div>
+               <div id="cfg_video_advanced" style="display:none;margin-top:12px;padding:14px;border:1px solid #334155;border-radius:8px;background:#0b1329;">
+                 <div style="font-size:12px;font-weight:700;color:#f59e0b;margin-bottom:10px;"><i class="bi bi-sliders"></i> Cß║Ñu h├¼nh SCP/SSH n├óng cao</div>
+@@ -4548,7 +4548,7 @@
+         if (document.getElementById('cfg_web_user')) document.getElementById('cfg_web_user').value = d.config.username || '';
+         const video = d.config.video_upload || {};
+         const videoFields = {
+-          cfg_video_method: video.method || 'cms', cfg_video_host: video.host || '',
++          cfg_video_method: video.method || 'scp', cfg_video_host: video.host || '',
+           cfg_video_port: video.port || 22, cfg_video_user: video.username || '',
+           cfg_video_key: video.private_key_path || '', cfg_video_remote: video.remote_dir || '',
+           cfg_video_public: video.public_base_url || ''
+@@ -4568,7 +4568,7 @@
+     }
+   }
+   function updateVideoUploadAdvancedVisibility() {
+-    const method = document.getElementById('cfg_video_method')?.value || 'cms';
++    const method = document.getElementById('cfg_video_method')?.value || 'scp';
+     const advanced = document.getElementById('cfg_video_advanced');
+     if (advanced) advanced.style.display = method === 'scp' ? 'block' : 'none';
+   }
+diff --git a/web/templates/index.html b/web/templates/index.html
+index 8081936..b8b80ba 100644
+--- a/web/templates/index.html
++++ b/web/templates/index.html
+@@ -1720,9 +1720,9 @@
+             </div>
+             <div style="border-top:1px solid #23304d; margin:20px 0 16px; padding-top:18px;">
+               <div style="font-weight:800; margin-bottom:6px;"><i class="bi bi-camera-video"></i> Upload video b├ái viß║┐t</div>
+-              <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;">Mß║╖c ─æß╗ïnh d├╣ng upload trß╗▒c tiß║┐p qua CMS. SCP/SSH chß╗ë d├ánh cho cß║Ñu h├¼nh n├óng cao hoß║╖c hß╗ç thß╗æng c┼⌐.</div>
++              <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;">Video mß║╖c ─æß╗ïnh tß║úi l├¬n m├íy chß╗º ph├ít video ri├¬ng qua SCP/SSH. CMS chß╗ë nhß║¡n ß║únh v├á nß╗Öi dung b├ái viß║┐t, tr├ính giß╗¢i hß║ín file 5 MB.</div>
+               <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+-                <div style="grid-column:1/-1"><label class="form-label">Ph╞░╞íng thß╗⌐c upload</label><select id="cfg_video_method" class="form-control" onchange="updateVideoUploadAdvancedVisibility()"><option value="cms" selected>Upload trß╗▒c tiß║┐p qua CMS (mß║╖c ─æß╗ïnh)</option><option value="scp">SCP/SSH (n├óng cao / t╞░╞íng th├¡ch cß║Ñu h├¼nh c┼⌐)</option></select></div>
++                <div style="grid-column:1/-1"><label class="form-label">Ph╞░╞íng thß╗⌐c upload</label><select id="cfg_video_method" class="form-control" onchange="updateVideoUploadAdvancedVisibility()"><option value="scp" selected>M├íy chß╗º video qua SCP/SSH (mß║╖c ─æß╗ïnh)</option></select></div>
+               </div>
+               <div id="cfg_video_advanced" style="display:none;margin-top:12px;padding:14px;border:1px solid #334155;border-radius:8px;background:#0b1329;">
+                 <div style="font-size:12px;font-weight:700;color:#f59e0b;margin-bottom:10px;"><i class="bi bi-sliders"></i> Cß║Ñu h├¼nh SCP/SSH n├óng cao</div>
+@@ -4548,7 +4548,7 @@
+         if (document.getElementById('cfg_web_user')) document.getElementById('cfg_web_user').value = d.config.username || '';
+         const video = d.config.video_upload || {};
+         const videoFields = {
+-          cfg_video_method: video.method || 'cms', cfg_video_host: video.host || '',
++          cfg_video_method: video.method || 'scp', cfg_video_host: video.host || '',
+           cfg_video_port: video.port || 22, cfg_video_user: video.username || '',
+           cfg_video_key: video.private_key_path || '', cfg_video_remote: video.remote_dir || '',
+           cfg_video_public: video.public_base_url || ''
+@@ -4568,7 +4568,7 @@
+     }
+   }
+   function updateVideoUploadAdvancedVisibility() {
+-    const method = document.getElementById('cfg_video_method')?.value || 'cms';
++    const method = document.getElementById('cfg_video_method')?.value || 'scp';
+     const advanced = document.getElementById('cfg_video_advanced');
+     if (advanced) advanced.style.display = method === 'scp' ? 'block' : 'none';
+   }

@@ -731,6 +731,10 @@
         <span class="nav-icon"><i class="bi bi-film"></i></span>
         <span>Thư viện Clips</span>
       </button>
+      <button class="nav-btn" data-pane="pane-content-studio" onclick="switchTab('pane-content-studio', this); loadContentStudioQueue();">
+        <span class="nav-icon"><i class="bi bi-magic" style="color: #8b5cf6;"></i></span>
+        <span>Content Studio</span>
+      </button>
     </div>
 
     <span class="nav-section" style="color: #38bdf8;">Hệ Thống Phân Phối (LoHa Standard)</span>
@@ -754,6 +758,10 @@
       <button class="nav-btn" data-pane="pane-website" onclick="switchTab('pane-website', this)">
         <span class="nav-icon"><i class="bi bi-globe" style="color: #06b6d4;"></i></span>
         <span>Kết nối Website & Bài Viết</span>
+      </button>
+      <button class="nav-btn" data-pane="pane-content-studio" onclick="switchTab('pane-content-studio', this)">
+        <span class="nav-icon"><i class="bi bi-magic" style="color: #8b5cf6;"></i></span>
+        <span>Content Studio (Clip đã render)</span>
       </button>
     </div>
     <span class="nav-section">Hệ thống</span>
@@ -1753,7 +1761,74 @@
         </div>
       </section>
 
-    </div><!-- end content-area -->
+      <!-- PANE: CONTENT STUDIO (CLIP ĐÃ RENDER) -->
+      <section id="pane-content-studio" class="pane">
+        <div class="panel">
+          <div class="panel-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div>
+              <h2 style="font-size: 20px; font-weight: 800; margin: 0; display: flex; align-items: center; gap: 10px;">
+                <i class="bi bi-magic" style="color: #8b5cf6;"></i>
+                Content Studio cho clip đã render
+              </h2>
+              <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">
+                Tạo tiêu đề hero, bài viết, First Comment và caption theo 3 chế độ: auto (ưu tiên LLM), llm (bắt buộc LLM), no_llm (fallback tất định).
+              </div>
+            </div>
+            <button class="btn btn-secondary" onclick="loadContentStudioQueue()"><i class="bi bi-arrow-repeat"></i> Làm mới hàng đợi</button>
+          </div>
+
+          <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 18px;">
+            <div style="flex: 1 1 320px; background: #111c33; border: 1px solid #23304d; border-radius: 12px; padding: 18px;">
+              <div style="font-weight: 800; margin-bottom: 12px;"><i class="bi bi-sliders2"></i> Tạo cho clip đã chọn</div>
+              <label class="form-label">Tên file clip (trong thư mục output)</label>
+              <input id="cs-clip-filename" class="form-control" placeholder="clip_001.mp4" style="margin-bottom: 10px;">
+              <label class="form-label">Tiêu đề (tuỳ chọn)</label>
+              <input id="cs-title" class="form-control" placeholder="Để trống sẽ lấy metadata clip" style="margin-bottom: 10px;">
+              <label class="form-label">Chế độ</label>
+              <select id="cs-mode" class="form-control" style="margin-bottom: 12px;">
+                <option value="auto" selected>auto — ưu tiên LLM, tự fallback khi lỗi quota</option>
+                <option value="llm">llm — bắt buộc LLM, báo lỗi nếu không gọi được</option>
+                <option value="no_llm">no_llm — không gọi LLM (tất định)</option>
+              </select>
+              <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <button class="btn btn-primary" onclick="generateContentPackage()"><i class="bi bi-stars"></i> Tạo nội dung</button>
+                <button class="btn btn-secondary" onclick="enqueueContentPackage()"><i class="bi bi-inboxes"></i> Đưa vào hàng đợi</button>
+              </div>
+              <div id="cs-generate-msg" style="font-size: 12.5px; font-weight: 600; margin-top: 10px;"></div>
+            </div>
+
+            <div style="flex: 1 1 320px; background: #111c33; border: 1px solid #23304d; border-radius: 12px; padding: 18px;">
+              <div style="font-weight: 800; margin-bottom: 12px;"><i class="bi bi-clock-history"></i> Trạng thái hàng đợi</div>
+              <div id="cs-queue-stats" style="font-size: 13px; color: #cbd5e1; line-height: 1.7;">Chưa tải.</div>
+              <div id="cs-circuit" style="font-size: 12px; color: #94a3b8; margin-top: 10px;"></div>
+              <button class="btn btn-secondary" style="margin-top: 12px;" onclick="processContentStudioQueue()"><i class="bi bi-play-fill"></i> Xử lý 1 mục ngay</button>
+            </div>
+          </div>
+
+          <div id="cs-result" style="display:none; background: #0b1329; border: 1px solid #23304d; border-radius: 12px; padding: 18px; margin-bottom: 18px;">
+            <div style="font-weight: 800; margin-bottom: 10px;"><i class="bi bi-card-text"></i> Kết quả</div>
+            <div id="cs-result-body" style="font-size: 13px; color: #cbd5e1; line-height: 1.6; white-space: pre-wrap;"></div>
+          </div>
+
+          <div class="table-responsive" style="background: #111c33; border: 1px solid #23304d; border-radius: 10px;">
+            <table class="table" style="margin-bottom: 0;">
+              <thead>
+                <tr>
+                  <th>Clip</th>
+                  <th>Tiêu đề</th>
+                  <th>Chế độ</th>
+                  <th>Trạng thái</th>
+                  <th>Nguồn nội dung</th>
+                  <th>Thao tác</th>
+                </tr>
+              </thead>
+              <tbody id="cs-queue-tbody">
+                <tr><td colspan="6" style="text-align:center; color:#64748b;">Chưa có Content Package nào.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
 
 
 
@@ -5761,8 +5836,133 @@
     }
   }
 
-</script>
-  <!-- MODAL 1: TRÌNH PHÁT XEM VIDEO GỐC TRỰC TIẾP TRÊN WEB -->
+  // ============================================================
+  // CONTENT STUDIO — Content Package queue cho clip đã render
+  // ============================================================
+  function csEscape(value) {
+    return String(value === undefined || value === null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  window.loadContentStudioQueue = async function() {
+    const tbody = document.getElementById('cs-queue-tbody');
+    const stats = document.getElementById('cs-queue-stats');
+    const circuit = document.getElementById('cs-circuit');
+    try {
+      const res = await fetch('/api/content-studio/queue');
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Không tải được hàng đợi');
+      const items = data.items || [];
+      stats.innerHTML =
+        `Queued: <strong>${data.queued}</strong> · Ready: <strong>${data.ready}</strong> · Failed: <strong>${data.failed}</strong>`;
+      const c = data.circuit || {};
+      circuit.textContent = c.open
+        ? `Circuit breaker ĐANG MỞ — thử lại sau ${c.retry_after_seconds}s (lỗi quota).`
+        : 'Circuit breaker đóng — LLM khả dụng.';
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#64748b;">Chưa có Content Package nào.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = items.slice().reverse().map(function(item) {
+        const mode = item.mode || 'auto';
+        const source = (item.result && item.result.source) || (item.status === 'failed' ? 'error' : '—');
+        const pending = item.status === 'queued' ? 'queued' : item.status;
+        return `<tr>
+          <td>${csEscape(item.clip_filename || '—')}</td>
+          <td>${csEscape(item.title || '—')}</td>
+          <td>${csEscape(mode)}</td>
+          <td>${csEscape(pending)}</td>
+          <td>${csEscape(source)}</td>
+          <td>
+            <button class="btn btn-sm btn-outline" onclick="csRetryComponent('${csEscape(item.id)}','hero_title')">Retry hero</button>
+            <button class="btn btn-sm btn-outline" onclick="csRetryComponent('${csEscape(item.id)}','first_comment')">Retry comment</button>
+          </td>
+        </tr>`;
+      }).join('');
+    } catch (e) {
+      stats.textContent = 'Lỗi: ' + e.message;
+    }
+  };
+
+  window.generateContentPackage = async function() {
+    const msg = document.getElementById('cs-generate-msg');
+    msg.style.color = '#94a3b8';
+    msg.textContent = 'Đang tạo nội dung...';
+    try {
+      const res = await fetch('/api/content-studio/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clip_filename: document.getElementById('cs-clip-filename').value.trim(),
+          title: document.getElementById('cs-title').value.trim(),
+          mode: document.getElementById('cs-mode').value,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Tạo nội dung thất bại');
+      const pkg = data.package || {};
+      document.getElementById('cs-result').style.display = 'block';
+      document.getElementById('cs-result-body').textContent =
+        `Nguồn: ${pkg.source}\n\nHERO: ${pkg.hero_title}\n\nCAPTION: ${pkg.caption}\n\nCOMMENT: ${pkg.first_comment}`;
+      msg.style.color = '#4ade80';
+      msg.textContent = `Xong (nguồn: ${pkg.source}).`;
+    } catch (e) {
+      msg.style.color = '#f87171';
+      msg.textContent = 'Lỗi: ' + e.message;
+    }
+  };
+
+  window.enqueueContentPackage = async function() {
+    const msg = document.getElementById('cs-generate-msg');
+    try {
+      const res = await fetch('/api/content-studio/enqueue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clip_filename: document.getElementById('cs-clip-filename').value.trim(),
+          title: document.getElementById('cs-title').value.trim(),
+          mode: document.getElementById('cs-mode').value,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Không xếp hàng được');
+      msg.style.color = '#4ade80';
+      msg.textContent = 'Đã đưa vào hàng đợi: ' + data.item.id;
+      window.loadContentStudioQueue();
+    } catch (e) {
+      msg.style.color = '#f87171';
+      msg.textContent = 'Lỗi: ' + e.message;
+    }
+  };
+
+  window.csRetryComponent = async function(packageId, component) {
+    try {
+      const res = await fetch('/api/content-studio/retry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: packageId, component: component }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Retry thất bại');
+      alert('Đã tạo lại ' + component + ' (nguồn: ' + (data.package && data.package.source) + ')');
+      window.loadContentStudioQueue();
+    } catch (e) {
+      alert('Lỗi retry: ' + e.message);
+    }
+  };
+
+  window.processContentStudioQueue = async function() {
+    try {
+      const res = await fetch('/api/content-studio/process', { method: 'POST' });
+      const data = await res.json();
+      window.loadContentStudioQueue();
+      alert('Đã xử lý ' + (data.processed || 0) + ' mục.');
+    } catch (e) {
+      alert('Lỗi xử lý: ' + e.message);
+    }
+  };
+
+</script>  <!-- MODAL 1: TRÌNH PHÁT XEM VIDEO GỐC TRỰC TIẾP TRÊN WEB -->
   <div id="modal-video-player" class="app-modal-overlay">
     <div class="app-modal-box" style="max-width: 900px;">
       <div class="app-modal-header">

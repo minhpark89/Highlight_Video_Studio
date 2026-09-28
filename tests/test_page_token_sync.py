@@ -228,6 +228,50 @@ class BackendApiTests(unittest.TestCase):
         self.assertNotIn("EAAB_page_a", response_text)
         self.assertNotIn("EAAB_page_b", response_text)
 
+    def test_multi_token_bindings_are_exact_and_survive_restart(self):
+        first = {"id": "tok_a", "name": "A", "token": "token-a", "status": "ACTIVE"}
+        second = {"id": "tok_b", "name": "B", "token": "token-b", "status": "ACTIVE"}
+        pages = self.pages.sync_pages_from_token(first, [
+            {"id": "PAGE_A", "name": "A", "access_token": "page-a", "tasks": ["CREATE_CONTENT"]},
+            {"id": "PAGE_SHARED", "name": "Shared", "access_token": "page-shared-a", "tasks": ["CREATE_CONTENT"]},
+        ])
+        self.pages.sync_pages_from_token(second, [
+            {"id": "PAGE_B", "name": "B", "access_token": "page-b", "tasks": ["CREATE_CONTENT"]},
+            {"id": "PAGE_SHARED", "name": "Shared", "access_token": "page-shared-b", "tasks": ["CREATE_CONTENT"]},
+        ])
+        restarted = self.PageManager(self.dir)
+        resolved, reason = restarted.resolve_verified_mapping("PAGE_SHARED", second)
+        self.assertIsNone(reason)
+        self.assertEqual(resolved["page_token"], "page-shared-b")
+        self.assertEqual(resolved["token_id"], "tok_b")
+        page_b, reason = restarted.resolve_verified_mapping("PAGE_B", second)
+        self.assertIsNone(reason)
+        self.assertEqual(page_b["page_token"], "page-b")
+
+    def test_refresh_prunes_only_the_refreshed_credential_binding(self):
+        first = {"id": "tok_a", "name": "A", "token": "token-a", "status": "ACTIVE"}
+        second = {"id": "tok_b", "name": "B", "token": "token-b", "status": "ACTIVE"}
+        self.pages.sync_pages_from_token(first, [{"id": "PAGE_X", "access_token": "page-x-a", "tasks": ["CREATE_CONTENT"]}])
+        self.pages.sync_pages_from_token(second, [{"id": "PAGE_X", "access_token": "page-x-b", "tasks": ["CREATE_CONTENT"]}])
+        self.pages.sync_pages_from_token(first, [])
+        current = self.pages.list_pages()[0]
+        self.assertNotIn("tok_a", current.get("token_bindings", {}))
+        self.assertIn("tok_b", current.get("token_bindings", {}))
+        self.assertEqual(current.get("token_id"), "tok_b")
+
+    def test_cross_bound_mapping_is_rejected(self):
+        first = {"id": "tok_a", "name": "A", "token": "token-a", "status": "ACTIVE"}
+        second = {"id": "tok_b", "name": "B", "token": "token-b", "status": "ACTIVE"}
+        self.pages.sync_pages_from_token(first, [{"id": "PAGE_A", "access_token": "page-a", "tasks": ["CREATE_CONTENT"]}])
+        import src.publisher.meta_preflight as preflight
+        verdict = preflight.resolve_page_token(
+            {"page_id": "PAGE_A", "token_id": "tok_b"},
+            mock.Mock(get_token_by_id=lambda _id: second),
+            self.pages,
+        )
+        self.assertFalse(verdict["ok"])
+        self.assertEqual(verdict["code"], "missing_mapping")
+
     def test_batch_import_syncs_pages_only_from_first_representative_token(self):
         first_pages = self._graph_pages()
         identity = {"status": "ACTIVE", "error": "", "pages": [], "owner_name": "Owner"}
@@ -407,7 +451,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(len(groups), 1)
 
     # -- page binding ------------------------------------------------------ #
-    def test_update_binding_assigns_group_and_token(self):
+    def test_update_binding_rejects_unverified_token_but_keeps_group_unchanged(self):
         self._seed_token()
         self.pages.save_pages([{"page_id": "PAGE_A", "page_name": "A", "group_ids": [], "group_name": "Chưa nhóm"}])
         self.pages.save_groups([{"id": "grp_1", "name": "BM 1", "page_ids": []}])
@@ -415,30 +459,24 @@ class BackendApiTests(unittest.TestCase):
         resp = self.client.post("/api/pages/update_binding", json={
             "page_id": "PAGE_A", "group_id": "grp_1", "token_id": "tok_test_1",
         })
-        self.assertEqual(resp.status_code, 200)
-        self.assertTrue(resp.get_json()["success"])
+        self.assertEqual(resp.status_code, 409)
+        self.assertFalse(resp.get_json()["success"])
 
         p = self.pages.list_pages()[0]
-        self.assertEqual(p["group_ids"], ["grp_1"])
-        self.assertEqual(p["group_name"], "BM 1")
-        self.assertEqual(p["token_id"], "tok_test_1")
-        # group back-reference updated
-        self.assertIn("PAGE_A", self.pages.list_groups()[0]["page_ids"])
+        self.assertNotEqual(p.get("token_id"), "tok_test_1")
 
     def test_update_binding_unknown_page_404(self):
         resp = self.client.post("/api/pages/update_binding", json={"page_id": "NOPE"})
         self.assertEqual(resp.status_code, 404)
 
     # -- token assignment -------------------------------------------------- #
-    def test_single_token_assign(self):
+    def test_single_token_assign_rejects_unverified_mapping(self):
         token = self._seed_token()
         self.pages.save_pages([{"page_id": "PAGE_A", "page_name": "A", "token_id": ""}])
         resp = self.client.post("/api/pages/assign_token", json={"page_id": "PAGE_A", "token_id": token["id"]})
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 409)
         page = self.pages.list_pages()[0]
-        self.assertEqual(page["token_id"], token["id"])
-        self.assertEqual(page["token_name"], token["name"])
-        self.assertEqual(page["page_token"], token["token"])
+        self.assertNotEqual(page.get("token_id"), token["id"])
 
     def test_single_token_assign_unknown_page(self):
         token = self._seed_token()
@@ -451,7 +489,7 @@ class BackendApiTests(unittest.TestCase):
         resp = self.client.post("/api/pages/assign_token", json={"page_id": "PAGE_A", "token_id": "missing"})
         self.assertEqual(resp.status_code, 404)
 
-    def test_batch_assign_round_robin(self):
+    def test_batch_assign_round_robin_rejects_unverified_mappings(self):
         tokens = [
             {"id": "tok_1", "name": "T1", "token": "EAAB_page_token_1", "status": "ACTIVE"},
             {"id": "tok_2", "name": "T2", "token": "EAAB_page_token_2", "status": "ACTIVE"},
@@ -468,14 +506,13 @@ class BackendApiTests(unittest.TestCase):
             ]
         })
         body = resp.get_json()
-        self.assertTrue(body["success"])
-        self.assertEqual(body["count"], 2)
+        self.assertFalse(body["success"])
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(len(body["blocked"]), 2)
         pages = {p["page_id"]: p for p in self.pages.list_pages()}
-        self.assertEqual({pid: p["token_id"] for pid, p in pages.items()}, {"PAGE_A": "tok_1", "PAGE_B": "tok_2"})
-        self.assertEqual(pages["PAGE_A"]["page_token"], "EAAB_page_token_1")
-        self.assertEqual(pages["PAGE_B"]["token_name"], "T2")
+        self.assertFalse(any(p.get("token_id") for p in pages.values()))
 
-    def test_batch_assign_single_token_to_many(self):
+    def test_batch_assign_single_token_to_many_rejects_unverified_mapping(self):
         token = self._seed_token()
         self.pages.save_pages([
             {"page_id": "PAGE_A"}, {"page_id": "PAGE_B"}, {"page_id": "PAGE_C"},
@@ -483,10 +520,10 @@ class BackendApiTests(unittest.TestCase):
         resp = self.client.post("/api/pages/batch_assign_token", json={
             "token_id": token["id"], "page_ids": ["PAGE_A", "PAGE_C"],
         })
-        self.assertEqual(resp.get_json()["count"], 2)
+        self.assertEqual(resp.status_code, 409)
         pages = {p["page_id"]: p for p in self.pages.list_pages()}
-        self.assertEqual(pages["PAGE_A"]["token_id"], token["id"])
-        self.assertEqual(pages["PAGE_C"]["page_token"], token["token"])
+        self.assertNotEqual(pages["PAGE_A"].get("token_id"), token["id"])
+        self.assertNotEqual(pages["PAGE_C"].get("token_id"), token["id"])
         self.assertEqual(pages["PAGE_B"].get("token_id", ""), "")
 
     def test_batch_assign_requires_token_or_assignments(self):

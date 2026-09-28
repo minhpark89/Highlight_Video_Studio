@@ -3,6 +3,7 @@ import json
 import base64
 import time
 import requests
+import uuid
 from pathlib import Path
 from datetime import datetime
 
@@ -17,8 +18,13 @@ class TokenVault:
             self._save([])
 
     def _save(self, tokens):
-        with open(self.vault_file, "w", encoding="utf-8") as f:
+        self.vault_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.vault_file.with_name(f".{self.vault_file.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(tokens, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.vault_file)
 
     def list_tokens(self, mask=True):
         if not self.vault_file.exists():
@@ -199,6 +205,7 @@ class TokenVault:
                     "page_name": item.get("name"),
                     "category": item.get("category", ""),
                     "page_token": item.get("access_token"),
+                    "tasks": item.get("tasks") or [],
                     "avatar": item.get("picture", {}).get("data", {}).get("url", "")
                 })
             return {

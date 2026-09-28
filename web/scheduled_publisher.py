@@ -5,8 +5,17 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+# One canonical queue path per installation; a packaged entrypoint and a dev server
+# must never claim from two different posts.json files.
+try:
+    from web.posts_store import canonical_posts_file
+except ImportError:
+    from posts_store import canonical_posts_file
+
+from multi_pc.data_root import ProcessLease
+
 BASE_DIR = Path(__file__).resolve().parent.parent
-POSTS_FILE = BASE_DIR / "posts.json"
+POSTS_FILE = canonical_posts_file()
 POSTED_CLIPS_FILE = BASE_DIR / "posted_clips.json"
 OUTPUT_DIR = BASE_DIR / "output"
 SCHEDULER_HEARTBEAT_FILE = BASE_DIR / "data" / "scheduler_heartbeat.json"
@@ -129,11 +138,16 @@ def _process_scheduled_posts_once(
     sys.path.insert(0, str(BASE_DIR))
     from src.publisher.first_comment_queue import enqueue_first_comment, process_due_first_comments
     from src.publisher.meta_reel_poster import MetaReelPoster
+    from src.publisher.page_manager import PageManager
+    from src.publisher.token_vault import TokenVault
+    from src.publisher.meta_preflight import preflight_pages
     from src.publisher.website_publisher import generate_curiosity_comment_with_llm, publish_clip_to_website_cms
 
     poster = poster or MetaReelPoster()
     website_publisher = website_publisher or publish_clip_to_website_cms
     comment_generator = comment_generator or generate_curiosity_comment_with_llm
+    page_manager = PageManager(BASE_DIR)
+    token_vault = TokenVault(BASE_DIR)
     current_dt = now or datetime.now()
     now_ts = current_dt.timestamp()
 
@@ -205,6 +219,50 @@ def _process_scheduled_posts_once(
         content = post.get("content", "")
         first_comment = post.get("first_comment", "")
         video_path = OUTPUT_DIR / clip_filename if clip_filename else None
+
+        # Re-check the immutable Page/token binding at due time. The queue may
+        # survive a token refresh/restart; never publish with a stale or generic
+        # credential that was not verified for this exact page_id.
+        page_record = next(
+            (page for page in page_manager.list_pages() if str(page.get("page_id")) == str(page_id)),
+            None,
+        )
+        verified = None
+        if page_record is not None:
+            verdict = preflight_pages([page_record], token_vault, page_manager)
+            if verdict.get("ok"):
+                verified = verdict["ready"][0]
+            elif page_record.get("token_id"):
+                # The Page claims a credential but Meta-backed discovery no longer
+                # confirms the binding: fail closed with actionable reconnect text.
+                blocked = verdict.get("blocked") or {}
+                post.update({
+                    "status": "failed",
+                    "retryable": True,
+                    "retry_stage": "meta_preflight",
+                    "error": blocked.get("action") or "Meta preflight quyền đăng bài thất bại.",
+                    "meta_preflight": {
+                        "stage": blocked.get("stage"),
+                        "code": blocked.get("code"),
+                        "action": blocked.get("action"),
+                        "reconnect_required": True,
+                    },
+                })
+                continue
+
+        if verified is not None:
+            post["token"] = verified["token"]
+            post["token_id"] = verified["token_id"]
+            page_token = verified["token"]
+        elif page_record is None and not page_token:
+            # No mapping and no persisted credential at all: cannot publish safely.
+            post.update({
+                "status": "failed",
+                "retryable": False,
+                "retry_stage": "meta_preflight",
+                "error": "Meta preflight thất bại: không tìm thấy Page mapping đã xác minh.",
+            })
+            continue
 
         if not video_path or not video_path.exists():
             post.update({
@@ -297,10 +355,19 @@ def process_scheduled_posts_once(*args, **kwargs):
         _cycle_lock.release()
 
 
+# Prevent two processes (reloader + packaged waitress) from running the publishing
+# loop at the same time and double-claiming due posts.
+_PROCESS_LEASE = ProcessLease("scheduled-publisher", BASE_DIR / "data", stale_after=180)
+
+
 def scheduled_publisher_worker_loop():
     """Run publishing cycles continuously; all external calls remain in the cycle helper."""
     global _worker_started
+    if not _PROCESS_LEASE.acquire():
+        _safe_log("[ScheduledPublisher] Another process already owns the publisher lease; skipping duplicate worker.")
+        return
     if not _worker_lock.acquire(blocking=False):
+        _PROCESS_LEASE.release()
         _safe_log("[ScheduledPublisher] Worker loop already running in this process; skipping duplicate start.")
         return
     _worker_started = True
@@ -309,6 +376,7 @@ def scheduled_publisher_worker_loop():
     _safe_log("[ScheduledPublisher] Background publisher worker started with Idempotent Claim Lock!")
     try:
         while True:
+            _PROCESS_LEASE.touch()
             try:
                 result = process_scheduled_posts_once()
                 if result.get("busy"):
@@ -328,6 +396,7 @@ def scheduled_publisher_worker_loop():
         with _heartbeat_lock:
             _heartbeat["running"] = False
         _worker_lock.release()
+        _PROCESS_LEASE.release()
 
 
 def _parse_scheduled_time(value):
@@ -346,13 +415,21 @@ def _parse_scheduled_time(value):
 
 
 _worker_thread = None
+_worker_thread_lock = threading.Lock()
 
 
 def start_worker_thread():
-    """Idempotently start the background worker; safe to call from app and packaged entrypoint."""
+    """Idempotently start the background worker; safe to call from app and packaged entrypoint.
+
+    The guard must survive a thread that exits immediately (a stubbed loop in tests
+    or a lease-losing duplicate start): callers still observe one stable handle
+    instead of spawning a new thread per call.
+    """
     global _worker_thread
-    if _worker_thread and _worker_thread.is_alive():
-        return _worker_thread
-    _worker_thread = threading.Thread(target=scheduled_publisher_worker_loop, daemon=True, name="scheduled-publisher")
-    _worker_thread.start()
-    return _worker_thread
+    with _worker_thread_lock:
+        if _worker_thread is not None:
+            return _worker_thread
+        thread = threading.Thread(target=scheduled_publisher_worker_loop, daemon=True, name="scheduled-publisher")
+        _worker_thread = thread
+        thread.start()
+        return thread

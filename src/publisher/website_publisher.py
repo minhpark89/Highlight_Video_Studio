@@ -69,7 +69,7 @@ def get_image_provider_config(model_override: str = "") -> dict:
     if requested_model == "__video_frame__" or (not requested_model and configured_model == "__video_frame__"):
         selected_model = "__video_frame__"
     else:
-        selected_model = "ag/gemini-3.1-flash-image"
+        selected_model = configured_model or requested_model
     return {
         "api_base": api_base,
         "generation_url": generation_url,
@@ -137,7 +137,11 @@ def get_clip_metadata(clip_filename: str) -> dict:
         "job_id": "",
         "description": "",
         "youtube_id": "",
-        "long_video_path": ""
+        "long_video_path": "",
+        "source_video_path": "",
+        "clip_start": None,
+        "clip_end": None,
+        "clip_title": ""
     }
 
     # 1. Tìm trong jobs.json
@@ -152,6 +156,10 @@ def get_clip_metadata(clip_filename: str) -> dict:
                             matched_job = j
                             meta["job_id"] = j.get("id") or ""
                             meta["youtube_url"] = j.get("youtube_url") or ""
+                            meta["clip_start"] = c.get("start", c.get("start_time"))
+                            meta["clip_end"] = c.get("end", c.get("end_time"))
+                            meta["clip_title"] = c.get("title") or ""
+                            meta["source_video_path"] = j.get("video_path") or ""
                             vt = (j.get("video_title") or "").strip()
                             if vt and not re.search(r'^(video highlight|job_\d+|clip_\d+)', vt, re.IGNORECASE):
                                 meta["video_title"] = vt
@@ -173,6 +181,13 @@ def get_clip_metadata(clip_filename: str) -> dict:
         long_path = HVS_DIR / "downloads" / f"{meta['job_id']}.mp4"
         if long_path.exists():
             meta["long_video_path"] = str(long_path)
+    source_path = Path(str(meta.get("source_video_path") or ""))
+    if not source_path.is_absolute():
+        source_path = HVS_DIR / source_path
+    if source_path.exists():
+        meta["source_video_path"] = str(source_path)
+    elif meta.get("long_video_path"):
+        meta["source_video_path"] = meta["long_video_path"]
 
     # 3. Tìm ngược sang crawled_videos.json để lấy title video thật
     if (not meta["video_title"] or len(meta["video_title"]) < 10) and crawled_file.exists():
@@ -228,6 +243,106 @@ def build_youtube_embed_html(youtube_id: str, title: str = "") -> str:
         </div>
     """
 
+def _valid_image_file(path: str, *, landscape: bool = False) -> bool:
+    if not path or not os.path.isfile(path) or os.path.getsize(path) < 256:
+        return False
+    if not HAS_CV2:
+        return True
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if image is None or image.shape[0] < 120 or image.shape[1] < 160:
+        return False
+    return not landscape or image.shape[1] / max(1, image.shape[0]) >= 1.45
+
+
+def _candidate_frame_times(video_path: str, clip_start=None, clip_end=None) -> list[float]:
+    cap = cv2.VideoCapture(str(video_path))
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 0)
+    count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    cap.release()
+    duration = count / fps if fps > 0 else 0.0
+    try:
+        start = max(0.0, float(clip_start)) if clip_start is not None else None
+        end = min(duration, float(clip_end)) if clip_end is not None and duration else None
+    except (TypeError, ValueError):
+        start = end = None
+    if start is None:
+        start = duration * 0.35 if duration else 0.0
+    if end is None or end <= start:
+        end = min(duration, start + max(8.0, duration * 0.12)) if duration else start + 8.0
+    span = max(0.5, end - start)
+    return sorted(set(round(max(0.0, min(start + span * offset, max(0.0, duration - 0.05))), 3) for offset in (0.08, 0.25, 0.42, 0.60, 0.78, 0.92)))
+
+
+def _score_frame(frame) -> float:
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    brightness = float(gray.mean()) / 255.0
+    contrast = min(1.0, float(gray.std()) / 72.0)
+    sharpness = min(1.0, float(cv2.Laplacian(gray, cv2.CV_64F).var()) / 900.0)
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    saturation = min(1.0, float(hsv[:, :, 1].mean()) / 150.0)
+    balanced = max(0.0, 1.0 - abs(brightness - 0.48) / 0.48)
+    return 0.38 * sharpness + 0.22 * contrast + 0.20 * balanced + 0.20 * saturation
+
+
+def select_smart_video_frame(video_path: str, clip_start=None, clip_end=None, output_path: str = "") -> str:
+    """Choose a sharp, balanced 16:9 frame from the original source video."""
+    if not HAS_CV2 or not video_path or not os.path.exists(video_path):
+        return ""
+    cap = cv2.VideoCapture(str(video_path))
+    best = None
+    for timestamp in _candidate_frame_times(video_path, clip_start, clip_end):
+        cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000.0)
+        ok, frame = cap.read()
+        if ok:
+            score = _score_frame(frame)
+            if best is None or score > best[0]:
+                best = score, frame
+    cap.release()
+    if best is None:
+        return ""
+    frame = best[1]
+    height, width = frame.shape[:2]
+    target = 16 / 9
+    if width / max(1, height) > target:
+        crop_width = int(height * target)
+        frame = frame[:, max(0, (width - crop_width) // 2):][:, :crop_width]
+    else:
+        crop_height = int(width / target)
+        frame = frame[max(0, (height - crop_height) // 2):][:crop_height, :]
+    destination = Path(output_path or (HVS_DIR / "temp" / "smart_hero_frame.jpg"))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return str(destination) if cv2.imwrite(str(destination), frame, [cv2.IMWRITE_JPEG_QUALITY, 93]) and _valid_image_file(str(destination), landscape=True) else ""
+
+
+def render_local_title_overlay(frame_path: str, title: str, output_path: str = "") -> str:
+    """Add a deterministic title to a validated source frame."""
+    if not HAS_CV2 or not _valid_image_file(frame_path, landscape=True):
+        return ""
+    image = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
+    overlay = image.copy()
+    height = image.shape[0]
+    cv2.rectangle(overlay, (0, int(height * 0.66)), (image.shape[1], height), (8, 18, 34), -1)
+    image = cv2.addWeighted(overlay, 0.82, image, 0.18, 0)
+    clean = " ".join(str(title or "The Moment Everyone Missed").split())[:96]
+    lines, line = [], ""
+    for word in clean.split():
+        if line and len(line) + len(word) + 1 > 30:
+            lines.append(line)
+            line = word
+        else:
+            line = (line + " " + word).strip()
+    if line:
+        lines.append(line)
+    destination = Path(output_path or (HVS_DIR / "temp" / "smart_hero_overlay.jpg"))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    y = int(height * 0.77)
+    for index, text in enumerate(lines[:2]):
+        point = (38, y + index * 58)
+        cv2.putText(image, text.upper(), point, cv2.FONT_HERSHEY_DUPLEX, 1.25, (255, 255, 255), 3, cv2.LINE_AA)
+        cv2.putText(image, text.upper(), point, cv2.FONT_HERSHEY_DUPLEX, 1.25, (32, 166, 255), 1, cv2.LINE_AA)
+    return str(destination) if cv2.imwrite(str(destination), image, [cv2.IMWRITE_JPEG_QUALITY, 93]) and _valid_image_file(str(destination), landscape=True) else ""
+
+
 def generate_llm_hook_image(video_title: str, model_override: str = "") -> str:
     """
     Sinh ảnh HOOK THUMBNAIL bằng AI Gemini (gemini-3.1-flash-image)
@@ -262,7 +377,8 @@ Exact required visual elements matching viral clickbait standard:
     headers = _llm_headers(api_key)
     temp_dir = HVS_DIR / "temp"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    out_file = str(temp_dir / f"llm_hook_{abs(hash(video_title)) % 100000}.jpg")
+    import hashlib
+    out_file = str(temp_dir / f"llm_hook_{hashlib.sha256(video_title.encode('utf-8')).hexdigest()[:16]}.jpg")
 
     def save_image_value(value) -> str:
         if not value:
@@ -278,14 +394,17 @@ Exact required visual elements matching viral clickbait standard:
             else:
                 raw_b64 = value.split("base64,", 1)[1] if "base64," in value else value
                 Path(out_file).write_bytes(base64.b64decode(raw_b64))
-            logger.info("Generated image-provider Hook Image: %s", out_file)
-            return out_file
+            if _valid_image_file(out_file, landscape=True):
+                logger.info("Generated image-provider Hook Image: %s", out_file)
+                return out_file
+            Path(out_file).unlink(missing_ok=True)
+            return ""
         except Exception as exc:
             logger.warning("Cannot save generated image response: %s", exc)
             return ""
 
     image_payload = {
-        "model": "ag/gemini-3.1-flash-image",
+        "model": model,
         "prompt": prompt,
         "n": 1,
         "size": "auto",

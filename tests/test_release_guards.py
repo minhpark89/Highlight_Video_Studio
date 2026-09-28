@@ -290,7 +290,7 @@ class ReleaseGuardTests(unittest.TestCase):
             (root / "config.json").write_text(json.dumps(config), encoding="utf-8")
             with mock.patch.object(publisher, "HVS_DIR", root), mock.patch(
                 "src.publisher.website_publisher.requests.post", return_value=generated
-            ) as post:
+            ) as post, mock.patch.object(publisher, "_valid_image_file", return_value=True):
                 output = publisher.generate_llm_hook_image("Safe canary")
             self.assertTrue(Path(output).is_file())
             self.assertEqual(Path(output).read_bytes(), b"image")

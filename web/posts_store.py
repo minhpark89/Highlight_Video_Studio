@@ -16,6 +16,39 @@ class PostsStoreError(RuntimeError):
 _LOCK = threading.RLock()
 
 
+def resolve_posts_file(path=None) -> Path:
+    """Resolve an explicit queue path, falling back to the canonical root.
+
+    An explicit ``path`` is honoured verbatim so a caller that legitimately owns a
+    scoped queue file (tests, restored fixtures, a migration script) is not
+    hijacked. Callers that pass nothing get the one canonical path for this
+    installation, which is what stops a packaged launcher and a dev server from
+    forking the live queue.
+    """
+    if path is not None and str(path).strip():
+        return Path(path)
+    return canonical_posts_file()
+
+
+def canonical_posts_file() -> Path:
+    """Return the one canonical queue path for this installation.
+
+    A packaged launcher, a reloaded dev server and the background worker each
+    compute their own module path; without one canonical root they would read and
+    write different queue files and silently drop scheduled posts.
+    """
+    configured = str(os.environ.get("HIGHLIGHT_DATA_ROOT") or "").strip()
+    root = Path(configured).expanduser() if configured else Path(__file__).resolve().parent.parent
+    root = root.resolve()
+    allowed = Path(__file__).resolve().parent.parent.resolve()
+    if configured and root != allowed:
+        raise PostsStoreError(
+            f"HIGHLIGHT_DATA_ROOT ({root}) does not match this installation ({allowed})"
+        )
+    root.mkdir(parents=True, exist_ok=True)
+    return root / "posts.json"
+
+
 def _backup_path(path: Path) -> Path:
     return path.with_name(path.name + ".bak")
 
@@ -50,7 +83,7 @@ def load_posts_file(path: str | Path) -> list:
     never degrades to ``[]``: recovery is attempted, otherwise an explicit error
     is raised so callers cannot overwrite an unknown queue state.
     """
-    primary = Path(path)
+    primary = resolve_posts_file(path)
     backup = _backup_path(primary)
     with _LOCK:
         if not primary.exists():
@@ -81,7 +114,7 @@ def save_posts_file(path: str | Path, posts: list) -> None:
     """Atomically replace the queue and mirror the same valid revision to backup."""
     if not isinstance(posts, list):
         raise PostsStoreError("refusing to save posts queue: value is not a list")
-    primary = Path(path)
+    primary = resolve_posts_file(path)
     backup = _backup_path(primary)
     payload = json.dumps(posts, indent=2, ensure_ascii=False).encode("utf-8")
     with _LOCK:
