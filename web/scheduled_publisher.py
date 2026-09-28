@@ -12,6 +12,7 @@ OUTPUT_DIR = BASE_DIR / "output"
 SCHEDULER_HEARTBEAT_FILE = BASE_DIR / "data" / "scheduler_heartbeat.json"
 
 _FILE_LOCK = threading.Lock()
+_cycle_lock = threading.Lock()
 CYCLE_INTERVAL_SECONDS = 20
 CLAIM_STALE_AFTER_SECONDS = 300
 OVERDUE_GRACE_SECONDS = 120
@@ -51,6 +52,19 @@ def sanitize_error(message, limit=400):
     return text[:limit]
 
 
+def _safe_log(message):
+    """Log without letting a closed/invalid stdout handle kill a worker cycle.
+
+    Packaged startup can replace or close the process stdout while this daemon
+    thread keeps running; an unguarded print() would then raise OSError and be
+    reported as a cycle failure, hiding the real scheduler state.
+    """
+    try:
+        print(message)
+    except Exception:
+        pass
+
+
 def worker_status():
     with _heartbeat_lock:
         snapshot = dict(_heartbeat)
@@ -73,18 +87,19 @@ def _touch_heartbeat(ok, error=""):
 
 
 def load_posts():
-    with _FILE_LOCK:
-        if not POSTS_FILE.exists():
-            return []
-        try:
-            return json.loads(POSTS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            return []
+    try:
+        from web.posts_store import load_posts_file
+    except ImportError:
+        from posts_store import load_posts_file
+    return load_posts_file(POSTS_FILE)
 
 
 def save_posts(posts):
-    with _FILE_LOCK:
-        POSTS_FILE.write_text(json.dumps(posts, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        from web.posts_store import save_posts_file
+    except ImportError:
+        from posts_store import save_posts_file
+    save_posts_file(POSTS_FILE, posts)
 
 
 def _record_posted_clip(clip_filename):
@@ -97,7 +112,7 @@ def _record_posted_clip(clip_filename):
             POSTED_CLIPS_FILE.write_text(json.dumps(posted_list, indent=2), encoding="utf-8")
 
 
-def process_scheduled_posts_once(
+def _process_scheduled_posts_once(
     poster=None,
     now=None,
     website_publisher=None,
@@ -144,13 +159,22 @@ def process_scheduled_posts_once(
         claimed_at = _parse_scheduled_time(post.get("claimed_at"))
         if claimed_at is not None and (now_ts - claimed_at.timestamp()) < CLAIM_STALE_AFTER_SECONDS:
             continue
-        post.update({
-            "status": "scheduled",
-            "retryable": True,
-            "retry_stage": post.get("retry_stage") or "claim_recovery",
-            "recovered_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
-            "error": "Khoi phuc bai dang bi ket o trang thai publishing (worker dung dot ngot)",
-        })
+        if post.get("publish_started_at"):
+            post.update({
+                "status": "failed",
+                "retryable": False,
+                "retry_stage": "publish_outcome_unknown",
+                "failed_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "error": "Worker dung sau khi bat dau publish; can doi soat Facebook truoc khi thu lai de tranh dang trung.",
+            })
+        else:
+            post.update({
+                "status": "scheduled",
+                "retryable": True,
+                "retry_stage": post.get("retry_stage") or "claim_recovery",
+                "recovered_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "error": "Khoi phuc bai dang bi ket truoc khi bat dau publish (worker dung dot ngot)",
+            })
         recovered += 1
 
     claimed_posts = []
@@ -233,6 +257,8 @@ def process_scheduled_posts_once(
         try:
             # The worker publishes first, then comments. Passing an empty comment
             # prevents MetaReelPoster from making an implicit/out-of-order call.
+            post["publish_started_at"] = current_dt.strftime("%Y-%m-%d %H:%M:%S")
+            save_posts(posts)
             result = poster.publish_reel(
                 page_id=page_id,
                 page_token=page_token,
@@ -256,6 +282,7 @@ def process_scheduled_posts_once(
                 "fb_url": result.get("fb_url") or (f"https://www.facebook.com/reel/{facebook_id}" if facebook_id else ""),
                 "published_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
                 "error": "",
+                "retryable": False,
             })
 
             if first_comment:
@@ -287,29 +314,45 @@ def process_scheduled_posts_once(
 
     if claimed_posts or recovered or queue_result.get("changed"):
         save_posts(posts)
-    return {"claimed": len(claimed_posts), "recovered": recovered, "queue": queue_result, "posts": posts}
+    failed = sum(1 for post in claimed_posts if post.get("status") == "failed")
+    return {"claimed": len(claimed_posts), "recovered": recovered, "failed": failed, "queue": queue_result, "posts": posts}
+
+
+def process_scheduled_posts_once(*args, **kwargs):
+    """Serialize worker/manual cycles so one due record cannot publish twice."""
+    if not _cycle_lock.acquire(blocking=False):
+        return {"claimed": 0, "recovered": 0, "failed": 0, "busy": True, "posts": []}
+    try:
+        return _process_scheduled_posts_once(*args, **kwargs)
+    finally:
+        _cycle_lock.release()
 
 
 def scheduled_publisher_worker_loop():
     """Run publishing cycles continuously; all external calls remain in the cycle helper."""
     global _worker_started
     if not _worker_lock.acquire(blocking=False):
-        print("[ScheduledPublisher] Worker loop already running in this process; skipping duplicate start.")
+        _safe_log("[ScheduledPublisher] Worker loop already running in this process; skipping duplicate start.")
         return
     _worker_started = True
     with _heartbeat_lock:
         _heartbeat["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print("[ScheduledPublisher] Background publisher worker started with Idempotent Claim Lock!")
+    _safe_log("[ScheduledPublisher] Background publisher worker started with Idempotent Claim Lock!")
     try:
         while True:
             try:
                 result = process_scheduled_posts_once()
-                _touch_heartbeat(True)
-                if result.get("claimed") or result.get("recovered"):
-                    print(f"[ScheduledPublisher] cycle claimed={result.get('claimed')} recovered={result.get('recovered')}")
+                if result.get("busy"):
+                    # A manual run-due or a previous long cycle still holds the lock;
+                    # do not touch the heartbeat or it would mask the real cycle result.
+                    pass
+                else:
+                    _touch_heartbeat(True)
+                    if result.get("claimed") or result.get("recovered"):
+                        _safe_log(f"[ScheduledPublisher] cycle claimed={result.get('claimed')} recovered={result.get('recovered')} failed={result.get('failed')}")
             except Exception as exc:
                 _touch_heartbeat(False, exc)
-                print(f"[ScheduledPublisher] Loop Error: {sanitize_error(exc)}")
+                _safe_log(f"[ScheduledPublisher] Loop Error: {sanitize_error(exc)}")
             time.sleep(CYCLE_INTERVAL_SECONDS)
     finally:
         _worker_started = False

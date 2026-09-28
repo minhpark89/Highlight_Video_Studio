@@ -297,6 +297,86 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
         self.assertEqual(result["recovered"], 0)
         self.assertEqual(persisted["status"], "publishing")
 
+    def test_stale_claim_after_publish_started_fails_closed_without_duplicate(self):
+        """Unknown remote outcome must not be retried automatically after a crash."""
+        from web import scheduled_publisher as worker
+
+        poster = mock.Mock()
+        folder, root, output, posts_file = self._fixture({
+            "id": "post-unknown", "status": "publishing", "scheduled_time": "2026-09-28 10:00:00",
+            "claimed_at": "2026-09-28 10:00:05", "publish_started_at": "2026-09-28 10:00:06",
+            "page_id": "page-1", "token": "t", "media_file": "clip.mp4",
+        })
+        try:
+            with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
+                worker, "OUTPUT_DIR", output
+            ), mock.patch.object(worker, "POSTED_CLIPS_FILE", root / "posted.json"):
+                result = worker.process_scheduled_posts_once(
+                    poster=poster, now=datetime(2026, 9, 28, 12, 30, 0)
+                )
+            persisted = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+        finally:
+            folder.cleanup()
+        self.assertEqual(result["recovered"], 1)
+        self.assertEqual(persisted["status"], "failed")
+        self.assertFalse(persisted["retryable"])
+        self.assertEqual(persisted["retry_stage"], "publish_outcome_unknown")
+        poster.publish_reel.assert_not_called()
+
+    def test_corrupt_primary_recovers_from_backup_and_is_not_overwritten_empty(self):
+        from web.posts_store import load_posts_file, save_posts_file
+
+        with tempfile.TemporaryDirectory() as folder:
+            posts_file = Path(folder) / "posts.json"
+            original = [{"id": "keep-me", "status": "scheduled"}]
+            save_posts_file(posts_file, original)
+            save_posts_file(posts_file, original + [{"id": "newer", "status": "scheduled"}])
+            posts_file.write_text("{malformed", encoding="utf-8")
+            expected = original + [{"id": "newer", "status": "scheduled"}]
+            recovered = load_posts_file(posts_file)
+            persisted = json.loads(posts_file.read_text(encoding="utf-8"))
+        self.assertEqual(recovered, expected)
+        self.assertEqual(persisted, expected)
+
+    def test_corrupt_primary_without_backup_raises_instead_of_returning_empty(self):
+        from web.posts_store import PostsStoreError, load_posts_file
+
+        with tempfile.TemporaryDirectory() as folder:
+            posts_file = Path(folder) / "posts.json"
+            posts_file.write_text("not-json", encoding="utf-8")
+            with self.assertRaises(PostsStoreError):
+                load_posts_file(posts_file)
+
+    def test_publish_failure_is_explicit_failed_retryable(self):
+        from src.publisher import first_comment_queue
+        from web import scheduled_publisher as worker
+
+        class Poster:
+            def publish_reel(self, **kwargs):
+                return {"success": False, "error": "mock publish rejected"}
+
+        folder, root, output, posts_file = self._fixture({
+            "id": "post-fail", "status": "scheduled", "scheduled_time": "2026-09-28 12:25:00",
+            "page_id": "page-1", "token": "t", "media_file": "clip.mp4", "title": "T",
+            "content": "C", "auto_first_comment": False, "first_comment": "",
+        })
+        try:
+            with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
+                worker, "POSTED_CLIPS_FILE", root / "posted.json"
+            ), mock.patch.object(worker, "OUTPUT_DIR", output), mock.patch.object(
+                first_comment_queue, "QUEUE_FILE", root / "queue.json"
+            ):
+                result = worker.process_scheduled_posts_once(
+                    poster=Poster(), now=datetime(2026, 9, 28, 12, 31, 0)
+                )
+            persisted = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+        finally:
+            folder.cleanup()
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(persisted["status"], "failed")
+        self.assertTrue(persisted["retryable"])
+        self.assertEqual(persisted["retry_stage"], "facebook_publish")
+
     def test_naive_local_datetime_format_is_parsed_without_tz_error(self):
         """Stored timestamps are naive local strings; parsing must not require tzinfo."""
         from web.scheduled_publisher import _parse_scheduled_time
@@ -374,6 +454,16 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
                 self.assertGreaterEqual(payload["overdue_count"], 1)
                 self.assertEqual(payload["overdue_posts"][0]["id"], "post-api")
                 self.assertGreaterEqual(payload["overdue_posts"][0]["late_seconds"], 300)
+
+                with mock.patch(
+                    "web.scheduled_publisher.process_scheduled_posts_once",
+                    return_value={"claimed": 1, "recovered": 0, "failed": 0},
+                ) as process:
+                    run_res = client.post("/api/scheduler/run-due")
+                self.assertEqual(run_res.status_code, 200)
+                self.assertTrue(run_res.get_json()["success"])
+                self.assertEqual(run_res.get_json()["claimed"], 1)
+                process.assert_called_once_with()
         finally:
             folder.cleanup()
 

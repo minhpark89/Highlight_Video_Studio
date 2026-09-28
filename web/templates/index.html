@@ -5384,7 +5384,6 @@
     }
   }
 
-  async function loadPostsTable() {
   // ================= SCHEDULER WORKER HEALTH & AUTO REFRESH =================
   let postsAutoRefreshTimer = null;
   const postsOverdueIds = new Set();
@@ -5470,6 +5469,7 @@
   }
   window.startPostsAutoRefresh = startPostsAutoRefresh;
 
+  async function loadPostsTable() {
     const tbody = document.getElementById('posts-table-body');
     if (!tbody) return;
 

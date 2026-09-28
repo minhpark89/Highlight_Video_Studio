@@ -107,21 +107,18 @@ def save_crawled_videos(videos):
     except Exception as e:
         print(f"Error saving crawled videos: {e}")
 
+try:
+    from web.posts_store import load_posts_file, save_posts_file
+except ImportError:
+    from posts_store import load_posts_file, save_posts_file
+
+
 def load_posts():
-    if not POSTS_FILE.exists():
-        return []
-    try:
-        with open(POSTS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
+    return load_posts_file(POSTS_FILE)
+
 
 def save_posts(posts):
-    try:
-        with open(POSTS_FILE, "w", encoding="utf-8") as f:
-            json.dump(posts, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"Error saving posts: {e}")
+    save_posts_file(POSTS_FILE, posts)
 
 
 for d in [DOWNLOADS_DIR, OUTPUT_DIR, TEMP_DIR]:
@@ -1891,7 +1888,11 @@ def api_scheduler_status():
             from scheduled_publisher import worker_status as _status
         status = _status()
     except Exception as exc:
-        return jsonify({"success": False, "error": str(exc)}), 500
+        try:
+            from web.scheduled_publisher import sanitize_error
+        except ImportError:
+            from scheduled_publisher import sanitize_error
+        return jsonify({"success": False, "error": sanitize_error(exc)}), 500
 
     posts = load_posts()
     now_dt = datetime.now()
@@ -1935,14 +1936,25 @@ def api_scheduler_run_due():
         except ImportError:
             from scheduled_publisher import process_scheduled_posts_once
         result = process_scheduled_posts_once()
+        if result.get("busy"):
+            return jsonify({
+                "success": False,
+                "busy": True,
+                "error": "Scheduler dang xu ly mot chu ky khac; khong chay trung de tranh dang lap.",
+            }), 409
         return jsonify({
             "success": True,
             "claimed": result.get("claimed", 0),
             "recovered": result.get("recovered", 0),
+            "failed": result.get("failed", 0),
             "message": "Da xu ly cac bai den han.",
         })
     except Exception as exc:
-        return jsonify({"success": False, "error": str(exc)}), 500
+        try:
+            from web.scheduled_publisher import sanitize_error
+        except ImportError:
+            from scheduled_publisher import sanitize_error
+        return jsonify({"success": False, "error": sanitize_error(exc)}), 500
 
 
 @app.route("/api/posts", methods=["GET"])

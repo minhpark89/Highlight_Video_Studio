@@ -1,6 +1,6 @@
 param(
     [string]$Version = "1.0.19",
-    [string]$PreviewRevision = "preview.4",
+    [string]$PreviewRevision = "preview.5",
     [string]$BuildChannel = "desktop-test",
     [switch]$SkipTests,
     [string]$ToolSource = "D:\Highlight_Video_Studio\bin",
@@ -136,7 +136,7 @@ foreach ($dir in @("data", "output", "temp", "downloads")) {
         if ($stray) { throw "Packaging guard: runtime/user state found under $dir\: $($stray[0].FullName)" }
     }
 }
-$forbiddenFileNames = @("hardware_profile.json", "tokens_vault.json", "pages.json", "page_groups.json", "crawled_videos.json", "schedule_rules.json", ".env")
+$forbiddenFileNames = @("hardware_profile.json", "scheduler_heartbeat.json", "tokens_vault.json", "pages.json", "page_groups.json", "crawled_videos.json", "schedule_rules.json", ".env")
 $identityNeedles = @("RTX 3060", "GeForce", "Xeon", "E5-2680", "DESKTOP-COM8UQ7")
 $scanExtensions = @(".py", ".html", ".htm", ".js", ".json", ".css", ".txt", ".md", ".cs", ".ps1", ".cfg", ".ini", ".yml", ".yaml")
 $scanRoots = @("web", "src", "core", "multi_pc", "research", "config")

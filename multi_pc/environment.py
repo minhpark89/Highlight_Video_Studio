@@ -23,7 +23,7 @@ from .hardware import (
 from .profile_cache import ProfileCache
 
 PRERELEASE_NAME = "highlight-desktop-offline-preview"
-PRERELEASE_BUILD = "1.0.19-preview.4"
+PRERELEASE_BUILD = "1.0.19-preview.5"
 BUILD_CHANNEL = "test"
 TEST_LABEL = "TEST BUILD - NOT FOR PRODUCTION RELEASE"
 PRODUCTION_APP = Path("D:/Highlight_Video_Studio")
