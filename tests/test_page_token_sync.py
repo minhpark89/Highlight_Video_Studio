@@ -124,6 +124,14 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn("/api/pages/update_binding", body)
         self.assertIn("token_id", body)
 
+    def test_token_group_ui_explains_snapshot_and_offers_rebind(self):
+        body = self._function_body("loadTokenGroupsList")
+        rebind = self._function_body("rebindTokenGroupPages")
+        self.assertIn("snapshot", self.html)
+        self.assertIn("Cập nhật Page set", body)
+        self.assertIn("/rebind-pages", rebind)
+        self.assertIn("method: 'POST'", rebind)
+
     def test_group_ui_exposes_snapshot_label_and_rebind_action(self):
         body = self._function_body("loadTokenGroupsList")
         self.assertIn("snapshot", body)
@@ -195,7 +203,10 @@ class BackendApiTests(unittest.TestCase):
     # -- token add + sync -------------------------------------------------- #
     def test_add_token_syncs_pages_with_correct_schema(self):
         verify = {"status": "ACTIVE", "error": "", "pages": self._graph_pages(), "owner_name": "Owner"}
-        with mock.patch.object(self.vault, "verify_token", return_value=verify):
+        identity = {"status": "ACTIVE", "error": "", "pages": [], "owner_name": "Owner"}
+        with mock.patch.object(self.vault, "verify_identity", return_value=identity), mock.patch.object(
+            self.vault, "discover_pages", return_value=verify
+        ):
             resp = self.client.post("/api/tokens", json={"tokens_input": "MyToken|EAAB_secret", "name": ""})
         self.assertEqual(resp.status_code, 200)
         body = resp.get_json()
@@ -217,10 +228,11 @@ class BackendApiTests(unittest.TestCase):
         self.assertNotIn("EAAB_page_a", response_text)
         self.assertNotIn("EAAB_page_b", response_text)
 
-    def test_batch_import_syncs_pages_only_from_representative_token(self):
+    def test_batch_import_syncs_pages_only_from_first_representative_token(self):
         first_pages = self._graph_pages()
         identity = {"status": "ACTIVE", "error": "", "pages": [], "owner_name": "Owner"}
-        with mock.patch.object(self.vault, "verify_token", return_value={"status": "ACTIVE", "error": "", "pages": first_pages, "owner_name": "Owner"}) as full, mock.patch.object(self.vault, "verify_identity", return_value=identity) as light:
+        discovered = {"status": "ACTIVE", "error": "", "pages": first_pages, "owner_name": "Owner"}
+        with mock.patch.object(self.vault, "discover_pages", return_value=discovered) as full, mock.patch.object(self.vault, "verify_identity", return_value=identity) as light:
             resp = self.client.post("/api/tokens", json={
                 "tokens_input": "T1|EAAB_one\nT2|EAAB_two\nT3|EAAB_three",
                 "page_sync_mode": "representative",
@@ -228,53 +240,70 @@ class BackendApiTests(unittest.TestCase):
         body = resp.get_json()
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(body["synced_pages"], 2)
+        # The batch is validated with /me first, then exactly one /me/accounts Page walk.
+        self.assertEqual(light.call_count, 3)
         self.assertEqual(full.call_count, 1)
-        self.assertEqual(light.call_count, 2)
         self.assertEqual([item["page_sync"] for item in body["results"]], ["synced", "skipped", "skipped"])
+        self.assertEqual([item["is_representative"] for item in body["results"]], [True, False, False])
+        self.assertEqual(body["representative"]["name"], "T1")
+        self.assertNotIn("EAAB_", resp.get_data(as_text=True))
 
-    def test_representative_mode_falls_back_to_later_valid_token(self):
-        identity_ok = {"status": "ACTIVE", "error": "", "pages": [], "owner_name": "Owner"}
-        identity_bad = {"status": "ERROR", "error": "[190] invalid token", "pages": [], "owner_name": ""}
-        first_fail = {"status": "ERROR", "error": "[190] invalid token", "pages": [], "owner_name": ""}
-        second_ok = {"status": "ACTIVE", "error": "", "pages": self._graph_pages(), "owner_name": "Owner"}
-        verify_results = [first_fail, second_ok]
-        identity_results = [identity_bad, identity_ok]
-        with mock.patch.object(self.vault, "verify_token", side_effect=verify_results) as full, \
-                mock.patch.object(self.vault, "verify_identity", side_effect=identity_results) as light:
-            resp = self.client.post("/api/tokens", json={
-                "tokens_input": "T1|EAAB_bad\nT2|EAAB_good\nT3|EAAB_spare",
-                "page_sync_mode": "representative",
-            })
-        body = resp.get_json()
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(body["synced_pages"], 2)
-        self.assertEqual(full.call_count, 2)
-        self.assertEqual(light.call_count, 1)
-        self.assertEqual([item["page_sync"] for item in body["results"]], ["skipped", "synced", "skipped"])
-        self.assertIsNotNone(body["representative"])
-        self.assertEqual(body["representative"]["label"], "#2 T2")
-        self.assertTrue(body["results"][1]["is_representative"])
-        self.assertEqual({p["token_id"] for p in self.pages.list_pages()},
-                         {body["results"][1]["id"]})
-        serialized = json.dumps(body)
-        self.assertNotIn("EAAB_bad", serialized)
-        self.assertNotIn("EAAB_good", serialized)
-        self.assertNotIn("EAAB_spare", serialized)
-
-    def test_representative_mode_reports_first_token_when_it_syncs(self):
+    def test_representative_sync_falls_back_to_second_valid_token(self):
         identity = {"status": "ACTIVE", "error": "", "pages": [], "owner_name": "Owner"}
-        verify = {"status": "ACTIVE", "error": "", "pages": self._graph_pages(), "owner_name": "Owner"}
-        with mock.patch.object(self.vault, "verify_token", return_value=verify) as full, \
-                mock.patch.object(self.vault, "verify_identity", return_value=identity) as light:
+        failed = {"status": "ERROR", "error": "Page permission denied", "pages": []}
+        succeeded = {"status": "ACTIVE", "error": "", "pages": self._graph_pages()[:1]}
+        with mock.patch.object(self.vault, "verify_identity", return_value=identity) as light, mock.patch.object(
+            self.vault, "discover_pages", side_effect=[failed, succeeded]
+        ) as full:
             resp = self.client.post("/api/tokens", json={
-                "tokens_input": "T1|EAAB_one\nT2|EAAB_two",
+                "tokens_input": "First|EAAB_one\nSecond|EAAB_two\nThird|EAAB_three",
                 "page_sync_mode": "representative",
             })
         body = resp.get_json()
-        self.assertEqual(body["representative"]["label"], "#1 T1")
+        self.assertEqual(light.call_count, 3)
+        self.assertEqual(full.call_count, 2)
+        self.assertEqual(body["representative"]["name"], "Second")
+        self.assertEqual(body["representative"]["label"], "#2 Second")
+        self.assertEqual([item["status"] for item in body["results"]], ["ACTIVE", "ACTIVE", "ACTIVE"])
+        self.assertEqual([item["page_sync"] for item in body["results"]], ["failed", "synced", "skipped"])
+        self.assertTrue(body["results"][1]["is_representative"])
+        self.assertFalse(body["results"][0]["is_representative"])
+        self.assertNotIn("EAAB_", resp.get_data(as_text=True))
+
+    def test_all_representative_page_syncs_can_fail_without_invalidating_tokens(self):
+        identity = {"status": "ACTIVE", "error": "", "pages": [], "owner_name": "Owner"}
+        failed = {"status": "ERROR", "error": "Page permission denied", "pages": []}
+        with mock.patch.object(self.vault, "verify_identity", return_value=identity), mock.patch.object(
+            self.vault, "discover_pages", side_effect=[failed, failed]
+        ):
+            resp = self.client.post("/api/tokens", json={
+                "tokens_input": "First|EAAB_one\nSecond|EAAB_two",
+                "page_sync_mode": "representative",
+            })
+        body = resp.get_json()
+        self.assertIsNone(body["representative"])
+        self.assertEqual([item["status"] for item in body["results"]], ["ACTIVE", "ACTIVE"])
+        self.assertEqual([item["page_sync"] for item in body["results"]], ["failed", "failed"])
+        self.assertEqual([item["is_representative"] for item in body["results"]], [False, False])
+        self.assertEqual([item["status"] for item in self.vault.list_tokens(mask=False)], ["ACTIVE", "ACTIVE"])
+        self.assertNotIn("EAAB_", resp.get_data(as_text=True))
+
+    def test_representative_sync_skips_invalid_token_without_page_fetch(self):
+        identity_bad = {"status": "ERROR", "error": "[190] invalid token", "pages": [], "owner_name": ""}
+        identity_ok = {"status": "ACTIVE", "error": "", "pages": [], "owner_name": "Owner"}
+        succeeded = {"status": "ACTIVE", "error": "", "pages": self._graph_pages(), "owner_name": "Owner"}
+        with mock.patch.object(self.vault, "verify_identity", side_effect=[identity_bad, identity_ok]), \
+                mock.patch.object(self.vault, "discover_pages", return_value=succeeded) as full:
+            resp = self.client.post("/api/tokens", json={
+                "tokens_input": "Bad|EAAB_bad\nGood|EAAB_good",
+                "page_sync_mode": "representative",
+            })
+        body = resp.get_json()
         self.assertEqual(full.call_count, 1)
-        # The successful first attempt is never re-checked, so no fallback probe runs.
-        self.assertLessEqual(light.call_count, 1)
+        self.assertEqual(body["representative"]["label"], "#2 Good")
+        self.assertEqual([item["status"] for item in body["results"]], ["ERROR", "ACTIVE"])
+        self.assertEqual([item["page_sync"] for item in body["results"]], ["skipped", "synced"])
+        self.assertNotIn("EAAB_", resp.get_data(as_text=True))
 
     def test_token_group_rebind_refreshes_snapshot_without_graph_call(self):
         tokens = [
@@ -501,6 +530,29 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(group["token_ids"], ["tok_1", "tok_2"])
         self.assertEqual(group["page_source_token_id"], "tok_1")
         self.assertEqual(group["page_ids"], ["PAGE_A", "PAGE_B"])
+
+    def test_token_group_rebind_refreshes_cached_snapshot_without_graph_fetch(self):
+        self.vault._save([{"id": "tok_1", "name": "Source", "token": "EAAB_one", "status": "ACTIVE"}])
+        self.pages.save_pages([{"page_id": "PAGE_NEW", "token_id": "tok_1"}])
+        self.appmod.save_token_groups([{
+            "id": "pool_1", "name": "Pool", "token_ids": ["tok_1"],
+            "page_source_token_id": "tok_1", "page_ids": ["PAGE_OLD"],
+        }])
+        with mock.patch.object(self.vault, "verify_token") as full, mock.patch.object(self.vault, "discover_pages") as discover:
+            resp = self.client.post("/api/token-groups/pool_1/rebind-pages")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["page_ids"], ["PAGE_NEW"])
+        full.assert_not_called()
+        discover.assert_not_called()
+
+    def test_token_group_rebind_rejects_deleted_source_token(self):
+        self.appmod.save_token_groups([{
+            "id": "pool_1", "name": "Pool", "token_ids": [],
+            "page_source_token_id": "missing", "page_ids": ["PAGE_OLD"],
+        }])
+        resp = self.client.post("/api/token-groups/pool_1/rebind-pages")
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(self.appmod.load_token_groups()[0]["page_ids"], ["PAGE_OLD"])
 
     def test_token_group_requires_name(self):
         self.appmod.save_token_groups([{"id": "seed", "name": "Seed", "token_ids": []}])

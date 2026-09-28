@@ -1361,6 +1361,8 @@ def api_rebind_token_group_pages(gid):
     source_id = str(group.get("page_source_token_id") or "").strip()
     if not source_id:
         return jsonify({"success": False, "error": "Nhóm này chưa binding Page set"}), 400
+    if token_vault.get_token_by_id(source_id) is None:
+        return jsonify({"success": False, "error": "Token nguồn không còn tồn tại trong Vault"}), 404
     page_ids = _pages_for_source_token(source_id)
     if not page_ids:
         return jsonify({
@@ -1422,88 +1424,74 @@ def api_add_token():
             item_name = f"Token {idx + 1}" if len(lines) > 1 else "System Token"
         entries.append({"name": item_name, "token": item_token})
 
-    results = [None] * len(entries)
+    results = []
     synced_page_ids = set()
     representative_idx = None
 
-    def _run_sync(index):
-        """Add one token, optionally syncing its Pages; return (entry, pages)."""
-        item = entries[index]
-        discover_pages = page_sync_mode == "each" or (
-            page_sync_mode == "representative" and representative_idx is None
-        )
-        entry, pages = token_vault.add_token(
-            item["name"], item["token"], kind, note, discover_pages=discover_pages
-        )
-        if pages:
-            page_manager.sync_pages_from_token(entry, pages)
-            for page in pages:
-                page_id = page.get("id") or page.get("page_id")
-                if page_id:
-                    synced_page_ids.add(str(page_id))
-        return entry, pages
-
-    for idx in range(len(entries)):
+    # Store and validate every token with lightweight /me first. Representative
+    # mode then walks only the ACTIVE candidates through /me/accounts in order.
+    for item in entries:
         try:
-            entry, pages = _run_sync(idx)
-            is_synced = bool(pages)
-            if page_sync_mode == "representative" and representative_idx is None and (
-                is_synced or not entries[idx]["token"]
-            ):
-                representative_idx = idx
-            results[idx] = {
+            entry, pages = token_vault.add_token(
+                item["name"], item["token"], kind, note,
+                discover_pages=(page_sync_mode == "each"),
+            )
+            if page_sync_mode == "each" and entry.get("status") == "ACTIVE":
+                page_manager.sync_pages_from_token(entry, pages)
+                for page in pages:
+                    page_id = page.get("id") or page.get("page_id")
+                    if page_id:
+                        synced_page_ids.add(str(page_id))
+            results.append({
                 "id": entry.get("id"),
                 "name": entry.get("name"),
                 "status": entry.get("status"),
                 "error_msg": entry.get("error_msg", ""),
                 "pages_count": len(pages),
-                "page_sync": "synced" if is_synced else "skipped",
+                "page_sync": "synced" if page_sync_mode == "each" and entry.get("status") == "ACTIVE" else "skipped",
                 "is_representative": False,
-            }
+            })
         except Exception as ex:
-            results[idx] = {
-                "name": entries[idx]["name"],
+            results.append({
+                "name": item["name"],
                 "status": "ERROR",
                 "error_msg": str(ex),
                 "pages_count": 0,
                 "page_sync": "failed",
                 "is_representative": False,
-            }
+            })
 
-    if page_sync_mode == "representative" and representative_idx is None:
-        # The first token could not supply a Page set; retry later tokens until one succeeds.
+    if page_sync_mode == "representative":
         for idx, item in enumerate(entries):
             if results[idx].get("status") != "ACTIVE":
                 continue
             try:
-                entry, pages = _run_sync(idx)
-            except Exception:
+                page_sync = token_vault.discover_pages(
+                    item["token"], owner_name=str(results[idx].get("name") or "")
+                )
+            except Exception as ex:
+                page_sync = {"status": "ERROR", "error": str(ex), "pages": []}
+            if page_sync.get("status") != "ACTIVE":
+                results[idx]["page_sync"] = "failed"
+                results[idx]["page_sync_error"] = page_sync.get("error", "")
                 continue
-            if pages:
-                representative_idx = idx
-                results[idx] = {
-                    "id": entry.get("id"),
-                    "name": entry.get("name"),
-                    "status": entry.get("status"),
-                    "error_msg": entry.get("error_msg", ""),
-                    "pages_count": len(pages),
-                    "page_sync": "synced",
-                    "is_representative": True,
-                }
-                break
-
-    if page_sync_mode != "representative":
-        representative_idx = None
-
-    if representative_idx is not None:
-        results[representative_idx]["is_representative"] = True
-        for index, item in enumerate(results):
-            if index != representative_idx and item.get("page_sync") == "synced":
-                item["page_sync"] = "skipped"
+            pages = page_sync.get("pages", [])
+            entry = token_vault.get_token_by_id(results[idx]["id"]) or {}
+            token_vault.record_page_sync(results[idx]["id"], pages)
+            page_manager.sync_pages_from_token(entry, pages)
+            for page in pages:
+                page_id = page.get("id") or page.get("page_id")
+                if page_id:
+                    synced_page_ids.add(str(page_id))
+            representative_idx = idx
+            results[idx]["pages_count"] = len(pages)
+            results[idx]["page_sync"] = "synced"
+            results[idx]["is_representative"] = True
+            break
 
     representative_label = ""
     representative = results[representative_idx] if representative_idx is not None else None
-    if representative:
+    if representative is not None:
         representative_label = f"#{representative_idx + 1} {representative.get('name')}"
 
     return jsonify({
