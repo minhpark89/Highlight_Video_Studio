@@ -4,6 +4,8 @@ import json
 import re
 import time
 import subprocess
+import threading
+from contextlib import contextmanager
 
 # Hide console window on Windows
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
@@ -44,6 +46,18 @@ YT_DLP_BIN = str(BIN_DIR / "yt-dlp.exe") if (BIN_DIR / "yt-dlp.exe").exists() el
 NODE_BIN = str(BIN_DIR / "node.exe") if (BIN_DIR / "node.exe").exists() else None
 COOKIES_FILE = CONFIG_DIR / "cookies.txt"
 LOCAL_WHISPER_MODEL = BASE_DIR / "models" / "faster-whisper-small"
+ENCODER_CODECS = {"nvenc": "h264_nvenc", "qsv": "h264_qsv", "amf": "h264_amf", "cpu": "libx264"}
+RENDER_CONCURRENCY = max(1, int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT_RENDERS", "1")))
+RENDER_SEMAPHORE = threading.BoundedSemaphore(RENDER_CONCURRENCY)
+
+
+@contextmanager
+def render_slot():
+    RENDER_SEMAPHORE.acquire()
+    try:
+        yield
+    finally:
+        RENDER_SEMAPHORE.release()
 
 
 def get_whisper_model_source():
@@ -676,44 +690,40 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
         # ÄÆ°á»ng dáº«n cho FFmpeg trÃªn Windows cáº§n escape dáº¥u hai cháº¥m vÃ  gáº¡ch chÃ©o
         ass_str = str(ass_path).replace("\\", "/").replace(":", "\\:")
         vf = f"{vf},subtitles='{ass_str}'"
-    encoder = str(pipeline_cfg.get("encoder") or "auto").lower()
-    nvenc_preset = str(pipeline_cfg.get("nvenc_preset") or "p2")
+    configured = str(pipeline_cfg.get("encoder") or "auto").lower()
+    encoder = configured if configured in ENCODER_CODECS and configured != "auto" else os.environ.get("HIGHLIGHT_ENCODER", "cpu").lower()
+    if encoder not in ENCODER_CODECS:
+        encoder = "cpu"
+    codec = ENCODER_CODECS[encoder]
     crf = str(pipeline_cfg.get("crf") or 21)
-    cmd = [
-        "ffmpeg", "-y",
-        "-ss", str(start_time),
-        "-t", str(duration),
-        "-i", str(source_video),
-        "-vf", vf,
-        "-c:v", "h264_nvenc",
-        "-preset", nvenc_preset,
-        "-cq", crf,
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-movflags", "+faststart",
-        str(output_path)
-    ]
-    
-    p = subprocess.run(cmd, capture_output=True, text=True, creationflags=NO_WINDOW) if encoder != "cpu" else subprocess.CompletedProcess(cmd, 1, "", "CPU encoder requested")
-    if p.returncode != 0:
-        print(f"[FFmpeg Warning] h264_nvenc gáº·p sá»± cá»‘, fallback sang libx264 ultrafast: {p.stderr[:200]}")
-        cmd_fallback = [
-            "ffmpeg", "-y",
-            "-ss", str(start_time),
-            "-t", str(duration),
-            "-i", str(source_video),
-            "-vf", vf,
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", crf,
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-movflags", "+faststart",
-            str(output_path)
+
+    def build_command(selected_encoder):
+        selected_codec = ENCODER_CODECS[selected_encoder]
+        command = [
+            "ffmpeg", "-y", "-ss", str(start_time), "-t", str(duration),
+            "-i", str(source_video), "-vf", vf, "-c:v", selected_codec,
         ]
-        p2 = subprocess.run(cmd_fallback, capture_output=True, text=True, creationflags=NO_WINDOW)
-        if p2.returncode != 0:
-            raise RuntimeError(f"FFmpeg render tháº¥t báº¡i: {p2.stderr}")
+        if selected_encoder == "cpu":
+            command.extend(["-preset", "veryfast", "-crf", crf])
+        elif selected_encoder == "nvenc":
+            command.extend(["-preset", str(pipeline_cfg.get("nvenc_preset") or "p2"), "-cq", crf])
+        elif selected_encoder == "qsv":
+            command.extend(["-preset", "veryfast", "-global_quality", crf])
+        else:
+            command.extend(["-quality", "speed", "-qp_i", crf, "-qp_p", crf])
+        command.extend(["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output_path)])
+        return command
+
+    if update_status:
+        update_status(f"Đang render bằng {codec} (tối đa {RENDER_CONCURRENCY} render đồng thời)...")
+    with render_slot():
+        cmd = build_command(encoder)
+        rendered = subprocess.run(cmd, capture_output=True, text=True, creationflags=NO_WINDOW)
+        if rendered.returncode != 0 and encoder != "cpu":
+            print(f"[FFmpeg Warning] {codec} failed; fallback to libx264: {rendered.stderr[:300]}")
+            rendered = subprocess.run(build_command("cpu"), capture_output=True, text=True, creationflags=NO_WINDOW)
+        if rendered.returncode != 0:
+            raise RuntimeError(f"FFmpeg render thất bại: {rendered.stderr}")
 
     return Path(output_path)
 

@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .hardware import (
+    aggregate_disk_space,
     benchmark_encoders,
     collect_hardware_report,
     derive_render_profile,
@@ -23,6 +24,8 @@ from .profile_cache import ProfileCache
 
 PRERELEASE_NAME = "highlight-desktop-offline-preview"
 PRERELEASE_BUILD = "1.0.19-preview.1"
+BUILD_CHANNEL = "test"
+TEST_LABEL = "TEST BUILD - NOT FOR PRODUCTION RELEASE"
 PRODUCTION_APP = Path("D:/Highlight_Video_Studio")
 PRODUCTION_PORT = 5080
 DEFAULT_FFMPEG = "ffmpeg"
@@ -85,6 +88,55 @@ def production_safety(payload_root: str | Path | None = None) -> dict:
     }
 
 
+def render_config_patch(profile: dict, config: dict | None = None) -> dict:
+    """Return a minimal, safe patch for the existing render config.
+
+    Only the encoder choice and the render concurrency are produced. Credentials, provider keys and
+    unrelated config keys are never touched, and CPU fallback is always what an unknown/empty
+    profile yields.
+    """
+    encoder = str(profile.get("encoder") or "cpu")
+    if encoder not in ("nvenc", "qsv", "amf", "cpu"):
+        encoder = "cpu"
+    concurrency = max(1, min(4, int(profile.get("max_concurrent_renders") or 1)))
+    patch = {
+        "video_pipeline": {
+            "encoder": encoder,
+            "max_concurrent_renders": concurrency,
+        }
+    }
+    if config is not None and isinstance(config.get("video_pipeline"), dict):
+        existing = dict(config["video_pipeline"])
+        existing.update(patch["video_pipeline"])
+        patch["video_pipeline"] = existing
+    return patch
+
+
+def apply_render_config(profile: dict, config_path: str | Path, dry_run: bool = True) -> dict:
+    """Merge the render profile into a config file, preserving every other key.
+
+    Defaults to ``dry_run=True`` so the merge can be inspected before anything is written. The
+    caller's file is written atomically (temp + replace) and only ``video_pipeline.encoder`` and
+    ``video_pipeline.max_concurrent_renders`` are ever changed.
+    """
+    target = Path(config_path)
+    config: dict = {}
+    if target.is_file():
+        try:
+            loaded = json.loads(target.read_text(encoding="utf-8"))
+            config = loaded if isinstance(loaded, dict) else {}
+        except (OSError, ValueError):
+            config = {}
+    patch = render_config_patch(profile, config)
+    merged = {**config, **patch}
+    if not dry_run:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp = target.with_name(target.name + ".tmp")
+        temp.write_text(json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8")
+        temp.replace(target)
+    return {"written": not dry_run, "config_path": str(target), "patch": patch,"merged_encoder": merged["video_pipeline"]["encoder"]}
+
+
 def environment_report(ffmpeg_bin: str | None = None, ffprobe_bin: str | None = None,
                        temp_dir: str | Path | None = None, cache_path: str | Path | None = None,
                        force: bool = False, run_canary: bool = True) -> dict:
@@ -99,16 +151,22 @@ def environment_report(ffmpeg_bin: str | None = None, ffprobe_bin: str | None = 
     cache = ProfileCache(cache_path or default_cache_path())
     profile = cache.resolve(report, canary_results=canary, force=force)
 
+    disk = aggregate_disk_space([probe_dir, PRODUCTION_APP / "output" if PRODUCTION_APP.exists() else probe_dir])
     return {
         "prerelease_name": PRERELEASE_NAME,
         "build": PRERELEASE_BUILD,
+        "channel": BUILD_CHANNEL,
+        "test_label": TEST_LABEL,
+        "release_eligible": False,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "platform": platform.platform(),
         "ffmpeg": ffmpeg,
         "ffprobe": ffprobe,
         "hardware": report_to_dict(report),
+        "disk": disk,
         "canary": canary,
         "render_profile": profile,
+        "render_config_patch": render_config_patch(profile),
         "production_safety": production_safety(),
     }
 

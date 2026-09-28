@@ -97,6 +97,16 @@ def detect_gpu(command_runner=None) -> GpuInfo:
     return GpuInfo()
 
 
+def _ffmpeg_version(ffmpeg_bin: str, command_runner=None) -> str:
+    """Return the FFmpeg build string so an upgraded FFmpeg invalidates the profile cache."""
+    runner = command_runner or (lambda command: _run(command, capture_output=True, text=True, timeout=20))
+    result = runner([ffmpeg_bin, "-hide_banner", "-version"])
+    if not result or getattr(result, "returncode", 1) != 0:
+        return "unknown"
+    first = ((result.stdout or "").strip().splitlines() or [""])[0]
+    return first.strip() or "unknown"
+
+
 def probe_encoders(ffmpeg_bin: str, command_runner=None) -> dict:
     runner = command_runner or (lambda command: _run(command, capture_output=True, text=True, timeout=30))
     result = runner([ffmpeg_bin, "-hide_banner", "-encoders"])
@@ -170,8 +180,42 @@ def collect_hardware_report(ffmpeg_bin="ffmpeg", temp_dir: Path | None = None, c
         "python": sys.version.split()[0],
         "gpu_key": f"{gpu.vendor}:{gpu.model}:{gpu.vram_mb}:{gpu.driver_version}",
         "hardware_key": f"{cpu_model}:{physical}:{logical}:{report.ram_mb}",
+        "ffmpeg_key": _ffmpeg_version(ffmpeg_bin, command_runner=command_runner),
     }
     return report
+
+
+def aggregate_disk_space(paths: list[str | Path] | None = None) -> dict:
+    """Report free/total disk space for the volumes a render actually writes to.
+
+    A render needs the output, temp and download volumes; the smallest one is the real constraint.
+    """
+    candidates = [Path(p) for p in (paths or [])]
+    if not candidates:
+        candidates = [Path.cwd()]
+    per_volume: dict[str, dict] = {}
+    for candidate in candidates:
+        try:
+            resolved = candidate if candidate.exists() else candidate.parent
+            probe = resolved if resolved.exists() else Path.cwd()
+            usage = shutil.disk_usage(str(probe))
+        except (OSError, ValueError):
+            continue
+        anchor = str(probe.anchor or probe)
+        entry = per_volume.setdefault(anchor, {"path": str(probe), "free_mb": 0, "total_mb": 0})
+        free_mb = usage.free // (1024 * 1024)
+        total_mb = usage.total // (1024 * 1024)
+        # Keep the tightest constraint per volume when several paths share it.
+        entry["free_mb"] = free_mb if not entry["free_mb"] else min(entry["free_mb"], free_mb)
+        entry["total_mb"] = max(entry["total_mb"], total_mb)
+    if not per_volume:
+        return {"volumes": {}, "min_free_mb": 0, "critical": True}
+    min_free = min(entry["free_mb"] for entry in per_volume.values())
+    return {
+        "volumes": per_volume,
+        "min_free_mb": min_free,
+        "critical": min_free < 20 * 1024,
+    }
 
 
 def _total_ram_mb() -> int:
@@ -274,23 +318,53 @@ def run_encoder_canaries(report: HardwareReport, ffmpeg_bin: str, ffprobe_bin: s
 
 def benchmark_encoders(report: HardwareReport, ffmpeg_bin: str, ffprobe_bin: str, temp_dir: Path,
                        command_runner=None) -> dict:
-    """Try candidates in priority order and select the first encoder proven by a real canary.
+    """Run real canary encodes and select the fastest encoder that produced a valid 1080p clip.
 
-    Returns ``{encoder, codec, verified, selected, results}``. A candidate counts only when FFmpeg
-    exits 0 and ffprobe confirms a decodable 1920x1080 stream, so a device name or a codec listed
-    in ``-encoders`` is never enough on its own.
+    Returns ``{encoder, codec, verified, selected, chosen_by, results}``. A candidate counts only
+    when FFmpeg exits 0 and ffprobe confirms a decodable 1920x1080 stream, so a device name or a
+    codec listed in ``-encoders`` is never enough on its own.
+
+    Selection policy is deliberately conservative:
+    - If a **verified hardware** encoder exists, the fastest verified hardware encoder wins
+      (NVENC > QSV > AMF on ties), because the whole point of the probe is to use the GPU.
+    - Otherwise CPU wins.
+    - A hardware encoder is never accepted when it is slower than the CPU canary by a wide margin,
+      since a GPU path that loses to libx264 is just extra failure surface.
     """
     results = run_encoder_canaries(report, ffmpeg_bin, ffprobe_bin, temp_dir, command_runner=command_runner)
-    selected = next(
-        (name for name in ENCODER_PRIORITY if (results.get(name) or {}).get("success")),
-        "cpu",
-    )
+    verified = [name for name in ENCODER_PRIORITY if (results.get(name) or {}).get("success")]
+    hardware = [name for name in verified if name != "cpu"]
+
+    chosen_by = "none"
+    if hardware:
+        fastest_hw = min(
+            hardware,
+            key=lambda name: (
+                float((results.get(name) or {}).get("elapsed_seconds") or float("inf")),
+                ENCODER_PRIORITY.index(name),
+            ),
+        )
+        cpu_elapsed = float((results.get("cpu") or {}).get("elapsed_seconds") or 0.0)
+        hw_elapsed = float((results.get(fastest_hw) or {}).get("elapsed_seconds") or 0.0)
+        cpu_verified = bool((results.get("cpu") or {}).get("success"))
+        if cpu_verified and cpu_elapsed > 0 and hw_elapsed > 0 and cpu_elapsed < hw_elapsed * 0.5:
+            # CPU is more than 2x faster than the best working GPU path; prefer the proven CPU path.
+            selected, chosen_by = "cpu", "cpu-faster-than-hardware"
+        else:
+            selected, chosen_by = fastest_hw, "fastest-verified-hardware"
+    elif verified:
+        selected, chosen_by = "cpu", "only-verified-encoder"
+    else:
+        selected, chosen_by = "cpu", "no-verified-encoder"
+
     winner = results.get(selected) or {}
     return {
         "encoder": selected,
         "codec": ENCODER_CODECS[selected],
         "verified": bool(winner.get("success")),
         "selected": selected,
+        "chosen_by": chosen_by,
+        "verified_encoders": verified,
         "results": results,
     }
 
@@ -348,6 +422,8 @@ def derive_render_profile(report: HardwareReport, canary_results: dict | None = 
             f"Canary verified {encoder} at {measured.get('realtime_factor')}x realtime "
             f"({measured.get('elapsed_seconds')}s for {measured.get('clip_seconds')}s 1080p30)."
         )
+    if canary_results.get("chosen_by"):
+        profile["chosen_by"] = canary_results["chosen_by"]
     return profile
 
 

@@ -2,75 +2,127 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Threading;
 using System.Windows.Forms;
 
 internal static class AppLauncher
 {
-    private const string AppUrl = "http://127.0.0.1:5080";
+    private static string appUrl;
+    private static int appPort;
+    private static Process ownedServer;
+    private static Mutex instanceMutex;
 
     [STAThread]
     private static void Main()
     {
+        bool created;
+        instanceMutex = new Mutex(true, @"Local\HighlightDesktopTest-1.0.19", out created);
+        if (!created)
+        {
+            OpenBrowser();
+            return;
+        }
+
         string baseDir = AppDomain.CurrentDomain.BaseDirectory;
         Directory.SetCurrentDirectory(baseDir);
+        appPort = PickFreeLoopbackPort();
+        appUrl = "http://127.0.0.1:" + appPort;
         string python = Path.Combine(baseDir, "runtime", "python.exe");
         string server = Path.Combine(baseDir, "run_server.py");
         if (!File.Exists(python) || !File.Exists(server))
         {
-            MessageBox.Show(
-                "Bản cài thiếu Python portable hoặc run_server.py. Vui lòng cài lại Highlight Video Studio.",
-                "Highlight Video Studio", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show("The desktop-test package is incomplete. Reinstall Highlight Desktop Test.",
+                "Highlight Desktop Test", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
+        }
+
+        Application.ApplicationExit += delegate { StopOwnedServer(); };
+        AppDomain.CurrentDomain.ProcessExit += delegate { StopOwnedServer(); };
+
+        if (!ServerReady() && !StartServer(python, server, baseDir)) return;
+
+        DateTime deadline = DateTime.UtcNow.AddSeconds(120);
+        while (DateTime.UtcNow < deadline && !ServerReady())
+        {
+            if (ownedServer != null && ownedServer.HasExited) break;
+            Thread.Sleep(400);
         }
 
         if (!ServerReady())
         {
-            try
-            {
-                var info = new ProcessStartInfo
-                {
-                    FileName = python,
-                    Arguments = "\"" + server + "\"",
-                    WorkingDirectory = baseDir,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    WindowStyle = ProcessWindowStyle.Hidden,
-                    RedirectStandardError = true
-                };
-                var process = new Process { StartInfo = info, EnableRaisingEvents = true };
-                process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs args)
-                {
-                    if (String.IsNullOrWhiteSpace(args.Data)) return;
-                    try { File.AppendAllText(Path.Combine(baseDir, "server_error.log"), args.Data + Environment.NewLine); }
-                    catch { }
-                };
-                process.Start();
-                process.BeginErrorReadLine();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Không thể khởi động ứng dụng: " + ex.Message,
-                    "Highlight Video Studio", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            DateTime deadline = DateTime.UtcNow.AddSeconds(30);
-            while (DateTime.UtcNow < deadline && !ServerReady()) Thread.Sleep(350);
-        }
-
-        if (!ServerReady())
-        {
-            MessageBox.Show("Máy chủ không khởi động trong 30 giây. Hãy xem server_error.log trong thư mục cài đặt.",
-                "Highlight Video Studio", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            StopOwnedServer();
+            MessageBox.Show("The local server did not become ready. See server_error.log in the install directory.",
+                "Highlight Desktop Test", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        try { Process.Start(new ProcessStartInfo(AppUrl) { UseShellExecute = true }); }
+        OpenBrowser();
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        Application.Run(new LauncherForm());
+    }
+
+    private static bool StartServer(string python, string server, string baseDir)
+    {
+        try
+        {
+            var info = new ProcessStartInfo
+            {
+                FileName = python,
+                Arguments = "\"" + server + "\"",
+                WorkingDirectory = baseDir,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
+            };
+            info.EnvironmentVariables["HIGHLIGHT_BIND_HOST"] = "127.0.0.1";
+            info.EnvironmentVariables["HIGHLIGHT_PORT"] = appPort.ToString();
+            info.EnvironmentVariables["BUILD_CHANNEL"] = "desktop-test";
+            ownedServer = new Process { StartInfo = info, EnableRaisingEvents = true };
+            DataReceivedEventHandler log = delegate(object sender, DataReceivedEventArgs args)
+            {
+                if (String.IsNullOrWhiteSpace(args.Data)) return;
+                try { File.AppendAllText(Path.Combine(baseDir, "server_error.log"), args.Data + Environment.NewLine); } catch { }
+            };
+            ownedServer.ErrorDataReceived += log;
+            ownedServer.OutputDataReceived += log;
+            ownedServer.Start();
+            ownedServer.BeginErrorReadLine();
+            ownedServer.BeginOutputReadLine();
+            return true;
+        }
         catch (Exception ex)
         {
-            MessageBox.Show("Ứng dụng đã chạy tại " + AppUrl + "\n\n" + ex.Message,
-                "Highlight Video Studio", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("Cannot start the local application: " + ex.Message,
+                "Highlight Desktop Test", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+    }
+
+    private static void StopOwnedServer()
+    {
+        try
+        {
+            if (ownedServer != null && !ownedServer.HasExited)
+            {
+                ownedServer.CloseMainWindow();
+                if (!ownedServer.WaitForExit(1500)) ownedServer.Kill();
+            }
+        }
+        catch { }
+    }
+
+    private static void OpenBrowser()
+    {
+        if (String.IsNullOrWhiteSpace(appUrl)) return;
+        try { Process.Start(new ProcessStartInfo(appUrl) { UseShellExecute = true }); }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Application is available at " + appUrl + "\n\n" + ex.Message,
+                "Highlight Desktop Test", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
     }
 
@@ -78,12 +130,57 @@ internal static class AppLauncher
     {
         try
         {
-            var request = (HttpWebRequest)WebRequest.Create(AppUrl + "/api/system/info");
-            request.Timeout = 700;
-            request.ReadWriteTimeout = 700;
+            if (String.IsNullOrWhiteSpace(appUrl)) return false;
+            var request = (HttpWebRequest)WebRequest.Create(appUrl + "/api/system/info");
+            request.Timeout = 800;
+            request.ReadWriteTimeout = 800;
             using (var response = (HttpWebResponse)request.GetResponse())
-                return (int)response.StatusCode >= 200 && (int)response.StatusCode < 500;
+                return response.StatusCode == HttpStatusCode.OK;
         }
         catch { return false; }
+    }
+
+    private static int PickFreeLoopbackPort()
+    {
+        for (int attempt = 0; attempt < 12; attempt++)
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            try
+            {
+                listener.Start();
+                int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                if (port != 5080) return port;
+            }
+            finally { listener.Stop(); }
+        }
+        throw new InvalidOperationException("Unable to reserve a safe loopback port.");
+    }
+
+    private sealed class LauncherForm : Form
+    {
+        internal LauncherForm()
+        {
+            Text = "Highlight Desktop Test v1.0.19";
+            Width = 410;
+            Height = 175;
+            StartPosition = FormStartPosition.CenterScreen;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = true;
+            var label = new Label { Left = 24, Top = 20, Width = 350, Height = 42, Text = "Highlight Desktop Test is running locally.\nClose this window to stop its backend." };
+            var open = new Button { Left = 24, Top = 78, Width = 170, Height = 36, Text = "Open application" };
+            var stop = new Button { Left = 204, Top = 78, Width = 170, Height = 36, Text = "Stop and exit" };
+            open.Click += delegate { OpenBrowser(); };
+            stop.Click += delegate { Close(); };
+            Controls.Add(label);
+            Controls.Add(open);
+            Controls.Add(stop);
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            StopOwnedServer();
+            base.OnFormClosing(e);
+        }
     }
 }

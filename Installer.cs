@@ -14,10 +14,12 @@ internal sealed class InstallerForm : Form
     private readonly ProgressBar progress = new ProgressBar();
     private readonly Label status = new Label();
     private readonly Button install = new Button();
+    private const string TestProductName = "Highlight Desktop Test";
+    private const string ProductKey = @"Software\HighlightDesktopTest";
 
     internal InstallerForm()
     {
-        Text = "Highlight Video Studio v1.0.19 - Cài đặt";
+        Text = TestProductName + " v1.0.19 - Installer";
         ClientSize = new Size(620, 355);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -26,9 +28,9 @@ internal sealed class InstallerForm : Form
         ForeColor = Color.White;
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
 
-        Controls.Add(new Label { Text = "Highlight Video Studio", Font = new Font("Segoe UI", 20, FontStyle.Bold), ForeColor = Color.FromArgb(56, 189, 248), AutoSize = true, Location = new Point(34, 27) });
-        Controls.Add(new Label { Text = "AI Highlight • Research • Multi-channel Publisher", Font = new Font("Segoe UI", 10), ForeColor = Color.FromArgb(148, 163, 184), AutoSize = true, Location = new Point(37, 69) });
-        Controls.Add(new Label { Text = "Thư mục cài đặt", Font = new Font("Segoe UI", 9, FontStyle.Bold), AutoSize = true, Location = new Point(38, 112) });
+        Controls.Add(new Label { Text = TestProductName, Font = new Font("Segoe UI", 20, FontStyle.Bold), ForeColor = Color.FromArgb(56, 189, 248), AutoSize = true, Location = new Point(34, 27) });
+        Controls.Add(new Label { Text = "Isolated local-first test build • loopback only", Font = new Font("Segoe UI", 10), ForeColor = Color.FromArgb(148, 163, 184), AutoSize = true, Location = new Point(37, 69) });
+        Controls.Add(new Label { Text = "Install directory", Font = new Font("Segoe UI", 9, FontStyle.Bold), AutoSize = true, Location = new Point(38, 112) });
 
         destination.Text = DetectInstallLocation();
         destination.Location = new Point(38, 137);
@@ -41,13 +43,13 @@ internal sealed class InstallerForm : Form
         progress.Style = ProgressBarStyle.Continuous;
         Controls.Add(progress);
 
-        status.Text = "Sẵn sàng. Cấu hình và dữ liệu cũ sẽ được giữ nguyên khi nâng cấp.";
+        status.Text = "Ready. This test product does not modify the production Highlight install.";
         status.ForeColor = Color.FromArgb(148, 163, 184);
         status.Location = new Point(38, 220);
         status.Size = new Size(542, 40);
         Controls.Add(status);
 
-        install.Text = "CÀI ĐẶT & KHỞI CHẠY";
+        install.Text = "INSTALL & LAUNCH TEST BUILD";
         install.Font = new Font("Segoe UI", 11, FontStyle.Bold);
         install.FlatStyle = FlatStyle.Flat;
         install.BackColor = Color.FromArgb(14, 165, 233);
@@ -64,8 +66,7 @@ internal sealed class InstallerForm : Form
         if (String.IsNullOrWhiteSpace(target)) return;
         install.Enabled = false;
         destination.Enabled = false;
-        var worker = new Thread(delegate() { InstallPayload(target); }) { IsBackground = true };
-        worker.Start();
+        new Thread(delegate() { InstallPayload(target); }) { IsBackground = true }.Start();
     }
 
     private void InstallPayload(string target)
@@ -73,11 +74,11 @@ internal sealed class InstallerForm : Form
         try
         {
             Directory.CreateDirectory(target);
-            UpdateUi("Đang đóng phiên bản Highlight Studio cũ…", 0);
+            UpdateUi("Stopping an earlier test instance…", 0);
             StopRunningApplication(target);
-            using (Stream payload = Assembly.GetExecutingAssembly().GetManifestResourceStream("HighlightStudio.Payload"))
+            using (Stream payload = Assembly.GetExecutingAssembly().GetManifestResourceStream("HighlightDesktopTest.Payload"))
             {
-                if (payload == null) throw new InvalidOperationException("Installer không chứa gói ứng dụng.");
+                if (payload == null) throw new InvalidOperationException("Installer payload is missing.");
                 using (var archive = new ZipArchive(payload, ZipArchiveMode.Read))
                 {
                     int index = 0;
@@ -86,10 +87,9 @@ internal sealed class InstallerForm : Form
                         index++;
                         string relative = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
                         string output = Path.GetFullPath(Path.Combine(target, relative));
-                        string root = Path.GetFullPath(target) + Path.DirectorySeparatorChar;
-                        if (!output.StartsWith(root, StringComparison.OrdinalIgnoreCase))
-                            throw new InvalidDataException("Đường dẫn không an toàn trong package: " + entry.FullName);
-                        UpdateUi("Đang cài đặt: " + entry.FullName, archive.Entries.Count == 0 ? 0 : index * 100 / archive.Entries.Count);
+                        string root = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                        if (!output.StartsWith(root, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Unsafe package path: " + entry.FullName);
+                        UpdateUi("Installing: " + entry.FullName, archive.Entries.Count == 0 ? 0 : index * 100 / archive.Entries.Count);
                         if (String.IsNullOrEmpty(entry.Name)) { Directory.CreateDirectory(output); continue; }
                         Directory.CreateDirectory(Path.GetDirectoryName(output));
                         if (ShouldPreserve(relative) && File.Exists(output)) continue;
@@ -98,13 +98,13 @@ internal sealed class InstallerForm : Form
                 }
             }
 
-            string launcher = Path.Combine(target, "Highlight_Studio.exe");
-            CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Highlight Video Studio.lnk"), launcher, target);
-            string programs = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Highlight Video Studio");
+            string launcher = Path.Combine(target, "Highlight_Desktop_Test.exe");
+            CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), TestProductName + ".lnk"), launcher, target);
+            string programs = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), TestProductName);
             Directory.CreateDirectory(programs);
-            CreateShortcut(Path.Combine(programs, "Highlight Video Studio.lnk"), launcher, target);
+            CreateShortcut(Path.Combine(programs, TestProductName + ".lnk"), launcher, target);
             SaveInstallLocation(target);
-            UpdateUi("Cài đặt hoàn tất. Đang mở Highlight Video Studio…", 100);
+            UpdateUi("Installation complete. Starting the isolated test build…", 100);
             Process.Start(new ProcessStartInfo(launcher) { WorkingDirectory = target, UseShellExecute = true });
             Thread.Sleep(800);
             BeginInvoke(new Action(Close));
@@ -113,7 +113,7 @@ internal sealed class InstallerForm : Form
         {
             BeginInvoke(new Action(delegate
             {
-                MessageBox.Show("Cài đặt thất bại:\n" + ex.Message, "Highlight Video Studio", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Installation failed:\n" + ex.Message, TestProductName, MessageBoxButtons.OK, MessageBoxIcon.Error);
                 install.Enabled = true;
                 destination.Enabled = true;
             }));
@@ -139,15 +139,10 @@ internal sealed class InstallerForm : Form
             {
                 if (process.Id == Process.GetCurrentProcess().Id) continue;
                 string executable = process.MainModule == null ? "" : process.MainModule.FileName;
-                if (!String.IsNullOrWhiteSpace(executable) &&
-                    Path.GetFullPath(executable).StartsWith(installRoot, StringComparison.OrdinalIgnoreCase))
+                if (!String.IsNullOrWhiteSpace(executable) && Path.GetFullPath(executable).StartsWith(installRoot, StringComparison.OrdinalIgnoreCase))
                 {
                     process.CloseMainWindow();
-                    if (!process.WaitForExit(1800))
-                    {
-                        process.Kill();
-                        process.WaitForExit(5000);
-                    }
+                    if (!process.WaitForExit(1800)) { process.Kill(); process.WaitForExit(5000); }
                 }
             }
             catch { }
@@ -165,46 +160,31 @@ internal sealed class InstallerForm : Form
             Exception lastError = null;
             for (int attempt = 0; attempt < 12; attempt++)
             {
-                try
-                {
-                    File.Copy(temporary, output, true);
-                    return;
-                }
-                catch (Exception ex)
-                {
-                    lastError = ex;
-                    Thread.Sleep(150 + attempt * 120);
-                }
+                try { File.Copy(temporary, output, true); return; }
+                catch (Exception ex) { lastError = ex; Thread.Sleep(150 + attempt * 120); }
             }
-            throw new IOException("Không thể cập nhật file đang được sử dụng: " + output, lastError);
+            throw new IOException("Cannot update file: " + output, lastError);
         }
-        finally
-        {
-            try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
-        }
+        finally { try { if (File.Exists(temporary)) File.Delete(temporary); } catch { } }
     }
 
     private static string DetectInstallLocation()
     {
         try
         {
-            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\HighlightVideoStudio"))
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(ProductKey))
             {
                 string saved = key == null ? null : key.GetValue("InstallLocation") as string;
                 if (!String.IsNullOrWhiteSpace(saved) && Directory.Exists(saved)) return saved;
             }
         }
         catch { }
-        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Highlight Video Studio");
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), TestProductName);
     }
 
     private static void SaveInstallLocation(string target)
     {
-        try
-        {
-            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(@"Software\HighlightVideoStudio"))
-                key.SetValue("InstallLocation", target, RegistryValueKind.String);
-        }
+        try { using (RegistryKey key = Registry.CurrentUser.CreateSubKey(ProductKey)) key.SetValue("InstallLocation", target, RegistryValueKind.String); }
         catch { }
     }
 
@@ -216,7 +196,7 @@ internal sealed class InstallerForm : Form
         shortcut.TargetPath = target;
         shortcut.WorkingDirectory = workingDirectory;
         shortcut.IconLocation = target + ",0";
-        shortcut.Description = "Highlight Video Studio";
+        shortcut.Description = TestProductName;
         shortcut.Save();
     }
 
