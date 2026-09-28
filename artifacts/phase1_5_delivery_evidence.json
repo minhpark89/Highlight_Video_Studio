@@ -1,0 +1,143 @@
+﻿{
+    "artifact":  "F:\\openclaw\\.openclaw\\workspace\\worktrees\\highlight-multi-pc\\release\\Highlight_Desktop_Test_Setup_v1.0.19.exe",
+    "artifact_bytes":  683540992,
+    "sha256":  "ecce8833e7948b1b279cc79682fbdbd18914305167868b202daaa74c36fd8a1f",
+    "build_channel":  "desktop-test",
+    "app_version":  "1.0.19",
+    "tested_listener":  "127.0.0.1",
+    "tested_port":  "ephemeral",
+    "hardware":  {
+                     "cpu_logical_cores":  56,
+                     "cpu_model":  "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz / Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz",
+                     "cpu_physical_cores":  28,
+                     "disk_free_mb":  257438,
+                     "disk_write_mbps":  1149.5,
+                     "encoders":  {
+                                      "amf":  true,
+                                      "cpu":  true,
+                                      "nvenc":  true,
+                                      "qsv":  true
+                                  },
+                     "fingerprints":  {
+                                          "ffmpeg_key":  "ffmpeg version 8.1.2-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+                                          "gpu_key":  "nvidia:NVIDIA GeForce RTX 3060:12288:610.88",
+                                          "hardware_key":  "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz / Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz:28:56:98206",
+                                          "os":  "Windows-10-10.0.19043-SP0",
+                                          "python":  "3.13.7"
+                                      },
+                     "gpu":  {
+                                 "driver_version":  "610.88",
+                                 "model":  "NVIDIA GeForce RTX 3060",
+                                 "vendor":  "nvidia",
+                                 "vram_mb":  12288
+                             },
+                     "ram_mb":  98206
+                 },
+    "selected_profile":  {
+                             "canary":  {
+                                            "elapsed_seconds":  0.585,
+                                            "encoder":  "nvenc",
+                                            "frames":  60,
+                                            "height":  1080,
+                                            "output_bytes":  2969394,
+                                            "realtime_factor":  3.42,
+                                            "width":  1920
+                                        },
+                             "chosen_by":  "fastest-verified-hardware",
+                             "codec":  "h264_nvenc",
+                             "concurrency":  2,
+                             "encoder":  "nvenc",
+                             "encoder_label":  "nvidia-nvenc",
+                             "hardware_decode":  true,
+                             "max_concurrent_renders":  2,
+                             "notes":  [
+                                           "Canary verified nvenc at 3.42x realtime (0.585s for 2.0s 1080p30)."
+                                       ],
+                             "profile_version":  2,
+                             "ram_budget_mb":  58923
+                         },
+    "canaries":  {
+                     "chosen_by":  "fastest-verified-hardware",
+                     "codec":  "h264_nvenc",
+                     "encoder":  "nvenc",
+                     "results":  {
+                                     "amf":  {
+                                                 "clip_seconds":  2.0,
+                                                 "codec":  "h264_amf",
+                                                 "elapsed_seconds":  0.039,
+                                                 "encoder":  "amf",
+                                                 "error":  "while opening encoder - maybe incorrect parameters such as bit_rate, rate, width or height.\n[vf#0:0 @ 0000022ec7750940] Error sending frames to consumers: Unknown error occurred\n[vf#0:0 @ 0000022ec7750940] Task finished with error code: -1313558101 (Unknown error occurred)\n[vf#0:0 @ 0000022ec7750940] Terminating thread with return code -1313558101 (Unknown error occurred)\n[vost#0:0/h264_amf @ 0000022ec78503c0] [enc:h264_amf @ 0000022ec569ca80] Could not open encoder before EOF\n[vost#0:0/h264_amf @ 0000022ec78503c0] Task finished with error code: -22 (Invalid argument)\n[vost#0:0/h264_amf @ 0000022ec78503c0] Terminating thread with return code -22 (Invalid argument)\n[out#0/mp4 @ 0000022ec5644b40] Nothing was written into output file, because at least one of its streams received no packets.",
+                                                 "frames":  0,
+                                                 "height":  0,
+                                                 "output_bytes":  0,
+                                                 "realtime_factor":  51.28,
+                                                 "success":  false,
+                                                 "width":  0
+                                             },
+                                     "cpu":  {
+                                                 "clip_seconds":  2.0,
+                                                 "codec":  "libx264",
+                                                 "elapsed_seconds":  0.607,
+                                                 "encoder":  "cpu",
+                                                 "error":  "",
+                                                 "frames":  60,
+                                                 "height":  1080,
+                                                 "output_bytes":  1365515,
+                                                 "realtime_factor":  3.29,
+                                                 "success":  true,
+                                                 "width":  1920
+                                             },
+                                     "nvenc":  {
+                                                   "clip_seconds":  2.0,
+                                                   "codec":  "h264_nvenc",
+                                                   "elapsed_seconds":  0.585,
+                                                   "encoder":  "nvenc",
+                                                   "error":  "",
+                                                   "frames":  60,
+                                                   "height":  1080,
+                                                   "output_bytes":  2969394,
+                                                   "realtime_factor":  3.42,
+                                                   "success":  true,
+                                                   "width":  1920
+                                               },
+                                     "qsv":  {
+                                                 "clip_seconds":  2.0,
+                                                 "codec":  "h264_qsv",
+                                                 "elapsed_seconds":  0.062,
+                                                 "encoder":  "qsv",
+                                                 "error":  "while opening encoder - maybe incorrect parameters such as bit_rate, rate, width or height.\n[vf#0:0 @ 000001d6b57a0880] Error sending frames to consumers: Unknown error occurred\n[vf#0:0 @ 000001d6b57a0880] Task finished with error code: -1313558101 (Unknown error occurred)\n[vf#0:0 @ 000001d6b57a0880] Terminating thread with return code -1313558101 (Unknown error occurred)\n[vost#0:0/h264_qsv @ 000001d6b57a0500] [enc:h264_qsv @ 000001d6b362c7c0] Could not open encoder before EOF\n[vost#0:0/h264_qsv @ 000001d6b57a0500] Task finished with error code: -22 (Invalid argument)\n[vost#0:0/h264_qsv @ 000001d6b57a0500] Terminating thread with return code -22 (Invalid argument)\n[out#0/mp4 @ 000001d6b35d5f00] Nothing was written into output file, because at least one of its streams received no packets.",
+                                                 "frames":  0,
+                                                 "height":  0,
+                                                 "output_bytes":  0,
+                                                 "realtime_factor":  32.26,
+                                                 "success":  false,
+                                                 "width":  0
+                                             }
+                                 },
+                     "selected":  "nvenc",
+                     "verified":  true,
+                     "verified_encoders":  [
+                                               "nvenc",
+                                               "cpu"
+                                           ]
+                 },
+    "test_results":  {
+                         "page_token_sync":  "25 passed",
+                         "release_guards":  "16 passed",
+                         "total":  "83 passed",
+                         "multi_pc":  "42 passed"
+                     },
+    "packaged_smoke":  {
+                           "encoder":  "nvenc",
+                           "concurrency":  2,
+                           "api_success":  true,
+                           "listener_address":  "127.0.0.1"
+                       },
+    "production":  {
+                       "process_stopped":  false,
+                       "path":  "D:\\Highlight_Video_Studio",
+                       "scheduled_tasks_changed":  false,
+                       "modified":  false
+                   },
+    "generated_at":  "2026-09-28T01:33:44.8281756Z"
+}

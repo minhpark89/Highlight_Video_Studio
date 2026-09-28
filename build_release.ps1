@@ -1,6 +1,7 @@
 param(
     [string]$Version = "1.0.19",
     [string]$BuildChannel = "desktop-test",
+    [switch]$SkipTests,
     [string]$ToolSource = "D:\Highlight_Video_Studio\bin",
     [string]$IconSource = "D:\Highlight_Video_Studio\app.ico",
     [string]$WhisperModelSource = "$env:USERPROFILE\.cache\huggingface\hub\models--Systran--faster-whisper-small"
@@ -12,16 +13,39 @@ if ($Version -ne "1.0.19") { throw "Phase 1.5 test artifact must remain APP_VERS
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $buildRoot = Join-Path $root "build\desktop-test-v$Version"
-$stage = Join-Path $buildRoot "app"
+$stage = Join-Path $buildRoot ("stage-" + [Guid]::NewGuid().ToString("N"))
 $release = Join-Path $root "release"
 $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $pythonZip = Join-Path $buildRoot "python-3.11.7-embed-amd64.zip"
-$payload = Join-Path $buildRoot "Highlight_Desktop_Test_Package_v$Version.zip"
+$payload = Join-Path $buildRoot ("Highlight_Desktop_Test_Package_v$Version-" + [Guid]::NewGuid().ToString("N") + ".zip")
 
 if (-not (Test-Path -LiteralPath $csc)) { throw "C# compiler not found: $csc" }
+
+if (-not $SkipTests) {
+    Push-Location $root
+    try {
+        $testGroups = @(
+            @("tests/test_multi_pc_hardware.py", "tests/test_multi_pc_local_mvp.py", "tests/test_multi_pc_phase1.py"),
+            @("tests/test_release_guards.py"),
+            @("tests/test_page_token_sync.py")
+        )
+        foreach ($group in $testGroups) {
+            & python -m pytest @group -q --no-header
+            if ($LASTEXITCODE -ne 0) { throw "Release tests failed (pytest $LASTEXITCODE); use -SkipTests only to debug" }
+        }
+    }
+    finally { Pop-Location }
+}
 if (-not (Test-Path -LiteralPath $IconSource)) { throw "Icon not found: $IconSource" }
-if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stage, $release | Out-Null
+
+# A unique stage prevents stale preview processes from locking or corrupting a rebuild.
+$stageRuntime = Join-Path $stage "runtime"
+$lockedRuntime = Join-Path $root "build\desktop-test-v$Version\runtime-locked"
+if (Test-Path -LiteralPath (Join-Path $lockedRuntime "requirements.lock.txt")) {
+    Copy-Item -LiteralPath $lockedRuntime -Destination $stageRuntime -Recurse -Force
+    Write-Host "Reusing locked embedded runtime: $lockedRuntime"
+}
 
 $sourceDirs = @("core", "src", "web", "research", "multi_pc")
 foreach ($name in $sourceDirs) {
@@ -53,39 +77,66 @@ foreach ($tool in @("ffmpeg.exe", "ffprobe.exe", "node.exe", "yt-dlp.exe")) {
     Copy-Item -LiteralPath $source -Destination (Join-Path $stage "bin\$tool") -Force
 }
 
-$runtime = Join-Path $stage "runtime"
-if (-not (Test-Path -LiteralPath $pythonZip)) {
-    $oldZip = Join-Path $root "build\v$Version\python-3.11.7-embed-amd64.zip"
-    if (Test-Path -LiteralPath $oldZip) { Copy-Item -LiteralPath $oldZip -Destination $pythonZip -Force }
-    else { Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.11.7/python-3.11.7-embed-amd64.zip" -OutFile $pythonZip }
+$runtimeDir = Join-Path $stage "runtime"
+$runtimeLock = Join-Path $runtimeDir "requirements.lock.txt"
+if (Test-Path -LiteralPath $runtimeLock) {
+    Write-Host "Locked embedded runtime already staged"
 }
-New-Item -ItemType Directory -Force -Path $runtime | Out-Null
-Expand-Archive -LiteralPath $pythonZip -DestinationPath $runtime -Force
-$sitePackages = Join-Path $runtime "Lib\site-packages"
-New-Item -ItemType Directory -Force -Path $sitePackages | Out-Null
-python -m pip --python (Join-Path $runtime "python.exe") install --disable-pip-version-check --no-compile --upgrade --target $sitePackages -r (Join-Path $root "requirements.txt")
-if ($LASTEXITCODE -ne 0) { throw "Portable runtime dependency install failed" }
-Set-Content -LiteralPath (Join-Path $runtime "python311._pth") -Encoding ASCII -Value @("python311.zip", ".", "..", "Lib\site-packages", "import site")
+else {
+    if (-not (Test-Path -LiteralPath $pythonZip)) {
+        $oldZip = Join-Path $root "build\v$Version\python-3.11.7-embed-amd64.zip"
+        if (Test-Path -LiteralPath $oldZip) { Copy-Item -LiteralPath $oldZip -Destination $pythonZip -Force }
+        else { Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.11.7/python-3.11.7-embed-amd64.zip" -OutFile $pythonZip }
+    }
+    New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+    Expand-Archive -LiteralPath $pythonZip -DestinationPath $runtimeDir -Force
+    $sitePackages = Join-Path $runtimeDir "Lib\site-packages"
+    New-Item -ItemType Directory -Force -Path $sitePackages | Out-Null
+    python -m pip --python (Join-Path $runtimeDir "python.exe") install --disable-pip-version-check --no-compile --upgrade --target $sitePackages -r (Join-Path $root "requirements.txt")
+    if ($LASTEXITCODE -ne 0) { throw "Portable runtime dependency install failed" }
+    Set-Content -LiteralPath (Join-Path $runtimeDir "python311._pth") -Encoding ASCII -Value @("python311.zip", ".", "..", "Lib\site-packages", "import site")
+    Set-Content -LiteralPath $runtimeLock -Encoding ASCII -Value "python=3.11.7`nrequirements=$((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'requirements.txt')).Hash.ToLowerInvariant())"
+    if (Test-Path -LiteralPath $lockedRuntime) { Remove-Item -LiteralPath $lockedRuntime -Recurse -Force }
+    Copy-Item -LiteralPath $runtimeDir -Destination $lockedRuntime -Recurse -Force
+}
 
 if (-not (Test-Path -LiteralPath $WhisperModelSource)) { throw "Whisper model cache missing: $WhisperModelSource" }
 $whisperTarget = Join-Path $stage "models\faster-whisper-small"
 New-Item -ItemType Directory -Force -Path $whisperTarget | Out-Null
 $snapshot = Get-ChildItem (Join-Path $WhisperModelSource "snapshots") -Directory | Select-Object -First 1
 if (-not $snapshot) { throw "Whisper model cache has no snapshot" }
-foreach ($modelFile in Get-ChildItem $snapshot.FullName -File) { Copy-Item -LiteralPath $modelFile.FullName -Destination (Join-Path $whisperTarget $modelFile.Name) -Force }
+foreach ($modelFile in Get-ChildItem $snapshot.FullName -File) {
+    $modelTarget = if ($modelFile.Target) { $modelFile.Target[0] } else { $modelFile.FullName }
+    Copy-Item -LiteralPath $modelTarget -Destination (Join-Path $whisperTarget $modelFile.Name) -Force
+    if ((Get-Item -LiteralPath (Join-Path $whisperTarget $modelFile.Name)).Length -ne (Get-Item -LiteralPath $modelTarget).Length) { throw "Whisper model copy incomplete: $($modelFile.Name)" }
+}
 
 $launcherPath = Join-Path $stage "Highlight_Desktop_Test.exe"
 & $csc /nologo /target:winexe /optimize+ ("/out:" + $launcherPath) ("/win32icon:" + (Join-Path $stage "app.ico")) /reference:System.dll /reference:System.Windows.Forms.dll (Join-Path $root "AppLauncher.cs")
 if ($LASTEXITCODE -ne 0) { throw "Launcher compile failed" }
 
-if (Test-Path -LiteralPath $payload) { Remove-Item -LiteralPath $payload -Force }
-Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $payload -CompressionLevel Optimal
-$setup = Join-Path $release "Highlight_Desktop_Test_Setup_v$Version.exe"
+# Stage must be complete before packaging: a partial runtime inside the installer
+# would install a broken app, so fail loudly here instead.
+$stagedRuntime = Join-Path $stage "runtime\python.exe"
+if (-not (Test-Path -LiteralPath $stagedRuntime)) { throw "Staged runtime missing python.exe" }
+foreach ($required in @("runtime\Lib\site-packages\flask", "runtime\Lib\site-packages\waitress", "runtime\Lib\site-packages\faster_whisper", "runtime\Lib\site-packages\tqdm", "bin\ffmpeg.exe", "bin\ffprobe.exe", "models\faster-whisper-small\model.bin")) {
+    if (-not (Test-Path -LiteralPath (Join-Path $stage $required))) { throw "Staged package incomplete, missing: $required" }
+}
+
+# Compress-Archive aborts on this tree (long paths / large payload), so use bsdtar,
+# which produces a plain .zip the Installer reads via System.IO.Compression.
+tar -a -c -f $payload -C $stage .
+if ($LASTEXITCODE -ne 0) { throw "Payload zip failed (tar $LASTEXITCODE)" }
+if (-not (Test-Path -LiteralPath $payload)) { throw "Payload zip missing: $payload" }
+$setupName = "Highlight_Desktop_Test_Setup_v$Version-preview.1.exe"
+$setup = Join-Path $release $setupName
 & $csc /nologo /target:winexe /optimize+ ("/out:" + $setup) ("/win32icon:" + (Join-Path $stage "app.ico")) /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll /reference:Microsoft.CSharp.dll ("/resource:" + $payload + ",HighlightDesktopTest.Payload") (Join-Path $root "Installer.cs")
 if ($LASTEXITCODE -ne 0) { throw "Installer compile failed" }
 
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
-$hashFile = Join-Path $release "Highlight_Desktop_Test_Setup_v$Version.sha256"
-Set-Content -LiteralPath $hashFile -Encoding ASCII -Value "$hash  Highlight_Desktop_Test_Setup_v$Version.exe"
+$hashFile = Join-Path $release "Highlight_Desktop_Test_Setup_v$Version-preview.1.sha256"
+Set-Content -LiteralPath $hashFile -Encoding ASCII -Value "$hash  $setupName"
+try { Remove-Item -LiteralPath $payload -Force -ErrorAction Stop } catch { Write-Warning "Could not remove temporary payload: $payload" }
+try { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction Stop } catch { Write-Warning "Could not remove temporary stage: $stage" }
 Write-Host "Release built: $setup"
 Write-Host "SHA256: $hash"
