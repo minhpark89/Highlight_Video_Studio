@@ -751,6 +751,10 @@
         <span class="nav-icon"><i class="bi bi-calendar-check-fill" style="color: #10b981;"></i></span>
         <span>Quản lý Bài Đăng & Dọn Ổ</span>
       </button>
+      <button class="nav-btn" data-pane="pane-website" onclick="switchTab('pane-website', this)">
+        <span class="nav-icon"><i class="bi bi-globe" style="color: #06b6d4;"></i></span>
+        <span>Kết nối Website & Bài Viết</span>
+      </button>
     </div>
     <span class="nav-section">Hệ thống</span>
     <div class="nav-group">
@@ -1679,6 +1683,70 @@
               </div>
 </section>
 
+
+      <!-- PANE: KẾT NỐI WEBSITE BÀI VIẾT & FIRST COMMENT -->
+      <section id="pane-website" class="pane">
+        <div class="panel">
+          <div class="panel-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div>
+              <h2 style="font-size: 20px; font-weight: 800; margin: 0; display: flex; align-items: center; gap: 10px;">
+                <i class="bi bi-globe2" style="color: #38bdf8;"></i>
+                Kết nối website bài viết & First Comment
+              </h2>
+              <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">
+                Cấu hình Website CMS để tự động đăng bài viết kèm video player và lấy link gán vào First Comment Facebook
+              </div>
+            </div>
+            <button class="btn btn-secondary" onclick="loadWebsiteConfig()"><i class="bi bi-arrow-repeat"></i> Làm mới</button>
+          </div>
+          <form id="websiteSettingsForm" onsubmit="saveWebsiteConfig(event)" style="max-width: 700px; background: #111c33; border: 1px solid #23304d; border-radius: 12px; padding: 24px;">
+            <div style="margin-bottom: 16px;">
+              <label class="form-label" style="font-size: 12px; font-weight: 700; color: #94a3b8;">Website URL (Domain CMS):</label>
+              <input type="text" id="cfg_web_base" class="form-control" placeholder="https://yourblogdomain.com" required style="font-size: 13.5px;">
+              <div style="font-size: 11px; color: #64748b; margin-top: 4px;">Domain website CMS nhận bài viết (hỗ trợ các site cùng kiến trúc CMS).</div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+              <div>
+                <label class="form-label" style="font-size: 12px; font-weight: 700; color: #94a3b8;">Username:</label>
+                <input type="text" id="cfg_web_user" class="form-control" placeholder="admin" required style="font-size: 13.5px;">
+              </div>
+              <div>
+                <label class="form-label" style="font-size: 12px; font-weight: 700; color: #94a3b8;">Password:</label>
+                <input type="password" id="cfg_web_password" class="form-control" placeholder="Nhập mật khẩu (lưu bảo mật DPAPI)" style="font-size: 13.5px;">
+              </div>
+            </div>
+            <div id="cfg_web_status" style="font-size: 12px; color: #94a3b8; margin-bottom: 16px;">
+              <i class="bi bi-shield-lock"></i> Để trống mật khẩu nếu không muốn thay đổi giá trị đang lưu.
+            </div>
+            <div style="border-top:1px solid #23304d; margin:20px 0 16px; padding-top:18px;">
+              <div style="font-weight:800; margin-bottom:12px;"><i class="bi bi-camera-video"></i> Máy chủ phát video công khai</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                <div><label class="form-label">Phương thức upload</label><select id="cfg_video_method" class="form-control"><option value="scp">SCP/SFTP (khuyến nghị)</option><option value="cms">CMS presigned upload</option></select></div>
+                <div><label class="form-label">SSH Host</label><input id="cfg_video_host" class="form-control" placeholder="157.173.116.71"></div>
+                <div><label class="form-label">SSH Port</label><input id="cfg_video_port" type="number" class="form-control" value="22" min="1" max="65535"></div>
+                <div><label class="form-label">SSH Username</label><input id="cfg_video_user" class="form-control" placeholder="root"></div>
+                <div style="grid-column:1/-1"><label class="form-label">Đường dẫn private key trên máy</label><input id="cfg_video_key" class="form-control" placeholder="C:\Users\Bạn\.ssh\id_ed25519"></div>
+                <div style="grid-column:1/-1"><label class="form-label">Thư mục video trên server</label><input id="cfg_video_remote" class="form-control" placeholder="/var/www/portfolio/videos"></div>
+                <div style="grid-column:1/-1"><label class="form-label">Public video URL</label><input id="cfg_video_public" class="form-control" placeholder="https://studio.example.com/videos"></div>
+              </div>
+              <div id="cfg_video_status" style="font-size:12px;color:#94a3b8;margin-top:10px;">Chưa kiểm tra máy chủ video.</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <button type="submit" class="btn btn-primary" style="font-weight: 700; padding: 10px 20px;">
+                <i class="bi bi-save2-fill"></i> Lưu cấu hình Website
+              </button>
+              <button type="button" class="btn btn-secondary" onclick="testWebsiteConnection()" style="font-weight: 600;">
+                <i class="bi bi-broadcast"></i> Kiểm tra kết nối
+              </button>
+              <button type="button" class="btn btn-secondary" onclick="testVideoUploader()" style="font-weight: 600;">
+                <i class="bi bi-cloud-arrow-up"></i> Kiểm tra upload video
+              </button>
+              <span id="website-save-msg" style="font-size: 12.5px; font-weight: 600;"></span>
+            </div>
+          </form>
+        </div>
+      </section>
+
     </div><!-- end content-area -->
 
 
@@ -1730,6 +1798,7 @@
         if (paneId === 'pane-pages' && typeof loadTokensAndPages === 'function') loadTokensAndPages();
         if (paneId === 'pane-tokens' && typeof loadTokensOnly === 'function') loadTokensOnly();
         if (paneId === 'pane-posts' && typeof loadPostsTable === 'function') { loadPostsTable(); if (typeof window.startPostsAutoRefresh === 'function') window.startPostsAutoRefresh(); }
+        if (paneId === 'pane-website' && typeof loadWebsiteConfig === 'function') loadWebsiteConfig();
       } catch (e) { console.warn('Lazy loader err:', e); }
     } catch (err) {
       console.error('[switchTab error]', err);
