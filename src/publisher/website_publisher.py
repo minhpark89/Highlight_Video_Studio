@@ -200,6 +200,34 @@ def get_clip_metadata(clip_filename: str) -> dict:
 
     return meta
 
+def extract_youtube_video_id(value: str) -> str:
+    """Extract a canonical YouTube video ID from a URL or raw ID."""
+    raw = str(value or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", raw):
+        return raw
+    patterns = (
+        r"(?:youtube\.com/(?:watch\?(?:[^#]*&)?v=|embed/|shorts/|live/)|youtu\.be/)([A-Za-z0-9_-]{11})",
+        r"[?&]v=([A-Za-z0-9_-]{11})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return ""
+
+def build_youtube_embed_html(youtube_id: str, title: str = "") -> str:
+    """Build a responsive, privacy-enhanced YouTube iframe block."""
+    clean_id = extract_youtube_video_id(youtube_id)
+    if not clean_id:
+        raise WebsiteServiceError("Link YouTube không có video ID hợp lệ")
+    safe_title = html.escape(str(title or "YouTube video"), quote=True)
+    embed_url = f"https://www.youtube-nocookie.com/embed/{clean_id}"
+    return f"""
+        <div class="youtube-embed-container" style="position: relative; width: 100%; max-width: 760px; margin: 0 auto; padding-bottom: 56.25%; height: 0; overflow: hidden; border-radius: 12px; background: #000; box-shadow: 0 4px 20px rgba(0,0,0,0.5);">
+          <iframe src="{embed_url}" title="{safe_title}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen style="position: absolute; inset: 0; width: 100%; height: 100%; border: 0;"></iframe>
+        </div>
+    """
+
 def generate_llm_hook_image(video_title: str, model_override: str = "") -> str:
     """
     Sinh ảnh HOOK THUMBNAIL bằng AI Gemini (gemini-3.1-flash-image)
@@ -393,16 +421,32 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str) -> t
 
     return hero_cdn_url, body_imgs_cdn
 
-def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: list, video_stream_url: str) -> tuple:
+def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: list, video_stream_url: str = "", youtube_id: str = "") -> tuple:
     """
     Sinh bài viết dài chuyên sâu 500+ từ chuẩn báo chí quốc tế:
     - ĐẦU BÀI: Hiển thị ngay tấm ảnh Hook LLM to sắc nét (Hero Banner)!
     - Mở đầu lôi cuốn
     - 2 phần phân tích chuyên sâu + ảnh minh họa diễn biến
-    - CUỐI BÀI: Video Player HTML5 phát file video MP4 gốc dài (100% chạy trên điện thoại và máy tính)!
+    - CUỐI BÀI: Ưu tiên YouTube iframe; giữ HTML5 MP4 làm fallback cho job cũ.
     """
-    if not video_stream_url or not str(video_stream_url).startswith("https://"):
-        raise WebsiteServiceError("Video chưa có HTTPS public URL hợp lệ")
+    clean_youtube_id = extract_youtube_video_id(youtube_id)
+    if clean_youtube_id:
+        video_player_html = build_youtube_embed_html(clean_youtube_id, video_title)
+        source_label = "Original YouTube Video"
+    elif video_stream_url and str(video_stream_url).startswith("https://"):
+        safe_stream_url = html.escape(str(video_stream_url), quote=True)
+        safe_poster = html.escape(str(hero_img or ""), quote=True)
+        video_player_html = f"""
+        <div style="margin: 0 auto; max-width: 760px; border-radius: 12px; overflow: hidden; background: #000; box-shadow: 0 4px 20px rgba(0,0,0,0.5);">
+          <video controls playsinline preload="metadata" poster="{safe_poster}" style="width: 100%; max-height: 520px; display: block; outline: none;">
+            <source src="{safe_stream_url}" type="video/mp4">
+            Trình duyệt của bạn không hỗ trợ phát video trực tiếp.
+          </video>
+        </div>
+        """
+        source_label = "Official Broadcast Stream"
+    else:
+        raise WebsiteServiceError("Video chưa có YouTube ID hoặc HTTPS public URL hợp lệ")
     title = video_title or "Uncut Breakdown & Critical Scene Analysis"
     
     # 1. Khối ảnh Hero Hook nằm ngay đầu bài viết (dưới tiêu đề)
@@ -541,15 +585,10 @@ Output strictly valid JSON only:
           Experience every unedited angle and decisive moment from start to finish. Stream the complete footage below in full high definition.
         </p>
         
-        <div style="margin: 0 auto; max-width: 760px; border-radius: 12px; overflow: hidden; background: #000; box-shadow: 0 4px 20px rgba(0,0,0,0.5);">
-          <video controls playsinline preload="metadata" poster="{hero_img}" style="width: 100%; max-height: 520px; display: block; outline: none;">
-            <source src="{video_stream_url}" type="video/mp4">
-            Trình duyệt của bạn không hỗ trợ phát video trực tiếp.
-          </video>
-        </div>
+        {video_player_html}
         
         <div style="font-size: 12px; color: #64748b; margin-top: 14px;">
-          Official Broadcast Stream • 1080p HD • All Rights Reserved
+          {source_label} • Full HD • All Rights Reserved
         </div>
       </div>
 
@@ -623,10 +662,10 @@ Rules:
 def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> tuple:
     """
     Tự động:
-    1. Đưa VIDEO GỐC DÀI (Full video gốc) lên stream công khai VPS Caddy (100% phát mượt mà, tua được)
+    1. Nhúng VIDEO GỐC bằng YouTube iframe; chỉ upload MP4 khi job cũ không có YouTube ID
     2. Tạo ảnh HOOK AI bằng LLM (gemini-3.1-flash-image) chuẩn hình mẫu boss gửi (chữ 3D đỏ to, banner vàng, vòng tròn đỏ, icon REC) và upload CDN
     3. ĐẶT ẢNH HOOK NGAY ĐẦU BÀI VIẾT và làm Thumbnail đại diện bài viết (og:image)
-    4. Viết bài chuyên sâu 500+ từ, đặt Video Player Full ở cuối bài
+    4. Viết bài chuyên sâu 500+ từ, đặt YouTube embed hoặc MP4 fallback ở cuối bài
     5. Đăng bài lên CMS với slug & title 100% sạch, KHÔNG BAO GIỜ dính chữ "Clip 1", "Clip 2" hay mã job.
     Trả về: (article_url, hero_image_url)
     """
@@ -642,16 +681,22 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
     if not video_title or re.search(r'^(video highlight|job_\d+|clip_\d+)', video_title, re.IGNORECASE):
         video_title = meta.get("video_title") or meta.get("clean_title")
 
-    # 2. Upload/Stream VIDEO GỐC DÀI qua direct HTML5 video player (100% chạy trên mọi thiết bị)
-    video_stream_url = upload_long_video_to_public_stream(meta, clip_filename)
-    if not video_stream_url:
-        raise WebsiteServiceError("Upload video không trả public URL")
+    # 2. Ưu tiên nhúng YouTube gốc để không lưu MP4 trên server. Chỉ upload
+    # video dài làm fallback cho các job cũ không có nguồn YouTube hợp lệ.
+    youtube_id = extract_youtube_video_id(meta.get("youtube_id") or meta.get("youtube_url"))
+    video_stream_url = ""
+    if not youtube_id:
+        video_stream_url = upload_long_video_to_public_stream(meta, clip_filename)
+        if not video_stream_url:
+            raise WebsiteServiceError("Không có YouTube ID và upload video không trả public URL")
 
     # 3. Tạo ảnh HOOK AI bằng LLM & Trích xuất ảnh minh họa
     hero_img, body_imgs = extract_and_upload_article_assets(clip_filename, video_title)
 
     # 4. Sinh bài viết chi tiết, có ảnh Hook ngay đầu bài và Video Player Full ở CUỐI bài
-    seo_title, body_html = generate_deep_article_content(video_title, hero_img, body_imgs, video_stream_url)
+    seo_title, body_html = generate_deep_article_content(
+        video_title, hero_img, body_imgs, video_stream_url=video_stream_url, youtube_id=youtube_id
+    )
 
     # 5. Tạo slug duy nhất và sạch sẽ (không chứa chữ clip-2 hay job_)
     clean_slug = re.sub(r'[^a-zA-Z0-9]+', '-', video_title.lower()).strip('-')[:50]

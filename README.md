@@ -20,6 +20,6 @@ Endpoint có thể nhập ở dạng root, `/v1`, `/models` hoặc `/chat/comple
 
 ## Website và video
 
-Kết nối CMS và máy chủ video được kiểm tra riêng. Video chỉ được gắn vào bài sau khi upload thành công, truy cập bằng HTTPS và vượt qua kiểm tra HTTP Range (`206 Partial Content`) để phát/tua trên điện thoại và web.
+Bài viết website ưu tiên nhúng video YouTube gốc bằng iframe responsive trong nội dung CMS. Link YouTube không được in thành liên kết chữ trong bài và MP4 không được upload khi metadata có YouTube ID hợp lệ. Luồng upload MP4 chỉ được giữ làm fallback cho dữ liệu cũ không có nguồn YouTube.
 
 Không commit API key, mật khẩu CMS, Facebook token hoặc SSH private key vào GitHub.

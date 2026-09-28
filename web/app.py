@@ -15,6 +15,7 @@ import os
 import sys
 import json
 import html
+import re
 import requests
 import uuid
 import threading
@@ -65,6 +66,8 @@ from src.publisher.website_publisher import (
     generate_curiosity_comment_with_llm,
     generate_llm_hook_image,
     get_clip_metadata,
+    extract_youtube_video_id,
+    build_youtube_embed_html,
 )
 from src.publisher.meta_reel_poster import MetaReelPoster
 
@@ -2606,6 +2609,7 @@ def api_publish_website_article():
     summary = data.get("summary", "").strip()
     hook_img = data.get("hook_image", "") # đường dẫn hoặc URL ảnh hook
     long_video = data.get("video_path", "")
+    youtube_url = data.get("youtube_url", "")
     dry_run = data.get("dry_run", False)
 
     if not title:
@@ -2620,10 +2624,16 @@ def api_publish_website_article():
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
 
-    # Chỉ chấp nhận URL HTTPS đã xác minh hoặc file nằm trong downloads/output.
+    # Ưu tiên YouTube embed để không upload MP4 lên server. Luồng upload cũ chỉ
+    # là fallback tương thích cho draft không có nguồn YouTube.
+    youtube_id = extract_youtube_video_id(youtube_url)
     public_video_url = ""
     local_video_path = None
-    if str(long_video).startswith("https://"):
+    if youtube_url and not youtube_id:
+        return jsonify({"success": False, "error": "Link YouTube không hợp lệ"}), 400
+    if youtube_id:
+        public_video_url = f"https://www.youtube.com/watch?v={youtube_id}"
+    elif str(long_video).startswith("https://"):
         try:
             svc.verify_public_media(long_video, require_range=True)
             public_video_url = long_video
@@ -2655,17 +2665,23 @@ def api_publish_website_article():
 
     safe_title = html.escape(title)
     safe_summary = html.escape(summary or title)
-    safe_video_url = html.escape(public_video_url, quote=True)
     safe_hook_url = html.escape(hook_img, quote=True) if str(hook_img).startswith("https://") else ""
+    if youtube_id:
+        video_html = build_youtube_embed_html(youtube_id, title)
+    else:
+        safe_video_url = html.escape(public_video_url, quote=True)
+        video_html = f"""
+        <div class="video-container" style="margin: 20px 0; text-align: center;">
+          <video controls playsinline preload="metadata" style="width: 100%; max-width: 720px; border-radius: 8px; background: #000;" poster="{safe_hook_url}">
+            <source src="{safe_video_url}" type="video/mp4">
+            Trình duyệt của bạn không hỗ trợ phát video trực tiếp.
+          </video>
+        </div>
+        """
     body_html = f"""
     <div class="article-content">
       <p class="lead-summary"><strong>{safe_summary}</strong></p>
-      <div class="video-container" style="margin: 20px 0; text-align: center;">
-        <video controls playsinline preload="metadata" style="width: 100%; max-width: 720px; border-radius: 8px; background: #000;" poster="{safe_hook_url}">
-          <source src="{safe_video_url}" type="video/mp4">
-          Trình duyệt của bạn không hỗ trợ phát video trực tiếp.
-        </video>
-      </div>
+      {video_html}
       <p>Xem toàn bộ diễn biến chi tiết và cập nhật mới nhất ở trên.</p>
     </div>
     """
