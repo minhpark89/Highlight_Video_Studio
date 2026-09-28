@@ -1,7 +1,25 @@
 ﻿{
-    "artifact":  "F:\\openclaw\\.openclaw\\workspace\\worktrees\\highlight-multi-pc\\release\\Highlight_Desktop_Test_Setup_v1.0.19.exe",
-    "artifact_bytes":  683540992,
-    "sha256":  "ecce8833e7948b1b279cc79682fbdbd18914305167868b202daaa74c36fd8a1f",
+    "artifact":  "F:\\openclaw\\.openclaw\\workspace\\worktrees\\highlight-multi-pc\\release\\Highlight_Desktop_Test_Setup_v1.0.19-preview.1.exe",
+    "artifact_bytes":  683529216,
+    "sha256":  "3eb41f687a1b3400deb57884b0165ab084bd6f2ee2371d5f51f887958222393f",
+    "superseded_artifact":  {
+                               "path":  "release\\Highlight_Desktop_Test_Setup_v1.0.19.exe.LEAKED-superseded",
+                               "sha256":  "ecce8833e7948b1b279cc79682fbdbd18914305167868b202daaa74c36fd8a1f",
+                               "reason":  "hardcoded machine hardware identity (RTX 3060) in shipped web/index.html, web/templates/index.html, web/full_script.js and src/pipeline.py; do not publish"
+                           },
+    "privacy_hardening":  {
+                             "machine_identity_removed":  [
+                                                              "web/index.html",
+                                                              "web/templates/index.html",
+                                                              "web/full_script.js",
+                                                              "src/pipeline.py"
+                                                          ],
+                             "removed_stray_file":  "web/templates/index.html.broken_trunc",
+                             "runtime_state_in_payload":  0,
+                             "machine_identity_in_payload":  0,
+                             "served_html_identity_hits":  0,
+                             "packaging_guard":  "build_release.ps1 fail-closed scan of staged web/src/core/multi_pc/research/config for identity needles + forbidden runtime/user state files"
+                         },
     "build_channel":  "desktop-test",
     "app_version":  "1.0.19",
     "tested_listener":  "127.0.0.1",

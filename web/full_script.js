@@ -699,6 +699,11 @@
       if (gpuEl) {
         gpuEl.innerHTML = `🎮 GPU: <strong>${escapeHtml(hw.gpu || 'Auto')}</strong>`;
       }
+      const portEl = document.getElementById('server-port-text');
+      if (portEl) {
+        const port = (cfg && cfg.port) || window.location.port || '';
+        portEl.innerHTML = `🚀 Port: <strong>${escapeHtml(String(port || 'local'))}</strong>`;
+      }
       // 2. Topbar LLM info
       const topbarLlm = document.getElementById('topbar-llm');
       if (topbarLlm && cfg.llm && cfg.llm.model) {

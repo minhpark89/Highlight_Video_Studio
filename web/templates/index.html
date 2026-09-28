@@ -766,8 +766,8 @@
       </div>
       <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.4;">
         <div id="worker-node-text">⚡ Worker: <strong>Đang kết nối...</strong></div>
-        <div>🚀 Port: <strong>5080</strong> (Online)</div>
-        <div id="gpu-info-text">🎮 GPU: <strong>RTX 3060 (12GB)</strong></div>
+        <div id="server-port-text">🚀 Port: <strong>...</strong></div>
+        <div id="gpu-info-text">🎮 GPU: <strong>Detecting...</strong></div>
       </div>
     </div>
   </aside>
@@ -2781,6 +2781,11 @@
       const gpuEl = document.getElementById('gpu-info-text');
       if (gpuEl) {
         gpuEl.innerHTML = `🎮 GPU: <strong>${escapeHtml(hw.gpu || 'Auto')}</strong>`;
+      }
+      const portEl = document.getElementById('server-port-text');
+      if (portEl) {
+        const port = (cfg && cfg.port) || window.location.port || '';
+        portEl.innerHTML = `🚀 Port: <strong>${escapeHtml(String(port || 'local'))}</strong>`;
       }
       // 2. Topbar LLM info
       const topbarLlm = document.getElementById('topbar-llm');

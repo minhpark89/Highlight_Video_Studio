@@ -434,7 +434,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 def transcribe_local_whisper(audio_path: str, update_status=None):
     """Nháº­n diá»‡n toÃ n bá»™ video khi khÃ´ng cÃ³ phá»¥ Ä‘á» sáºµn"""
     if update_status:
-        update_status("Äang nháº­n diá»‡n giá»ng nÃ³i báº±ng GPU NVIDIA RTX 3060 (CUDA float16)...")
+        update_status("Äang nháº­n diá»‡n giá»ng nÃ³i báº±ng GPU NVIDIA (CUDA float16)...")
     try:
         from faster_whisper import WhisperModel
     except Exception as exc:
@@ -647,7 +647,7 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
         output_path = out_dir / f"{j_id}_clip_{c_idx}.mp4"
     else:
         output_path = Path(output_path)
-    """Cáº¯t, táº¡o phá»¥ Ä‘á» Ä‘á»™ng Karaoke vÃ  render video báº±ng FFmpeg Hardware NVENC (RTX 3060)"""
+    """Cáº¯t, táº¡o phá»¥ Ä‘á» Ä‘á»™ng Karaoke vÃ  render video báº±ng FFmpeg hardware encoder (auto)"""
     duration = end_time - start_time
     if duration <= 0:
         duration = 30
@@ -666,7 +666,7 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
             generate_karaoke_ass(words, str(ass_path), style_name=subtitle_style)
 
     if update_status:
-        update_status(f"Äang render video 9:16 ({duration:.1f}s) qua GPU RTX 3060...")
+        update_status(f"Äang render video 9:16 ({duration:.1f}s) qua GPU (auto)...")
 
     # 2. XÃ¢y dá»±ng filter FFmpeg theo aspect ratio
     if aspect_ratio == "9:16":
