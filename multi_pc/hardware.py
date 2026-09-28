@@ -4,20 +4,25 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from .security import canonical_json, token_digest
 
-
-PROFILE_CACHE_VERSION = 1
+PROFILE_CACHE_VERSION = 2
 ENCODER_PRIORITY = ("nvenc", "qsv", "amf", "cpu")
+ENCODER_CODECS = {
+    "nvenc": "h264_nvenc",
+    "qsv": "h264_qsv",
+    "amf": "h264_amf",
+    "cpu": "libx264",
+}
 
 
 def _run(command: list[str], **kwargs):
     try:
         return subprocess.run(command, **kwargs)
-    except (OSError, ValueError):
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return None
 
 
@@ -32,6 +37,7 @@ class GpuInfo:
 @dataclass
 class HardwareReport:
     gpu: GpuInfo = field(default_factory=GpuInfo)
+    cpu_model: str = "unknown"
     cpu_logical_cores: int = 0
     cpu_physical_cores: int = 0
     ram_mb: int = 0
@@ -41,6 +47,17 @@ class HardwareReport:
     fingerprints: dict = field(default_factory=dict)
 
 
+def _powershell_json(script: str, command_runner=None):
+    runner = command_runner or (lambda command: _run(command, capture_output=True, text=True, timeout=20))
+    result = runner(["powershell", "-NoProfile", "-NonInteractive", "-Command", script])
+    if not result or getattr(result, "returncode", 1) != 0:
+        return None
+    try:
+        return json.loads((result.stdout or "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def detect_gpu(command_runner=None) -> GpuInfo:
     runner = command_runner or (lambda command: _run(command, capture_output=True, text=True, timeout=20))
     result = runner([
@@ -48,18 +65,36 @@ def detect_gpu(command_runner=None) -> GpuInfo:
         "--query-gpu=name,memory.total,driver_version",
         "--format=csv,noheader,nounits",
     ])
-    if not result or getattr(result, "returncode", 1) != 0:
-        return GpuInfo()
-    line = (result.stdout or "").strip().splitlines()
-    if not line:
-        return GpuInfo()
-    parts = [part.strip() for part in line[0].split(",")]
-    return GpuInfo(
-        vendor="nvidia",
-        model=parts[0] if parts else "unknown",
-        vram_mb=int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0,
-        driver_version=parts[2] if len(parts) > 2 else "",
-    )
+    if result and getattr(result, "returncode", 1) == 0:
+        lines = (result.stdout or "").strip().splitlines()
+        if lines:
+            parts = [part.strip() for part in lines[0].split(",")]
+            return GpuInfo(
+                vendor="nvidia",
+                model=parts[0] if parts else "unknown",
+                vram_mb=int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0,
+                driver_version=parts[2] if len(parts) > 2 else "",
+            )
+
+    if os.name == "nt" and command_runner is None:
+        rows = _powershell_json(
+            "@(Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM,DriverVersion) | ConvertTo-Json -Compress",
+        )
+        if isinstance(rows, dict):
+            rows = [rows]
+        if isinstance(rows, list) and rows:
+            # Prefer discrete vendors, then the first detected adapter.
+            rows.sort(key=lambda row: 0 if any(v in str(row.get("Name", "")).lower() for v in ("nvidia", "amd", "radeon", "intel arc")) else 1)
+            row = rows[0]
+            model = str(row.get("Name") or "unknown")
+            lower = model.lower()
+            vendor = "nvidia" if "nvidia" in lower else "amd" if any(v in lower for v in ("amd", "radeon")) else "intel" if "intel" in lower else "unknown"
+            try:
+                vram_mb = int(row.get("AdapterRAM") or 0) // (1024 * 1024)
+            except (TypeError, ValueError):
+                vram_mb = 0
+            return GpuInfo(vendor=vendor, model=model, vram_mb=vram_mb, driver_version=str(row.get("DriverVersion") or ""))
+    return GpuInfo()
 
 
 def probe_encoders(ffmpeg_bin: str, command_runner=None) -> dict:
@@ -68,17 +103,10 @@ def probe_encoders(ffmpeg_bin: str, command_runner=None) -> dict:
     if not result or getattr(result, "returncode", 1) != 0:
         return {name: False for name in ENCODER_PRIORITY}
     text = result.stdout or ""
-    return {
-        "nvenc": "h264_nvenc" in text,
-        "qsv": "h264_qsv" in text,
-        "amf": "h264_amf" in text,
-        "cpu": "libx264" in text,
-    }
+    return {name: codec in text for name, codec in ENCODER_CODECS.items()}
 
 
-def _disk_write_mbps(temp_dir: Path, size_mb: int = 64) -> float:
-    import time
-
+def _disk_write_mbps(temp_dir: Path, size_mb: int = 32) -> float:
     block = os.urandom(1024 * 1024)
     target = Path(temp_dir) / "highlight_disk_probe.tmp"
     try:
@@ -99,12 +127,31 @@ def _disk_write_mbps(temp_dir: Path, size_mb: int = 64) -> float:
     return round(size_mb / elapsed, 1)
 
 
+def _cpu_details() -> tuple[str, int]:
+    model = platform.processor() or platform.machine() or "unknown"
+    physical = os.cpu_count() or 1
+    if os.name == "nt":
+        rows = _powershell_json("@(Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores) | ConvertTo-Json -Compress")
+        if isinstance(rows, dict):
+            rows = [rows]
+        if isinstance(rows, list) and rows:
+            names = [str(row.get("Name") or "").strip() for row in rows if row.get("Name")]
+            if names:
+                model = " / ".join(names)
+            try:
+                physical = sum(int(row.get("NumberOfCores") or 0) for row in rows) or physical
+            except (TypeError, ValueError):
+                pass
+    return model, physical
+
+
 def collect_hardware_report(ffmpeg_bin="ffmpeg", temp_dir: Path | None = None, command_runner=None) -> HardwareReport:
     gpu = detect_gpu(command_runner=command_runner)
     logical = os.cpu_count() or 1
-    physical = logical
+    cpu_model, physical = _cpu_details() if command_runner is None else (platform.processor() or "unknown", logical)
     report = HardwareReport(
         gpu=gpu,
+        cpu_model=cpu_model,
         cpu_logical_cores=logical,
         cpu_physical_cores=physical,
         ram_mb=_total_ram_mb(),
@@ -121,8 +168,8 @@ def collect_hardware_report(ffmpeg_bin="ffmpeg", temp_dir: Path | None = None, c
     report.fingerprints = {
         "os": platform.platform(),
         "python": sys.version.split()[0],
-        "gpu_key": f"{gpu.vendor}:{gpu.model}:{gpu.driver_version}",
-        "hardware_key": f"{gpu.vendor}:{gpu.model}:{report.cpu_logical_cores}:{report.ram_mb}",
+        "gpu_key": f"{gpu.vendor}:{gpu.model}:{gpu.vram_mb}:{gpu.driver_version}",
+        "hardware_key": f"{cpu_model}:{physical}:{logical}:{report.ram_mb}",
     }
     return report
 
@@ -133,14 +180,10 @@ def _total_ram_mb() -> int:
 
         class MemoryStatus(ctypes.Structure):
             _fields_ = [
-                ("length", ctypes.c_ulong),
-                ("memory_load", ctypes.c_ulong),
-                ("total_phys", ctypes.c_ulonglong),
-                ("avail_phys", ctypes.c_ulonglong),
-                ("total_page_file", ctypes.c_ulonglong),
-                ("avail_page_file", ctypes.c_ulonglong),
-                ("total_virtual", ctypes.c_ulonglong),
-                ("avail_virtual", ctypes.c_ulonglong),
+                ("length", ctypes.c_ulong), ("memory_load", ctypes.c_ulong),
+                ("total_phys", ctypes.c_ulonglong), ("avail_phys", ctypes.c_ulonglong),
+                ("total_page_file", ctypes.c_ulonglong), ("avail_page_file", ctypes.c_ulonglong),
+                ("total_virtual", ctypes.c_ulonglong), ("avail_virtual", ctypes.c_ulonglong),
                 ("avail_extended_virtual", ctypes.c_ulonglong),
             ]
 
@@ -155,52 +198,125 @@ def _total_ram_mb() -> int:
     return int(pages * size // (1024 * 1024)) if pages and size else 0
 
 
-def canary_probe(encoder: str, ffmpeg_bin: str, temp_dir: Path, command_runner=None) -> bool:
-    """Run one tiny synthetic encode. Device/marketing names alone are not trusted."""
-    runner = command_runner or (lambda command: _run(command, capture_output=True, text=True, timeout=90))
-    codec = {"nvenc": "h264_nvenc", "qsv": "h264_qsv", "amf": "h264_amf", "cpu": "libx264"}[encoder]
+def canary_probe(encoder: str, ffmpeg_bin: str, ffprobe_bin: str, temp_dir: Path, command_runner=None, duration_seconds: float = 2.0) -> dict:
+    """Encode a short real 1080p clip and validate the artifact with ffprobe."""
+    runner = command_runner or (lambda command: _run(command, capture_output=True, text=True, timeout=120))
+    codec = ENCODER_CODECS[encoder]
     output = Path(temp_dir) / f"highlight_canary_{encoder}.mp4"
     command = [
-        ffmpeg_bin,
-        "-hide_banner",
-        "-loglevel", "error",
-        "-f", "lavfi",
-        "-i", "testsrc=size=640x360:rate=25:duration=1",
-        "-c:v", codec,
-        "-pix_fmt", "yuv420p",
-        "-y",
-        str(output),
+        ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+        "-i", f"testsrc2=size=1920x1080:rate=30:duration={duration_seconds}",
+        "-an", "-c:v", codec, "-pix_fmt", "yuv420p",
     ]
+    if encoder == "cpu":
+        command.extend(["-preset", "veryfast", "-crf", "23"])
+    elif encoder == "nvenc":
+        command.extend(["-preset", "p2", "-cq", "23"])
+    elif encoder == "qsv":
+        command.extend(["-preset", "veryfast", "-global_quality", "23"])
+    elif encoder == "amf":
+        command.extend(["-quality", "speed", "-qp_i", "23", "-qp_p", "23"])
+    command.extend(["-movflags", "+faststart", "-y", str(output)])
+
+    started = time.perf_counter()
     result = runner(command)
-    produced = bool(result) and getattr(result, "returncode", 1) == 0 and output.is_file() and output.stat().st_size > 0
+    elapsed = round(time.perf_counter() - started, 3)
+    entry = {
+        "encoder": encoder,
+        "codec": codec,
+        "success": False,
+        "elapsed_seconds": elapsed,
+        "clip_seconds": duration_seconds,
+        "realtime_factor": round(duration_seconds / elapsed, 2) if elapsed > 0 else 0.0,
+        "output_bytes": output.stat().st_size if output.is_file() else 0,
+        "width": 0,
+        "height": 0,
+        "frames": 0,
+        "error": "",
+    }
+    if not result or getattr(result, "returncode", 1) != 0 or not output.is_file() or output.stat().st_size <= 0:
+        entry["error"] = ((getattr(result, "stderr", "") or "encoder failed")[-800:]).strip()
+    else:
+        probe = runner([
+            ffprobe_bin, "-v", "error", "-select_streams", "v:0",
+            "-count_frames", "-show_entries", "stream=codec_name,width,height,nb_read_frames,duration",
+            "-of", "json", str(output),
+        ])
+        if probe and getattr(probe, "returncode", 1) == 0:
+            try:
+                stream = (json.loads(probe.stdout or "{}").get("streams") or [{}])[0]
+                entry["width"] = int(stream.get("width") or 0)
+                entry["height"] = int(stream.get("height") or 0)
+                entry["frames"] = int(stream.get("nb_read_frames") or 0)
+                entry["success"] = entry["width"] == 1920 and entry["height"] == 1080 and entry["frames"] > 0
+                if not entry["success"]:
+                    entry["error"] = "ffprobe validation did not confirm a decodable 1920x1080 video stream"
+            except (ValueError, TypeError, IndexError):
+                entry["error"] = "ffprobe returned invalid JSON"
+        else:
+            entry["error"] = ((getattr(probe, "stderr", "") or "ffprobe failed")[-800:]).strip()
     try:
         output.unlink()
     except OSError:
         pass
-    return produced
+    return entry
+
+
+def run_encoder_canaries(report: HardwareReport, ffmpeg_bin: str, ffprobe_bin: str, temp_dir: Path, command_runner=None) -> dict:
+    results = {}
+    for encoder in ENCODER_PRIORITY:
+        if report.encoders.get(encoder):
+            results[encoder] = canary_probe(encoder, ffmpeg_bin, ffprobe_bin, temp_dir, command_runner=command_runner)
+        else:
+            results[encoder] = {"encoder": encoder, "codec": ENCODER_CODECS[encoder], "success": False, "error": "encoder not present in FFmpeg build"}
+    return results
+
+
+def benchmark_encoders(report: HardwareReport, ffmpeg_bin: str, ffprobe_bin: str, temp_dir: Path,
+                       command_runner=None) -> dict:
+    """Try candidates in priority order and select the first encoder proven by a real canary.
+
+    Returns ``{encoder, codec, verified, selected, results}``. A candidate counts only when FFmpeg
+    exits 0 and ffprobe confirms a decodable 1920x1080 stream, so a device name or a codec listed
+    in ``-encoders`` is never enough on its own.
+    """
+    results = run_encoder_canaries(report, ffmpeg_bin, ffprobe_bin, temp_dir, command_runner=command_runner)
+    selected = next(
+        (name for name in ENCODER_PRIORITY if (results.get(name) or {}).get("success")),
+        "cpu",
+    )
+    winner = results.get(selected) or {}
+    return {
+        "encoder": selected,
+        "codec": ENCODER_CODECS[selected],
+        "verified": bool(winner.get("success")),
+        "selected": selected,
+        "results": results,
+    }
 
 
 def derive_render_profile(report: HardwareReport, canary_results: dict | None = None) -> dict:
     canary_results = canary_results or {}
 
     def verified(encoder: str) -> bool:
-        if encoder == "cpu":
-            return True
-        return bool(report.encoders.get(encoder)) and bool(canary_results.get(encoder))
+        result = canary_results.get(encoder)
+        if isinstance(result, dict):
+            result = result.get("success")
+        return bool(report.encoders.get(encoder)) and bool(result)
 
     encoder = next((name for name in ENCODER_PRIORITY if verified(name)), "cpu")
+    if canary_results.get("encoder") and canary_results.get("verified"):
+        # The measured canary already proved which encoder actually works; trust the measurement
+        # over the static probe list so a working NVENC/QSV/AMF result is never demoted.
+        encoder = canary_results["encoder"]
     heavy = report.cpu_logical_cores >= 8 and report.ram_mb >= 16 * 1024
     moderate = report.cpu_logical_cores >= 4 and report.ram_mb >= 8 * 1024
-    concurrency = 1 if encoder == "cpu" or not heavy else min(2, max(1, report.cpu_logical_cores // 4))
+    concurrency = 1 if encoder == "cpu" or not heavy else min(2, max(1, report.cpu_logical_cores // 8))
     profile = {
         "profile_version": PROFILE_CACHE_VERSION,
         "encoder": encoder,
-        "encoder_label": {
-            "nvenc": "nvidia-nvenc",
-            "qsv": "intel-qsv",
-            "amf": "amd-amf",
-            "cpu": "cpu-libx264",
-        }[encoder],
+        "codec": ENCODER_CODECS[encoder],
+        "encoder_label": {"nvenc": "nvidia-nvenc", "qsv": "intel-qsv", "amf": "amd-amf", "cpu": "cpu-libx264"}[encoder],
         "concurrency": concurrency,
         "max_concurrent_renders": concurrency,
         "hardware_decode": encoder in ("nvenc", "qsv", "amf"),
@@ -217,4 +333,23 @@ def derive_render_profile(report: HardwareReport, canary_results: dict | None = 
         profile["notes"].append("Below recommended CPU/RAM baseline; expect slower renders.")
     if report.disk_free_mb and report.disk_free_mb < 20 * 1024:
         profile["notes"].append("Low free disk space; purge/rotate outputs before large jobs.")
+    measured = (canary_results.get("results") or {}).get(encoder)
+    if isinstance(measured, dict) and measured.get("success"):
+        profile["canary"] = {
+            "encoder": encoder,
+            "elapsed_seconds": measured.get("elapsed_seconds"),
+            "realtime_factor": measured.get("realtime_factor"),
+            "output_bytes": measured.get("output_bytes"),
+            "width": measured.get("width"),
+            "height": measured.get("height"),
+            "frames": measured.get("frames"),
+        }
+        profile["notes"].append(
+            f"Canary verified {encoder} at {measured.get('realtime_factor')}x realtime "
+            f"({measured.get('elapsed_seconds')}s for {measured.get('clip_seconds')}s 1080p30)."
+        )
     return profile
+
+
+def report_to_dict(report: HardwareReport) -> dict:
+    return asdict(report)

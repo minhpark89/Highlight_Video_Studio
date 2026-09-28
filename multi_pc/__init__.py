@@ -4,4 +4,4 @@ Import submodules directly (for example ``multi_pc.hardware``) so the local
 renderer never requires the optional cloud control plane to be importable.
 """
 
-__all__ = ["hardware", "profile_cache", "adapter", "connector", "control_plane"]
+__all__ = ["hardware", "profile_cache", "environment", "local_launcher", "adapter", "connector", "control_plane"]

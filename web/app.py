@@ -305,7 +305,8 @@ def run_job_pipeline(job):
 # ==========================================
 # BACKGROUND QUEUE MANAGER FOR BATCH RENDERING
 # ==========================================
-MAX_CONCURRENT_JOBS = 2
+# The startup profiler writes this value before this module is imported.
+MAX_CONCURRENT_JOBS = max(1, min(2, int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT_RENDERS", "1"))))
 JOB_QUEUE = Queue()
 ACTIVE_JOB_IDS = set()
 CANCELLED_JOB_IDS = set()
@@ -811,30 +812,41 @@ def _llm_headers(api_key):
         })
     return headers
 
+def _as_dict(value):
+    """Normalise a cached JSON fragment; tolerate missing/None/wrong types."""
+    return value if isinstance(value, dict) else {}
+
+
 def detect_hardware():
+    """Return cached, ffprobe-validated hardware facts without blocking the UI."""
     import platform
-    import subprocess
-    node_name = platform.node()
-    cpu_name = platform.processor() or "x86_64 Processor"
-    gpu_name = "CPU Only (Không phát hiện GPU rời)"
-    has_nvidia = False
 
+    profile_path = BASE_DIR / "data" / "hardware_profile.json"
     try:
-        out = subprocess.check_output("wmic path win32_VideoController get name", shell=True, text=True, stderr=subprocess.DEVNULL)
-        lines = [l.strip() for l in out.splitlines() if l.strip() and l.strip().lower() != 'name']
-        if lines:
-            gpu_name = " / ".join(lines)
-            if any(k in gpu_name.lower() for k in ["nvidia", "geforce", "rtx", "gtx", "quadro", "tesla"]):
-                has_nvidia = True
-    except Exception:
-        pass
-
+        entry = json.loads(profile_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        entry = {}
+    entry = _as_dict(entry)
+    hardware = _as_dict(entry.get("hardware"))
+    profile = _as_dict(entry.get("profile"))
+    canaries = _as_dict(entry.get("canaries"))
+    gpu = _as_dict(hardware.get("gpu"))
     return {
-        "hostname": node_name,
-        "cpu": cpu_name,
-        "gpu": gpu_name,
-        "has_nvidia": has_nvidia,
-        "recommended_encoder": "h264_nvenc" if has_nvidia else "libx264"
+        "hostname": platform.node(),
+        "cpu": hardware.get("cpu_model") or platform.processor() or "x86_64 Processor",
+        "cpu_logical_cores": hardware.get("cpu_logical_cores", os.cpu_count() or 1),
+        "cpu_physical_cores": hardware.get("cpu_physical_cores", 0),
+        "ram_mb": hardware.get("ram_mb", 0),
+        "disk_free_mb": hardware.get("disk_free_mb", 0),
+        "disk_write_mbps": hardware.get("disk_write_mbps", 0),
+        "gpu": gpu.get("model") or "Unknown GPU",
+        "gpu_vendor": gpu.get("vendor") or "unknown",
+        "vram_mb": gpu.get("vram_mb", 0),
+        "driver_version": gpu.get("driver_version") or "",
+        "recommended_encoder": profile.get("codec") or "libx264",
+        "render_profile": profile,
+        "canaries": canaries,
+        "profile_saved_at": entry.get("saved_at"),
     }
 
 

@@ -2,17 +2,30 @@
 
 This directory is the local-first desktop/PC runtime plus the optional cloud control plane. It is isolated from the running v1.0.19 Flask install: it does not import or expose `web.app`, and nothing here is deployed.
 
-Read `docs/multi-pc-phase1-architecture-v1.md` for the decision record. Short version: each PC is an installed desktop app that owns its own UI, backend, secrets, browser profiles, media, and rendering. No inbound port, no reverse tunnel, no published 5080. Cloud is optional and limited to login/licence/update and small job metadata.
+Read `docs/multi-pc-phase1-architecture-v1.md` for the decision record and `docs/multi-pc-phase1-checkpoint-2026-09-28.md` for delivered MVP evidence. Short version: each PC is an installed desktop app that owns its own UI, backend, secrets, browser profiles, media, and rendering. No inbound port, no reverse tunnel, no published 5080. Cloud is optional and limited to login/licence/update and small job metadata.
+
+## Offline preview quick start
+
+```powershell
+python install_preview.py --build --json                  # build the preview payload
+python install_preview.py --payload <zip> --json         # install side-by-side (production untouched)
+python run_local.py                                      # loopback-only desktop launcher
+```
+
+- `run_local.py` binds an OS-assigned ephemeral loopback port (never 5080) and requires the per-run session token from `%LOCALAPPDATA%\HighlightVideoStudio\run\runtime.json` in `X-Highlight-Session`.
+- `install_preview.py` refuses any target equal to or inside `D:\Highlight_Video_Studio`, and never stops or signals production processes.
+- Build identity: `PRERELEASE_NAME = highlight-desktop-offline-preview`, `PRERELEASE_BUILD = 1.0.19-preview.1`, while `APP_VERSION` stays `1.0.19`.
+
+```powershell
+python -c "import json; from multi_pc.environment import environment_report; print(json.dumps(environment_report()['render_profile'], indent=2))"
+```
 
 ## Hardware detection, benchmark, and profile cache
 
-```powershell
-python -c "from multi_pc.hardware import inspect_hardware, derive_render_profile; h=inspect_hardware(); print(derive_render_profile(h))"
-```
-
-- `inspect_hardware()` collects GPU vendor/model/VRAM/driver, CPU cores, RAM, free disk on the output/temp volume, a short disk write probe, and the FFmpeg encoder list.
-- Encoder availability is verified by a short canary encode in order **NVENC → QSV → AMF → CPU**; the first encoder that enumerates and completes the canary wins. Listing alone is not trusted.
-- `derive_render_profile(...)` returns the selected encoder, hardware-decode flag, max concurrency, RAM budget, and notes. CPU fallback and low RAM force concurrency 1; low disk adds a purge warning.
+- `collect_hardware_report()` collects GPU vendor/model/VRAM/driver, CPU cores/model, RAM, free disk, a measured disk write probe, and the FFmpeg encoder list.
+- `benchmark_encoders()` runs a real 1080p canary per candidate in order **NVENC → QSV → AMF → CPU** and validates each artifact with `ffprobe`. Listing a codec is never sufficient.
+- `derive_render_profile()` returns the selected encoder, hardware-decode flag, max concurrency, RAM budget, canary evidence and notes. CPU fallback and low RAM force concurrency 1; low disk adds a purge warning.
+- `ProfileCache` stores the profile with a hardware/driver fingerprint and TTL (default 7 days) and invalidates on driver/hardware/OS change; forced re-probe bypasses the cache.
 
 ```powershell
 python -c "from multi_pc.profile_cache import ProfileCache; c=ProfileCache(); print(c.get())"
@@ -49,5 +62,5 @@ The credential variable is intentionally omitted from the example. `connector_ma
 ## Tests
 
 ```powershell
-python -m pytest tests\test_multi_pc_phase1.py tests\test_multi_pc_hardware.py -q
+python -m pytest tests\test_multi_pc_phase1.py tests\test_multi_pc_hardware.py tests\test_multi_pc_local_mvp.py -q
 ```

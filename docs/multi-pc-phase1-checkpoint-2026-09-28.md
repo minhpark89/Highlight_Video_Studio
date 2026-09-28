@@ -1,93 +1,125 @@
-# Highlight Video Studio local-first desktop — Phase 1 checkpoint and handoff
+# Multi-PC Phase 1 → local-first desktop MVP — checkpoint
 
 - **Date:** 2026-09-28 (Asia/Bangkok)
-- **Branch/worktree:** `feature/multi-pc-control-plane` in `F:\openclaw\.openclaw\workspace\worktrees\highlight-multi-pc`
-- **Deployment state:** source-only; not deployed, not installed
-- **Spec version:** `2026-09-28.phase1-v2-local-desktop` (supersedes the cloud-first `2026-09-28.phase1` draft)
+- **Branch:** `feature/multi-pc-control-plane` in `F:\openclaw\.openclaw\workspace\worktrees\highlight-multi-pc`
+- **Build:** `1.0.19-preview.1` (`highlight-desktop-offline-preview`)
+- **Status:** testable 1-PC MVP complete; production untouched; cloud control plane deferred to Phase 2
 
-## What changed since the first checkpoint
+## Deliverables
 
-The product direction moved from "cloud control plane with a PC connector" to a **local-first installed desktop application**. The cloud is now deliberately optional and small.
+| # | Requirement | Status | Evidence |
+|---|---|---|---|
+| 1 | Hardware probe + real FFmpeg canary + selected profile JSON | done | `multi_pc/hardware.py`, `multi_pc/environment.py`, profile JSON below |
+| 2 | Local-only desktop launcher, loopback isolated, no tunnel | done | `multi_pc/local_launcher.py`, `run_local.py` |
+| 3 | Offline test installer, clearly marked pre-release version | done | `install_preview.py`, `1.0.19-preview.1` |
+| 4 | Install side-by-side, preserve data, don't disturb production | done | manifest + guard test + production 5080 still `200` |
+| 5 | Short render canary executed on this PC | done | NVENC 3.64x realtime, ffprobe-validated |
+| 6 | Checkpoint, SHA256, exact installer path | done | paths and hashes below |
 
-- Desktop app per PC owns UI, backend, pipeline, secrets, browser profiles, media, and rendering. No inbound port, no router change, no reverse tunnel, no published 5080.
-- Cloud scope reduced to login/licence activation, update checks, and optional lightweight metadata sync. Cloud is never required for rendering.
-- Added `multi_pc/hardware.py`: hardware inspection (GPU/CPU/RAM/disk), FFmpeg encoder enumeration, a short disk write probe, per-encoder canary encodes, and `derive_render_profile()` with safe concurrency/RAM bounds.
-- Added `multi_pc/profile_cache.py`: profile cached with a hardware/driver fingerprint and TTL; invalidated on driver/hardware change or OS platform change; forced re-probe supported.
-- Updated `multi_pc/connector.py` and `multi_pc/__init__.py` so local rendering and job handling work independently when the cloud is unreachable.
-- Updated `multi_pc/README.md` with hardware/cache commands, in-process/loopback backend binding, and the outbound-only connector.
-- Rewrote `docs/multi-pc-phase1-architecture-v1.md` for the local-first model: desktop shell, cloud scope, offline behavior, benchmark/profile policy, installer/startup/update lifecycle, and migration from the port-5080 browser app.
+## 1 + 5. Hardware probe and real render canary (this PC)
 
-## Completed
+Measured on `DESKTOP-COM8UQ7`, build `1.0.19-preview.1`, 2026-09-28T01:11:22Z:
 
-- Audited the 55-route Flask application and classified cloud metadata versus PC-only data/actions (`docs/multi-pc-phase1-architecture-v1.md` §2).
-- Architecture, threat model, cloud API contract, executable SQLite schema, job state machine, reconnect/idempotency rules, resource expectations, and cutover/rollback plan — all rewritten for local-first.
-- Standalone cloud control plane with health, registration disabled by default, password/session scaffolding, one-time device pairing, heartbeat, account-owned job creation/read, and device-only lease/progress/complete.
-- Outbound HTTPS connector and safe local adapter dispatching only allowlisted Python callables. No generic command, shell, `eval`, or inbound local server.
-- Protected credential-store interface: plaintext save refused; production Windows work must implement DPAPI/Credential Manager.
-- Hardware benchmark with NVENC → QSV → AMF → CPU fallback and cached, fingerprint-validated render profile.
-- Installer/startup/update and migration design documented, including per-user install, signed updates, loopback-only transitional backend, and copy-not-move data migration.
+| Fact | Value |
+|---|---|
+| GPU | NVIDIA GeForce RTX 3060, 12288 MB VRAM, driver 610.88 |
+| CPU | Intel Xeon E5-2680 v4 ×2 — 28 physical / 56 logical cores |
+| RAM | 98,206 MB |
+| Disk | 257,447 MB free, 1,247 MB/s measured write |
+| FFmpeg / ffprobe | 8.1.2 essentials (`D:\AI\tools\ffmpeg_new\...\bin`) |
 
-## Changed files
+**Encoder canaries** (real 1080p30 encodes, artifact validated with `ffprobe -count_frames`):
 
-- `multi_pc/__init__.py`
-- `multi_pc/adapter.py`
-- `multi_pc/connector.py`
-- `multi_pc/connector_main.py`
-- `multi_pc/control_plane.py`
-- `multi_pc/credentials.py`
-- `multi_pc/hardware.py` (new)
-- `multi_pc/profile_cache.py` (new)
-- `multi_pc/schema.sql`
-- `multi_pc/security.py`
-- `multi_pc/README.md`
-- `tests/test_multi_pc_phase1.py`
-- `tests/test_multi_pc_hardware.py` (new)
-- `docs/multi-pc-phase1-architecture-v1.md`
-- `docs/multi-pc-phase1-checkpoint-2026-09-28.md`
+| Encoder | Listed by `-encoders` | Canary success | Time (2s clip) | Realtime | Output |
+|---|---|---|---|---|---|
+| NVENC `h264_nvenc` | yes | **yes** | 0.551 s | **3.63x** | 2,969,394 B, 1920x1080, 60 frames |
+| QSV `h264_qsv` | yes | no | 0.065 s | — | failed (no Intel iGPU) |
+| AMF `h264_amf` | yes | no | 0.038 s | — | failed (no AMD GPU) |
+| CPU `libx264` | yes | yes | 0.386 s | 5.18x | 1,365,515 B, 1920x1080, 60 frames |
 
-## Verification commands
+QSV and AMF are compiled into this FFmpeg build, so a name-list check would have wrongly selected them. Only the canary encode + ffprobe validation revealed the truth — this is why device names are never trusted.
 
-```powershell
-python -m pytest tests\test_multi_pc_phase1.py tests\test_multi_pc_hardware.py -q
-Get-ChildItem multi_pc\*.py | ForEach-Object { python -m py_compile $_.FullName }
-git diff --check
-Select-String -Path web\app.py -Pattern '^APP_VERSION'
-git diff -- web\app.py run_server.py
+**Selected profile JSON** (`%LOCALAPPDATA%\HighlightVideoStudio\cache\render_profile.json`):
+
+```json
+{
+  "profile_version": 2,
+  "encoder": "nvenc",
+  "codec": "h264_nvenc",
+  "encoder_label": "nvidia-nvenc",
+  "concurrency": 2,
+  "max_concurrent_renders": 2,
+  "hardware_decode": true,
+  "ram_budget_mb": 58923,
+  "canary": {
+    "encoder": "nvenc", "elapsed_seconds": 0.55, "realtime_factor": 3.64,
+    "output_bytes": 2969394, "width": 1920, "height": 1080, "frames": 60
+  },
+  "notes": ["Canary verified nvenc at 3.64x realtime (0.55s for 2.0s 1080p30)."]
+}
 ```
 
-Expected targeted result: `12 passed`. `APP_VERSION` remains `1.0.19`; no diff exists for `web/app.py` or `run_server.py`.
+Regenerate with `python -m multi_pc.environment` or `run_local.py`. The cache invalidates on driver/GPU/CPU/RAM/OS change, or with a forced re-probe.
 
-## Runnable state
+## 2. Local-only launcher
 
-- `python -m multi_pc.control_plane` starts the development control plane on PC loopback `127.0.0.1:5090`; it does not expose port 5080.
-- `python -m multi_pc.connector_main` is an outbound connector scaffold requiring a control-plane URL and protected device credential from its supervisor/store. It registers no production local handlers and therefore fails closed until canary integration.
-- Hardware probe and profile cache are usable without any cloud component: `inspect_hardware()`, `derive_render_profile()`, `ProfileCache()`.
-- SQLite initializes from `multi_pc/schema.sql`. Production should migrate the constraints to PostgreSQL before multi-instance scaling.
+`python run_local.py` (or the installed `Launch_Highlight_Desktop_Preview.cmd`):
+
+- Requests an ephemeral free loopback port from the OS; **port 5080 is explicitly refused**.
+- Generates a per-run `secrets.token_urlsafe` session token.
+- Wraps the existing Flask app in `SessionGuard`: loopback clients only, token required, `/healthz` exempt.
+- Writes `%LOCALAPPDATA%\HighlightVideoStudio\run\runtime.json` for shell attachment; deletes it on shutdown.
+- No tunnel, no Basic Auth, no public bind, no cloud dependency.
+
+**Live verification:** installed preview on port 61716 → `/api/system/info` returned `401` without the token and `200` with it, while production on 5080 kept answering `200` throughout.
+
+## 3 + 4. Offline installer
+
+| Item | Value |
+|---|---|
+| Payload | `release\Highlight_Desktop_Preview_v1.0.19-preview.1.zip` |
+| Payload SHA256 | `dd5065ef4940241463a7dd3ef2d7a8e2d9ef3f41a9a7f9f366f877fdc9e71d7d` |
+| Payload size | 404,076 bytes |
+| Installed root | `C:\Users\Admin\AppData\Local\Programs\highlight-desktop-offline-preview` |
+| Manifest | `<install root>\preview_install_manifest.json` |
+| Launcher | `<install root>\Launch_Highlight_Desktop_Preview.cmd` |
+
+- Pre-release identity is explicit: `PRERELEASE_NAME = highlight-desktop-offline-preview`, `PRERELEASE_BUILD = 1.0.19-preview.1`, while `APP_VERSION` stays `1.0.19` as the production release identity. See `docs/desktop-preview-install-startup-update.md`.
+- Installing to `D:\Highlight_Video_Studio` is **refused** (`PreviewInstallError`, exit 1) and zip entries that escape the target are rejected.
+- The installer never stops, restarts, or signals any process; production was verified still serving on 5080 after install.
+
+## Changed / added files
+
+- Added: `multi_pc/local_launcher.py`, `multi_pc/environment.py`, `run_local.py`, `install_preview.py`
+- Added: `tests/test_multi_pc_local_mvp.py`, `docs/desktop-preview-install-startup-update.md`
+- Changed: `multi_pc/hardware.py` (measured `benchmark_encoders`, profile canary evidence, `PROFILE_CACHE_VERSION = 2`)
+- Changed: `web/app.py` (`detect_hardware` tolerant of a missing/None cached profile — fixes a latent 500 on a clean install)
+- Updated: `multi_pc/README.md`, `docs/multi-pc-phase1-architecture-v1.md`
+
+## One deliberate deviation
+
+The offline preview has no cloud component, so **no `/healthz` route was added to the production app**. Its plan entry is documented in `docs/desktop-preview-install-startup-update.md` and stays deferred to Phase 2 rather than modifying the production app for a preview-only endpoint.
+
+## Test evidence
+
+```powershell
+python -m pytest tests\test_multi_pc_phase1.py tests\test_multi_pc_hardware.py tests\test_multi_pc_local_mvp.py -q   # 35 passed
+python -m pytest tests\test_release_guards.py tests\test_page_token_sync.py -q                                        # 41 passed
+```
+
+The whole-repo `python -m pytest -q` run collects unrelated legacy scratch scripts at the repo root (which exit on `sys.exit`, killing collection) and resolves `core` to the neighbouring `D:\News_Video_Studio` instead of the worktree when cwd differs. Those are pre-existing repo issues: the product guard suites pass when run against the worktree root, which is what these verification commands do.
 
 ## Production boundaries verified
 
-- No active-runtime file under `D:\Highlight_Video_Studio` was read for modification or changed.
-- No VPS, DNS, Caddy, Basic Auth, scheduler, router, or tunnel setting was changed.
-- No credential or object-storage requirement was added.
-- No application version or release tag was changed.
-- The existing v1.0.19 app and reverse-tunnel trial remain separate from this skeleton.
+- `APP_VERSION` still `1.0.19`; no release tag touched.
+- `D:\Highlight_Video_Studio` never written to; production returned `200` before and after the full preview install and run.
+- Port 5080 never bound, proxied, or reused; no tunnel, DNS, Caddy, firewall, router, or scheduler change.
+- No credentials or secrets in the payload, manifest, logs, or command line.
 
-## Phase 2 / canary handoff
+## Next
 
-1. Build the desktop shell (WebView/native) with single-instance guard, in-process or per-run-token loopback backend binding, and installer signing.
-2. Implement a DPAPI/Credential Manager device and provider-secret store with per-user ACLs, plus credential revoke/rotation.
-3. Add a durable local execution-receipt ledger keyed by job/action id before wiring non-idempotent publication.
-4. Register narrow local handlers around existing download/transcript/render and Zernio paths; validate URLs and resolve all secrets locally. Keep publish approval gates local.
-5. Add cloud licence/entitlement and update-manifest endpoints; signed, user-confirmed, rollback-capable updates.
-6. Add secure-cookie browser sessions, CSRF, login throttling, account lifecycle, audit logs, retention, PostgreSQL migrations, monitoring, and proxy body/rate limits on the cloud side.
-7. Run a one-PC canary with the tunnel still available for rollback; remove Basic Auth and disable the reverse tunnel only in a coordinated cutover after auth and isolation review pass.
-8. Optionally add direct signed object-storage uploads with bounded object key, method, size, expiry, checksum, and no VPS media proxy.
-9. Expand hardware coverage: additional AMD/Intel detection paths, multi-GPU policy, thermal/power throttling awareness.
-
-## Expected resource profile
-
-- Cloud: metadata JSON and DB operations only; no downloads, Whisper, FFmpeg, GPU, browser automation, or media storage.
-- Local backend idle: dominated by the existing runtime; one active job per device by default, raised only when the benchmark allows.
-- Hardware probe: a few seconds of tooling calls plus one short canary per candidate encoder; cached for 7 days and re-run on fingerprint change.
-- Disk: benchmark/canary need room for a ~64 MB temporary probe and short canary outputs, both cleaned up.
-- Media paths remain source → PC and, if later enabled, PC → object storage directly.
+1. Desktop shell (WebView/native) with single-instance guard, auto-attaching the runtime token.
+2. Production-grade installer (MSI/EXE, code-signed) wrapping the same payload + `install_preview.py` logic, plus `installer/startup/update` lifecycle.
+3. DPAPI/Credential Manager secret store and a local execution-receipt ledger keyed by job/action id.
+4. Register narrow local handlers (download/transcript/render, Zernio publish) with local approval gates.
+5. Only then reintroduce cloud login/licence/update as Phase 2.

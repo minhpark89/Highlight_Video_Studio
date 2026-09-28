@@ -1,10 +1,20 @@
-# Highlight Video Studio local-first desktop architecture — Phase 1 v2
+# Highlight Video Studio local-first desktop architecture — Phase 1 v3
 
-- **Spec version:** `2026-09-28.phase1-v2-local-desktop`
-- **Supersedes:** `2026-09-28.phase1` (cloud-first control plane)
-- **Status:** runnable skeleton, not deployed
+- **Spec version:** `2026-09-28.phase1-v3-local-mvp`
+- **Supersedes:** `2026-09-28.phase1-v2-local-desktop`, `2026-09-28.phase1` (cloud-first control plane)
+- **Status:** 1-PC offline MVP implemented and verified; cloud deferred to Phase 2
+- **Preview build:** `1.0.19-preview.1` (`highlight-desktop-offline-preview`)
 - **Public product target:** `https://highlight.shopkitai.com` (account/licence/update only)
 - **Compatibility boundary:** existing `APP_VERSION = "1.0.19"` and release tags are unchanged.
+
+## 0. MVP status
+
+Delivered and verified on this PC: real hardware probe plus FFmpeg canary encodes, a loopback-only
+desktop launcher with per-run session auth, a non-destructive side-by-side installer, an executed
+render canary (NVENC verified), and SHA256-pinned artifacts. Details and evidence are in
+`docs/multi-pc-phase1-checkpoint-2026-09-28.md`; install/startup/update/migration design is in
+`docs/desktop-preview-install-startup-update.md`. The cloud control plane, connector and licence
+work described below remain Phase 2 and are not required for the preview to render locally.
 
 ## 1. Decision summary
 
@@ -59,10 +69,14 @@ Sensitive persisted files include `config.json`, website configuration, token va
 **Startup**
 
 1. Single-instance guard (named mutex) prevents duplicate backends.
-2. Local backend starts on an **isolated loopback port** chosen from a free/random port and written to a per-user runtime file with an ACL, or serves through an in-process channel that needs no TCP port at all.
+2. Local backend starts on an **isolated loopback port** chosen from a free/random port and written to a per-user runtime file with an ACL, or serves through an in-process channel that needs no TCP port at all. Port 5080 belongs to production and is refused outright.
 3. A per-run session token is generated locally for shell↔backend calls; it is never a fixed shared secret and is never sent anywhere external.
 4. Hardware probe + canary run in the background; the app is usable immediately with a conservative default profile.
 5. Cloud licensing/sync initializes asynchronously and never blocks the UI.
+
+Implemented in `multi_pc/local_launcher.py` and `run_local.py`: `pick_free_port()` asks the OS for an
+ephemeral port, `SessionGuard` enforces loopback-only + token on every request (`/healthz` exempt),
+and `runtime.json` carries host/port/token for the shell, removed on shutdown.
 
 **Update**
 
@@ -82,8 +96,9 @@ Sensitive persisted files include `config.json`, website configuration, token va
 
 **Verification before trust**
 
-- Listing an encoder is not proof it works. A short **canary encode** (about one second of a synthetic source) is attempted per candidate in the order **NVENC → QSV → AMF → CPU**.
-- The first candidate that both enumerates and completes the canary is selected. A failing canary demotes that encoder without failing the app.
+- Listing an encoder is not proof it works. A short **canary encode** (a real 2 s 1080p30 synthetic clip) is attempted per candidate in the order **NVENC → QSV → AMF → CPU**, and each artifact is validated with `ffprobe -count_frames`.
+- The first candidate whose encode succeeds *and* whose artifact decodes as a 1080p stream is selected. A failing canary demotes that encoder without failing the app.
+- Observed on this PC: FFmpeg 8.1.2 lists `h264_qsv` and `h264_amf`, but both canaries failed (no Intel iGPU, no AMD GPU), so NVENC was selected. Name-list checks alone would have been wrong.
 
 **Derived profile** (`derive_render_profile`)
 
