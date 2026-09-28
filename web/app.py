@@ -1289,6 +1289,16 @@ def save_token_groups(groups):
 def api_list_token_groups():
     return jsonify({"success": True, "groups": load_token_groups()})
 
+def _pages_for_source_token(page_source_token_id):
+    """Return the cached Page ids owned by one vault token, in stable order."""
+    if not page_source_token_id:
+        return []
+    return sorted({
+        str(page.get("page_id")) for page in page_manager.list_pages()
+        if str(page.get("token_id") or "") == page_source_token_id and page.get("page_id")
+    })
+
+
 @app.route("/api/token-groups", methods=["POST"])
 def api_save_token_group():
     data = request.json or {}
@@ -1297,6 +1307,7 @@ def api_save_token_group():
     token_ids = list(dict.fromkeys(str(tid) for tid in data.get("token_ids", []) if tid))
     strategy = data.get("strategy", "least_recently_used")
     note = data.get("note", "").strip()
+    has_source = "page_source_token_id" in data
     page_source_token_id = str(data.get("page_source_token_id") or "").strip()
 
     if not name:
@@ -1307,10 +1318,7 @@ def api_save_token_group():
         return jsonify({"error": "Token không tồn tại trong Vault: " + ", ".join(unknown_ids)}), 404
     if page_source_token_id and page_source_token_id not in vault_ids:
         return jsonify({"error": "Token nguồn Page không tồn tại trong Vault"}), 404
-    page_ids = sorted({
-        str(page.get("page_id")) for page in page_manager.list_pages()
-        if page_source_token_id and str(page.get("token_id") or "") == page_source_token_id and page.get("page_id")
-    })
+    page_ids = _pages_for_source_token(page_source_token_id)
 
     groups = load_token_groups()
     existing = next((g for g in groups if g.get("id") == gid), None)
@@ -1319,8 +1327,9 @@ def api_save_token_group():
         existing["token_ids"] = token_ids
         existing["strategy"] = strategy
         existing["note"] = note
-        existing["page_source_token_id"] = page_source_token_id
-        existing["page_ids"] = page_ids
+        if has_source or not existing.get("page_source_token_id"):
+            existing["page_source_token_id"] = page_source_token_id
+            existing["page_ids"] = page_ids
         existing["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     else:
         groups.append({
@@ -1334,7 +1343,34 @@ def api_save_token_group():
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
     save_token_groups(groups)
-    return jsonify({"success": True, "message": f"Đã lưu Nhóm Token '{name}' thành công!"})
+    saved = next((g for g in groups if g.get("id") == gid), None) or {}
+    return jsonify({
+        "success": True,
+        "message": f"Đã lưu Nhóm Token '{name}' thành công!",
+        "group": saved,
+    })
+
+
+@app.route("/api/token-groups/<gid>/rebind-pages", methods=["POST"])
+def api_rebind_token_group_pages(gid):
+    """Re-snapshot a group's Page ids from its bound source token without any Graph call."""
+    groups = load_token_groups()
+    group = next((g for g in groups if str(g.get("id")) == str(gid)), None)
+    if group is None:
+        return jsonify({"success": False, "error": "Nhóm token không tồn tại"}), 404
+    source_id = str(group.get("page_source_token_id") or "").strip()
+    if not source_id:
+        return jsonify({"success": False, "error": "Nhóm này chưa binding Page set"}), 400
+    page_ids = _pages_for_source_token(source_id)
+    if not page_ids:
+        return jsonify({
+            "success": False,
+            "error": "Token nguồn chưa có Page nào trong cache; hãy Sync Page cho token đó trước",
+        }), 409
+    group["page_ids"] = page_ids
+    group["pages_synced_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    save_token_groups(groups)
+    return jsonify({"success": True, "page_ids": page_ids, "group": group})
 
 @app.route("/api/token-groups/<gid>", methods=["DELETE"])
 def api_delete_token_group(gid):
@@ -1369,11 +1405,9 @@ def api_add_token():
     if not lines:
         return jsonify({"error": "Nội dung token không hợp lệ"}), 400
 
-    results = []
-    synced_page_ids = set()
-    
+    # Parse every line up front so a deferred representative retry can reuse its slot.
+    entries = []
     for idx, line in enumerate(lines):
-        # Format support: "Name|Token" or "Name,Token" or just "Token"
         item_name = default_name
         item_token = line
         if "|" in line:
@@ -1384,41 +1418,102 @@ def api_add_token():
             parts = line.split(",", 1)
             item_name = parts[0].strip() or default_name
             item_token = parts[1].strip()
-            
         if not item_name:
             item_name = f"Token {idx + 1}" if len(lines) > 1 else "System Token"
-            
+        entries.append({"name": item_name, "token": item_token})
+
+    results = [None] * len(entries)
+    synced_page_ids = set()
+    representative_idx = None
+
+    def _run_sync(index):
+        """Add one token, optionally syncing its Pages; return (entry, pages)."""
+        item = entries[index]
+        discover_pages = page_sync_mode == "each" or (
+            page_sync_mode == "representative" and representative_idx is None
+        )
+        entry, pages = token_vault.add_token(
+            item["name"], item["token"], kind, note, discover_pages=discover_pages
+        )
+        if pages:
+            page_manager.sync_pages_from_token(entry, pages)
+            for page in pages:
+                page_id = page.get("id") or page.get("page_id")
+                if page_id:
+                    synced_page_ids.add(str(page_id))
+        return entry, pages
+
+    for idx in range(len(entries)):
         try:
-            discover_pages = page_sync_mode == "each" or (page_sync_mode == "representative" and idx == 0)
-            entry, pages = token_vault.add_token(item_name, item_token, kind, note, discover_pages=discover_pages)
-            if pages:
-                page_manager.sync_pages_from_token(entry, pages)
-                for p in pages:
-                    pid = p.get("id") or p.get("page_id")
-                    if pid:
-                        synced_page_ids.add(str(pid))
-            results.append({
+            entry, pages = _run_sync(idx)
+            is_synced = bool(pages)
+            if page_sync_mode == "representative" and representative_idx is None and (
+                is_synced or not entries[idx]["token"]
+            ):
+                representative_idx = idx
+            results[idx] = {
                 "id": entry.get("id"),
                 "name": entry.get("name"),
                 "status": entry.get("status"),
                 "error_msg": entry.get("error_msg", ""),
                 "pages_count": len(pages),
-                "page_sync": "synced" if discover_pages else "skipped"
-            })
+                "page_sync": "synced" if is_synced else "skipped",
+                "is_representative": False,
+            }
         except Exception as ex:
-            results.append({
-                "name": item_name,
+            results[idx] = {
+                "name": entries[idx]["name"],
                 "status": "ERROR",
                 "error_msg": str(ex),
-                "pages_count": 0
-            })
-            
+                "pages_count": 0,
+                "page_sync": "failed",
+                "is_representative": False,
+            }
+
+    if page_sync_mode == "representative" and representative_idx is None:
+        # The first token could not supply a Page set; retry later tokens until one succeeds.
+        for idx, item in enumerate(entries):
+            if results[idx].get("status") != "ACTIVE":
+                continue
+            try:
+                entry, pages = _run_sync(idx)
+            except Exception:
+                continue
+            if pages:
+                representative_idx = idx
+                results[idx] = {
+                    "id": entry.get("id"),
+                    "name": entry.get("name"),
+                    "status": entry.get("status"),
+                    "error_msg": entry.get("error_msg", ""),
+                    "pages_count": len(pages),
+                    "page_sync": "synced",
+                    "is_representative": True,
+                }
+                break
+
+    if page_sync_mode != "representative":
+        representative_idx = None
+
+    if representative_idx is not None:
+        results[representative_idx]["is_representative"] = True
+        for index, item in enumerate(results):
+            if index != representative_idx and item.get("page_sync") == "synced":
+                item["page_sync"] = "skipped"
+
+    representative_label = ""
+    representative = results[representative_idx] if representative_idx is not None else None
+    if representative:
+        representative_label = f"#{representative_idx + 1} {representative.get('name')}"
+
     return jsonify({
         "success": True,
         "count": len(results),
         "results": results,
         "synced_pages": len(synced_page_ids),
         "page_sync_mode": page_sync_mode,
+        "representative": ({"id": representative.get("id"), "name": representative.get("name"),
+                            "label": representative_label} if representative else None),
         "token": results[0] if results else None
     })
 

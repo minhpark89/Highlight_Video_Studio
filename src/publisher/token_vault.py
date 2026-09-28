@@ -168,6 +168,12 @@ class TokenVault:
         if identity.get("status") != "ACTIVE":
             return identity
 
+        return self.discover_pages(token_str, owner_name=owner_name)
+
+    def discover_pages(self, token_str, owner_name=""):
+        """Enumerate managed Pages after identity validation has already succeeded."""
+        token_str = token_str.strip()
+
         url = "https://graph.facebook.com/v22.0/me/accounts"
         params = {
             "access_token": token_str,
@@ -182,7 +188,8 @@ class TokenVault:
                 return {
                     "status": "ERROR",
                     "error": f"[{err.get('code')}] {err.get('message')}",
-                    "pages": []
+                    "pages": [],
+                    "owner_name": owner_name,
                 }
             
             pages = []
@@ -204,8 +211,20 @@ class TokenVault:
             return {
                 "status": "ERROR",
                 "error": str(e),
-                "pages": []
+                "pages": [],
+                "owner_name": owner_name,
             }
+
+    def record_page_sync(self, token_id, pages):
+        """Persist Page discovery metadata without changing identity-valid token status."""
+        tokens = self.list_tokens(mask=False)
+        entry = next((item for item in tokens if item.get("id") == token_id), None)
+        if entry is None:
+            return None
+        entry["pages_count"] = len(pages or [])
+        entry["last_checked"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._save(tokens)
+        return entry
 
     def refresh_token_pages(self, token_id):
         """Explicitly re-run full Page discovery for one stored token."""

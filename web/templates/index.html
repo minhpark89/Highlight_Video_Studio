@@ -3650,15 +3650,48 @@
                 <span class="badge" style="background: rgba(16,185,129,0.12); color: #34d399;">${(g.page_ids||[]).length} Page binding</span>
                 <span style="margin-left: 6px;">Chiến lược: <strong>${g.strategy || 'least_recently_used'}</strong></span>
               </div>
+              <div style="font-size: 10.5px; color: #64748b; margin-top: 4px;">
+                ${g.page_source_token_id
+                  ? `Ảnh chụp (snapshot) Page set từ token nguồn · ${escapeHtml(groupSourceLabel(g))}${g.pages_synced_at ? ' · lúc ' + escapeHtml(g.pages_synced_at) : ''}`
+                  : 'Chưa binding Page set (không giữ Page nào)'}
+              </div>
             </div>
-            <button class="btn btn-secondary btn-sm text-danger" onclick="deleteTokenGroup('${g.id}', '${g.name}')" style="font-size: 11px; padding: 3px 8px;">
-              <i class="bi bi-trash"></i> Xóa
-            </button>
+            <div style="display: flex; gap: 6px;">
+              ${g.page_source_token_id ? `<button class="btn btn-secondary btn-sm" onclick="rebindTokenGroupPages('${g.id}', '${g.name}')" style="font-size: 11px; padding: 3px 8px;" title="Cập nhật Page set từ cache, không gọi Graph API">
+                <i class="bi bi-arrow-repeat"></i> Cập nhật Page set
+              </button>` : ''}
+              <button class="btn btn-secondary btn-sm text-danger" onclick="deleteTokenGroup('${g.id}', '${g.name}')" style="font-size: 11px; padding: 3px 8px;">
+                <i class="bi bi-trash"></i> Xóa
+              </button>
+            </div>
           </div>
         `).join('');
       }
     } catch (e) {
       console.warn('Lỗi nạp token groups:', e);
+    }
+  }
+
+  function groupSourceLabel(group) {
+    const sourceId = group && group.page_source_token_id;
+    if (!sourceId) return '';
+    const token = (globalTokensCatalog || []).find(t => t.id === sourceId);
+    const name = (token && token.name) || 'token đã xóa';
+    return `token nguồn: ${name}`;
+  }
+
+  async function rebindTokenGroupPages(gid, gname) {
+    try {
+      const res = await fetch('/api/token-groups/' + encodeURIComponent(gid) + '/rebind-pages', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast(`Đã cập nhật Page set cho nhóm '${gname}': ${data.page_ids.length} Page`);
+        await loadTokenGroupsList();
+      } else {
+        alert('Không cập nhật được Page set: ' + (data.error || 'Server error'));
+      }
+    } catch (e) {
+      alert('Lỗi kết nối cập nhật Page set: ' + e.message);
     }
   }
 
@@ -6077,6 +6110,11 @@ async function loadPostsTable() {
             <label class="form-label" style="font-size:12px;font-weight:600;color:#cbd5e1;">Dùng lại Page set đã sync từ:</label>
             <select id="tgrp-page-source-token" class="form-select form-select-sm" style="background:#0b1329;border-color:#334155;"><option value="">Không binding Page set</option></select>
             <div style="font-size:11px;color:#64748b;margin-top:4px;">Chỉ lưu binding tới Page hiện có; không gọi Graph API lại cho các token trong nhóm.</div>
+            <div style="font-size:11px;color:#f59e0b;margin-top:4px;">
+              <i class="bi bi-info-circle"></i>
+              Đây là <b>snapshot</b> Page tại thời điểm lưu. Sau khi Sync Page cho token nguồn, bấm
+              <b>Cập nhật Page set</b> ở danh sách bên dưới để bind lại (vẫn không gọi Graph API).
+            </div>
           </div>
           <div style="margin-bottom: 14px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
