@@ -360,11 +360,10 @@ _queue_thread.start()
 
 # Start scheduled posts publisher background thread (LoHa Page standard)
 try:
-    from web.scheduled_publisher import scheduled_publisher_worker_loop
+    from web.scheduled_publisher import start_worker_thread, worker_status
 except ImportError:
-    from scheduled_publisher import scheduled_publisher_worker_loop
-_publisher_thread = threading.Thread(target=scheduled_publisher_worker_loop, daemon=True)
-_publisher_thread.start()
+    from scheduled_publisher import start_worker_thread, worker_status
+_publisher_thread = start_worker_thread()
 
 @app.route("/")
 def index():
@@ -1881,6 +1880,70 @@ def api_clear_posts():
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e), "message": f"Lỗi: {str(e)}"}), 500
+
+@app.route("/api/scheduler/status", methods=["GET"])
+def api_scheduler_status():
+    """Expose worker heartbeat so the UI can show stale/overdue warnings."""
+    try:
+        try:
+            from web.scheduled_publisher import worker_status as _status
+        except ImportError:
+            from scheduled_publisher import worker_status as _status
+        status = _status()
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+    posts = load_posts()
+    now_dt = datetime.now()
+    overdue = []
+    for post in posts:
+        if post.get("status") not in ("scheduled", "publishing"):
+            continue
+        raw_time = post.get("scheduled_time")
+        if not raw_time:
+            continue
+        try:
+            scheduled_dt = datetime.strptime(str(raw_time).replace("T", " ")[:19], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            continue
+        late_seconds = int((now_dt - scheduled_dt).total_seconds())
+        if late_seconds > int(status.get("jitter_threshold_seconds", 120)):
+            overdue.append({
+                "id": post.get("id"),
+                "title": post.get("title", ""),
+                "page_name": post.get("page_name", ""),
+                "status": post.get("status"),
+                "scheduled_time": post.get("scheduled_time"),
+                "late_seconds": late_seconds,
+            })
+    status["overdue_count"] = len(overdue)
+    status["overdue_posts"] = overdue[:50]
+    status["success"] = True
+    return jsonify(status)
+
+
+@app.route("/api/scheduler/run-due", methods=["POST"])
+def api_scheduler_run_due():
+    """Manual operator trigger to process overdue posts when a cycle was missed.
+
+    Reuses the same claim/duplicate guards as the background worker; no forced
+    final actions and no publish-approval bypass.
+    """
+    try:
+        try:
+            from web.scheduled_publisher import process_scheduled_posts_once
+        except ImportError:
+            from scheduled_publisher import process_scheduled_posts_once
+        result = process_scheduled_posts_once()
+        return jsonify({
+            "success": True,
+            "claimed": result.get("claimed", 0),
+            "recovered": result.get("recovered", 0),
+            "message": "Da xu ly cac bai den han.",
+        })
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
 
 @app.route("/api/posts", methods=["GET"])
 def api_get_posts():

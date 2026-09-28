@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 import time
 from datetime import datetime
@@ -8,8 +9,67 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 POSTS_FILE = BASE_DIR / "posts.json"
 POSTED_CLIPS_FILE = BASE_DIR / "posted_clips.json"
 OUTPUT_DIR = BASE_DIR / "output"
+SCHEDULER_HEARTBEAT_FILE = BASE_DIR / "data" / "scheduler_heartbeat.json"
 
 _FILE_LOCK = threading.Lock()
+CYCLE_INTERVAL_SECONDS = 20
+CLAIM_STALE_AFTER_SECONDS = 300
+OVERDUE_GRACE_SECONDS = 120
+
+# Workers sharing one loop (Flask dev server vs packaged waitress) must not double-claim.
+_worker_lock = threading.Lock()
+_worker_started = False
+
+_heartbeat = {
+    "running": False,
+    "started_at": "",
+    "last_cycle_at": "",
+    "last_cycle_ok": None,
+    "last_error": "",
+    "cycles": 0,
+    "jitter_threshold_seconds": OVERDUE_GRACE_SECONDS,
+    "interval_seconds": CYCLE_INTERVAL_SECONDS,
+}
+_heartbeat_lock = threading.Lock()
+
+_SECRET_PATTERNS = (
+    re.compile(r"(access_token|page_token|token|api_key|apikey|secret|password|authorization)[=:\s]+[^\s&\"',]+", re.IGNORECASE),
+    re.compile(r"([?&](?:access_token|token|api_key|key)=)[^\s&\"']+", re.IGNORECASE),
+    re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]+", re.IGNORECASE),
+)
+
+
+def sanitize_error(message, limit=400):
+    """Redact token-like values so operator-visible errors never leak credentials."""
+    text = str(message or "")
+    for pattern in _SECRET_PATTERNS:
+        if pattern.groups >= 2:
+            text = pattern.sub(lambda m: m.group(1) + "[redacted]", text)
+        else:
+            text = pattern.sub(lambda m: m.group(1) + "[redacted]" if m.groups() else "[redacted]", text)
+    text = " ".join(text.split())
+    return text[:limit]
+
+
+def worker_status():
+    with _heartbeat_lock:
+        snapshot = dict(_heartbeat)
+    snapshot["thread_alive"] = bool(_worker_thread and _worker_thread.is_alive())
+    return snapshot
+
+
+def _touch_heartbeat(ok, error=""):
+    with _heartbeat_lock:
+        _heartbeat["running"] = True
+        _heartbeat["last_cycle_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _heartbeat["last_cycle_ok"] = ok
+        _heartbeat["last_error"] = sanitize_error(error) if error else ""
+        _heartbeat["cycles"] += 1
+    try:
+        SCHEDULER_HEARTBEAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SCHEDULER_HEARTBEAT_FILE.write_text(json.dumps(worker_status(), indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def load_posts():
@@ -37,8 +97,18 @@ def _record_posted_clip(clip_filename):
             POSTED_CLIPS_FILE.write_text(json.dumps(posted_list, indent=2), encoding="utf-8")
 
 
-def process_scheduled_posts_once(poster=None, now=None, website_publisher=None, comment_generator=None):
-    """Process one deterministic cycle while preserving the pre-publish claim lock."""
+def process_scheduled_posts_once(
+    poster=None,
+    now=None,
+    website_publisher=None,
+    comment_generator=None,
+    force_due=False,
+):
+    """Process one deterministic cycle while preserving the pre-publish claim lock.
+
+    ``force_due`` lets an operator run overdue posts immediately from the UI when
+    the background worker missed a cycle; it never bypasses the claim/duplicate guards.
+    """
     import sys
 
     sys.path.insert(0, str(BASE_DIR))
@@ -50,6 +120,7 @@ def process_scheduled_posts_once(poster=None, now=None, website_publisher=None, 
     website_publisher = website_publisher or publish_clip_to_website_cms
     comment_generator = comment_generator or generate_curiosity_comment_with_llm
     current_dt = now or datetime.now()
+    now_ts = current_dt.timestamp()
 
     queue_result = process_due_first_comments(poster, now=int(current_dt.timestamp()))
     posts = load_posts()
@@ -64,6 +135,24 @@ def process_scheduled_posts_once(poster=None, now=None, website_publisher=None, 
         if outcome.get("comment_id"):
             post["comment_id"] = outcome["comment_id"]
 
+    # Recover records left in "publishing" by a crashed or killed cycle so they are
+    # retried instead of hanging forever with a stale claim.
+    recovered = 0
+    for post in posts:
+        if post.get("status") != "publishing":
+            continue
+        claimed_at = _parse_scheduled_time(post.get("claimed_at"))
+        if claimed_at is not None and (now_ts - claimed_at.timestamp()) < CLAIM_STALE_AFTER_SECONDS:
+            continue
+        post.update({
+            "status": "scheduled",
+            "retryable": True,
+            "retry_stage": post.get("retry_stage") or "claim_recovery",
+            "recovered_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "error": "Khoi phuc bai dang bi ket o trang thai publishing (worker dung dot ngot)",
+        })
+        recovered += 1
+
     claimed_posts = []
     for post in posts:
         if post.get("status") != "scheduled":
@@ -71,9 +160,8 @@ def process_scheduled_posts_once(poster=None, now=None, website_publisher=None, 
         scheduled_time = post.get("scheduled_time")
         if not scheduled_time:
             continue
-        try:
-            scheduled_dt = datetime.strptime(scheduled_time[:19], "%Y-%m-%d %H:%M:%S")
-        except Exception:
+        scheduled_dt = _parse_scheduled_time(scheduled_time)
+        if scheduled_dt is None:
             post["schedule_error"] = "Thời gian lên lịch không hợp lệ"
             continue
         if scheduled_dt <= current_dt:
@@ -81,7 +169,7 @@ def process_scheduled_posts_once(poster=None, now=None, website_publisher=None, 
             post["claimed_at"] = current_dt.strftime("%Y-%m-%d %H:%M:%S")
             claimed_posts.append(post)
 
-    if claimed_posts:
+    if claimed_posts or recovered:
         save_posts(posts)
 
     for post in claimed_posts:
@@ -197,17 +285,62 @@ def process_scheduled_posts_once(poster=None, now=None, website_publisher=None, 
                 "error": str(exc),
             })
 
-    if claimed_posts or queue_result.get("changed"):
+    if claimed_posts or recovered or queue_result.get("changed"):
         save_posts(posts)
-    return {"claimed": len(claimed_posts), "queue": queue_result, "posts": posts}
+    return {"claimed": len(claimed_posts), "recovered": recovered, "queue": queue_result, "posts": posts}
 
 
 def scheduled_publisher_worker_loop():
     """Run publishing cycles continuously; all external calls remain in the cycle helper."""
+    global _worker_started
+    if not _worker_lock.acquire(blocking=False):
+        print("[ScheduledPublisher] Worker loop already running in this process; skipping duplicate start.")
+        return
+    _worker_started = True
+    with _heartbeat_lock:
+        _heartbeat["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print("[ScheduledPublisher] Background publisher worker started with Idempotent Claim Lock!")
-    while True:
-        try:
-            process_scheduled_posts_once()
-        except Exception as exc:
-            print(f"[ScheduledPublisher] Loop Error: {exc}")
-        time.sleep(20)
+    try:
+        while True:
+            try:
+                result = process_scheduled_posts_once()
+                _touch_heartbeat(True)
+                if result.get("claimed") or result.get("recovered"):
+                    print(f"[ScheduledPublisher] cycle claimed={result.get('claimed')} recovered={result.get('recovered')}")
+            except Exception as exc:
+                _touch_heartbeat(False, exc)
+                print(f"[ScheduledPublisher] Loop Error: {sanitize_error(exc)}")
+            time.sleep(CYCLE_INTERVAL_SECONDS)
+    finally:
+        _worker_started = False
+        with _heartbeat_lock:
+            _heartbeat["running"] = False
+        _worker_lock.release()
+
+
+def _parse_scheduled_time(value):
+    """Parse stored naive local timestamps without raising on bad data."""
+    if value is None:
+        return None
+    text = str(value).strip().replace("T", " ")
+    if not text:
+        return None
+    if len(text) == 16:
+        text += ":00"
+    try:
+        return datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+_worker_thread = None
+
+
+def start_worker_thread():
+    """Idempotently start the background worker; safe to call from app and packaged entrypoint."""
+    global _worker_thread
+    if _worker_thread and _worker_thread.is_alive():
+        return _worker_thread
+    _worker_thread = threading.Thread(target=scheduled_publisher_worker_loop, daemon=True, name="scheduled-publisher")
+    _worker_thread.start()
+    return _worker_thread

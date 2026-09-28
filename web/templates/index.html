@@ -882,10 +882,17 @@
               </div>
             </div>
             <div style="display: flex; gap: 10px; align-items: center;">
+              <div id="scheduler-status-chip" style="background: rgba(15, 23, 42, 0.6); border: 1px solid #334155; padding: 6px 14px; border-radius: 8px; font-size: 12px; display: flex; align-items: center; gap: 8px;">
+                <span style="color: #94a3b8;">Worker:</span>
+                <span id="scheduler-status-text" style="color: #94a3b8; font-weight: 700;">Đang kiểm tra...</span>
+              </div>
               <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid #334155; padding: 6px 14px; border-radius: 8px; font-size: 12px; display: flex; align-items: center; gap: 8px;">
                 <span style="color: #94a3b8;">Chống đăng trùng:</span>
                 <span style="color: #10b981; font-weight: 700;"><i class="bi bi-shield-check"></i> ĐANG BẬT (100% Độc Nhất)</span>
               </div>
+              <button class="btn btn-outline" onclick="runDuePostsNow()" id="run-due-btn" style="color: #22d3ee; border-color: rgba(34, 211, 238, 0.4);" title="Chạy ngay các bài đã đến hạn nếu worker bỏ lỡ chu kỳ">
+                <i class="bi bi-lightning-charge-fill"></i> Chạy bài đến hạn
+              </button>
               <button class="btn btn-warning" onclick="clearScheduledPosts()" style="background: #f59e0b; color: #0f172a; font-weight: 700; border: none;">
                 <i class="bi bi-x-circle-fill"></i> Hủy các bài đang hẹn lịch
               </button>
@@ -899,6 +906,10 @@
                 <i class="bi bi-arrow-clockwise"></i> Làm mới
               </button>
             </div>
+          </div>
+
+          <!-- Banner cảnh báo bài quá hạn chưa đăng -->
+          <div id="scheduler-overdue-banner" style="display: none; margin-bottom: 14px; padding: 12px 16px; border-radius: 10px; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.45); color: #fca5a5; font-size: 13px;">
           </div>
 
           <!-- Bảng danh sách bài đăng chuẩn LoHa -->
@@ -1718,7 +1729,7 @@
         if (paneId === 'pane-groups' && typeof loadLoHaGroups === 'function') loadLoHaGroups();
         if (paneId === 'pane-pages' && typeof loadTokensAndPages === 'function') loadTokensAndPages();
         if (paneId === 'pane-tokens' && typeof loadTokensOnly === 'function') loadTokensOnly();
-        if (paneId === 'pane-posts' && typeof loadPostsTable === 'function') loadPostsTable();
+        if (paneId === 'pane-posts' && typeof loadPostsTable === 'function') { loadPostsTable(); if (typeof window.startPostsAutoRefresh === 'function') window.startPostsAutoRefresh(); }
       } catch (e) { console.warn('Lazy loader err:', e); }
     } catch (err) {
       console.error('[switchTab error]', err);
@@ -5373,7 +5384,92 @@
     }
   }
 
-async function loadPostsTable() {
+  async function loadPostsTable() {
+  // ================= SCHEDULER WORKER HEALTH & AUTO REFRESH =================
+  let postsAutoRefreshTimer = null;
+  const postsOverdueIds = new Set();
+
+  async function refreshSchedulerStatus() {
+    const textEl = document.getElementById('scheduler-status-text');
+    const bannerEl = document.getElementById('scheduler-overdue-banner');
+    if (!textEl) return;
+    try {
+      const res = await fetch('/api/scheduler/status');
+      const st = await res.json();
+      if (!st || st.success === false) {
+        textEl.innerHTML = '<i class="bi bi-exclamation-triangle-fill"></i> Không đọc được trạng thái';
+        textEl.style.color = '#f59e0b';
+        return;
+      }
+      const alive = st.thread_alive && st.last_cycle_ok !== false;
+      const lastCycle = st.last_cycle_at ? st.last_cycle_at.substring(11, 19) : '--:--:--';
+      const overdueCount = st.overdue_count || 0;
+      if (alive) {
+        textEl.innerHTML = `<i class="bi bi-check-circle-fill"></i> Hoạt động · chu kỳ cuối ${lastCycle}`;
+        textEl.style.color = '#10b981';
+      } else {
+        textEl.innerHTML = `<i class="bi bi-exclamation-triangle-fill"></i> Có lỗi · chu kỳ cuối ${lastCycle}`;
+        textEl.style.color = '#ef4444';
+      }
+
+      postsOverdueIds.clear();
+      (st.overdue_posts || []).forEach(op => postsOverdueIds.add(op.id));
+
+      if (bannerEl) {
+        if (overdueCount > 0) {
+          const lateMin = Math.max(...(st.overdue_posts || []).map(op => Math.round((op.late_seconds || 0) / 60)));
+          bannerEl.style.display = 'block';
+          bannerEl.innerHTML = `<i class="bi bi-alarm-fill"></i> <b>${overdueCount} bài đã quá hạn</b> nhưng chưa đăng (trễ nhất ~${lateMin} phút). ` +
+            `Worker có thể đã bỏ lỡ chu kỳ. Nhấn <button onclick="runDuePostsNow()" style="background:#ef4444;color:#fff;border:none;padding:3px 10px;border-radius:6px;font-weight:700;cursor:pointer;">Chạy bài đến hạn</button> để xử lý ngay.`;
+        } else if (st.last_error) {
+          bannerEl.style.display = 'block';
+          bannerEl.innerHTML = `<i class="bi bi-bug-fill"></i> Lỗi chu kỳ gần nhất: ${escapeHtml(st.last_error)}`;
+        } else {
+          bannerEl.style.display = 'none';
+          bannerEl.innerHTML = '';
+        }
+      }
+    } catch (e) {
+      textEl.innerHTML = '<i class="bi bi-wifi-off"></i> Mất kết nối máy chủ';
+      textEl.style.color = '#ef4444';
+    }
+  }
+
+  async function runDuePostsNow() {
+    const btn = document.getElementById('run-due-btn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="bi bi-arrow-repeat spin"></i> Đang chạy...'; }
+    try {
+      const res = await fetch('/api/scheduler/run-due', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`Đã xử lý: ${data.claimed || 0} bài đến hạn, khôi phục ${data.recovered || 0} bài kẹt.`);
+      } else {
+        showToast('Lỗi: ' + (data.error || 'không xác định'), 'error');
+      }
+    } catch (e) {
+      showToast('Lỗi kết nối: ' + e.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-lightning-charge-fill"></i> Chạy bài đến hạn'; }
+      refreshSchedulerStatus();
+      loadPostsTable();
+    }
+  }
+  window.refreshSchedulerStatus = refreshSchedulerStatus;
+  window.runDuePostsNow = runDuePostsNow;
+
+  function startPostsAutoRefresh() {
+    if (postsAutoRefreshTimer) return;
+    refreshSchedulerStatus();
+    postsAutoRefreshTimer = setInterval(() => {
+      const pane = document.getElementById('pane-posts');
+      if (pane && pane.classList.contains('active')) {
+        refreshSchedulerStatus();
+        loadPostsTable();
+      }
+    }, 15000);
+  }
+  window.startPostsAutoRefresh = startPostsAutoRefresh;
+
     const tbody = document.getElementById('posts-table-body');
     if (!tbody) return;
 
@@ -5433,8 +5529,13 @@ async function loadPostsTable() {
           `;
         } else if (p.status === 'failed') {
           statusBadge = `<span style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;" title="${escapeHtml(p.error || p.website_error || '')}"><i class="bi bi-x-circle"></i> Lỗi · Có thể thử lại</span>`;
+        } else if (p.status === 'publishing') {
+          statusBadge = '<span style="background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-arrow-repeat spin"></i> Đang đăng...</span>';
         } else {
-          statusBadge = '<span style="background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-clock-history"></i> Đang hẹn lịch</span>';
+          const isOverdue = postsOverdueIds.has(p.id);
+          statusBadge = isOverdue
+            ? `<span style="background: rgba(239,68,68,0.2); color: #fca5a5; border: 1px solid rgba(239,68,68,0.6); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-alarm-fill"></i> QUÁ HẠN · chưa đăng</span><div style="margin-top:4px;"><button onclick="runDuePostsNow()" style="background:#ef4444;color:#fff;border:none;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">Đăng ngay</button></div>`
+            : '<span style="background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-clock-history"></i> Đang hẹn lịch</span>';
         }
 
         let commentSnippet = '';

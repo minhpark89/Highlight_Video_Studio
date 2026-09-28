@@ -198,5 +198,203 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         self.assertIn("Xem video", html)
 
 
+class SchedulerWorkerHardeningTests(unittest.TestCase):
+    def _fixture(self, post):
+        folder = tempfile.TemporaryDirectory()
+        root = Path(folder.name)
+        output = root / "output"
+        output.mkdir()
+        (output / "clip.mp4").write_bytes(b"video")
+        posts_file = root / "posts.json"
+        posts_file.write_text(json.dumps([post]), encoding="utf-8")
+        return folder, root, output, posts_file
+
+    def test_overdue_six_minutes_post_is_claimed_not_left_scheduled(self):
+        """Field report: post due 12:25 still shown as scheduled at 12:31 (6 minutes late)."""
+        from src.publisher import first_comment_queue
+        from web import scheduled_publisher as worker
+
+        class Poster:
+            def publish_reel(self, **kwargs):
+                return {"success": True, "video_id": "video-900"}
+
+            def post_first_comment(self, *args, **kwargs):
+                return {"success": True, "comment_id": "c-1"}
+
+        folder, root, output, posts_file = self._fixture({
+            "id": "post-late", "status": "scheduled", "scheduled_time": "2026-09-28 12:25:00",
+            "page_id": "page-1", "token": "t", "media_file": "clip.mp4", "title": "T",
+            "content": "C", "auto_first_comment": False, "first_comment": "Configured",
+        })
+        try:
+            with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
+                worker, "POSTED_CLIPS_FILE", root / "posted.json"
+            ), mock.patch.object(worker, "OUTPUT_DIR", output), mock.patch.object(
+                first_comment_queue, "QUEUE_FILE", root / "queue.json"
+            ):
+                result = worker.process_scheduled_posts_once(
+                    poster=Poster(), now=datetime(2026, 9, 28, 12, 31, 0)
+                )
+            persisted = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+        finally:
+            folder.cleanup()
+        self.assertEqual(result["claimed"], 1)
+        self.assertEqual(persisted["status"], "published")
+        self.assertEqual(persisted["post_fb_id"], "video-900")
+
+    def test_stuck_publishing_record_is_recovered_after_stale_claim(self):
+        """Crash recovery: a killed cycle leaves status=publishing forever without reclaim."""
+        from src.publisher import first_comment_queue
+        from web import scheduled_publisher as worker
+
+        class Poster:
+            def publish_reel(self, **kwargs):
+                return {"success": True, "video_id": "video-901"}
+
+            def post_first_comment(self, *args, **kwargs):
+                return {"success": True, "comment_id": "c-1"}
+
+        folder, root, output, posts_file = self._fixture({
+            "id": "post-stuck", "status": "publishing", "scheduled_time": "2026-09-28 10:00:00",
+            "claimed_at": "2026-09-28 10:00:05", "page_id": "page-1", "token": "t",
+            "media_file": "clip.mp4", "title": "T", "content": "C",
+            "auto_first_comment": False, "first_comment": "Configured",
+        })
+        try:
+            with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
+                worker, "POSTED_CLIPS_FILE", root / "posted.json"
+            ), mock.patch.object(worker, "OUTPUT_DIR", output), mock.patch.object(
+                first_comment_queue, "QUEUE_FILE", root / "queue.json"
+            ):
+                result = worker.process_scheduled_posts_once(
+                    poster=Poster(), now=datetime(2026, 9, 28, 12, 30, 0)
+                )
+            persisted = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+        finally:
+            folder.cleanup()
+        self.assertEqual(result["recovered"], 1)
+        self.assertEqual(persisted["status"], "published")
+        self.assertIn("claim_recovery", json.dumps(persisted))
+
+    def test_fresh_publishing_claim_is_not_stolen(self):
+        """A live in-flight claim inside the stale window must not be reclaimed twice."""
+        from web import scheduled_publisher as worker
+
+        folder, root, output, posts_file = self._fixture({
+            "id": "post-live", "status": "publishing", "scheduled_time": "2026-09-28 12:29:00",
+            "claimed_at": "2026-09-28 12:30:00", "media_file": "clip.mp4",
+        })
+        try:
+            with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
+                worker, "OUTPUT_DIR", output
+            ), mock.patch.object(worker, "POSTED_CLIPS_FILE", root / "posted.json"):
+                result = worker.process_scheduled_posts_once(
+                    poster=mock.Mock(), now=datetime(2026, 9, 28, 12, 30, 30)
+                )
+            persisted = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+        finally:
+            folder.cleanup()
+        self.assertEqual(result["recovered"], 0)
+        self.assertEqual(persisted["status"], "publishing")
+
+    def test_naive_local_datetime_format_is_parsed_without_tz_error(self):
+        """Stored timestamps are naive local strings; parsing must not require tzinfo."""
+        from web.scheduled_publisher import _parse_scheduled_time
+
+        self.assertEqual(
+            _parse_scheduled_time("2026-09-28T12:25"),
+            datetime(2026, 9, 28, 12, 25, 0),
+        )
+        self.assertEqual(
+            _parse_scheduled_time("2026-09-28 12:25:30"),
+            datetime(2026, 9, 28, 12, 25, 30),
+        )
+        self.assertIsNone(_parse_scheduled_time("not-a-date"))
+        self.assertIsNone(_parse_scheduled_time(None))
+        # Naive parsed value compares directly against naive local now().
+        self.assertLess(_parse_scheduled_time("2020-01-01 00:00:00"), datetime.now())
+
+    def test_worker_exception_records_failed_retryable_with_sanitized_error(self):
+        """A raising cycle must be visible, retryable, and never leak tokens."""
+        from web import scheduled_publisher as worker
+
+        token = "EAAG-secret-token-value"
+        with mock.patch.object(
+            worker,
+            "process_scheduled_posts_once",
+            side_effect=RuntimeError(f"graph call failed page_token={token}"),
+        ):
+            original_process = worker.process_scheduled_posts_once
+            worker.process_scheduled_posts_once = mock.Mock(
+                side_effect=RuntimeError(f"graph call failed page_token={token}")
+            )
+            try:
+                # Simulate one loop iteration body exactly as the loop does.
+                try:
+                    worker.process_scheduled_posts_once()
+                    ok = True
+                    err = None
+                except Exception as exc:
+                    ok = False
+                    err = exc
+                worker._touch_heartbeat(ok, err or "")
+                status = worker.worker_status()
+            finally:
+                worker.process_scheduled_posts_once = original_process
+        self.assertFalse(status["last_cycle_ok"])
+        self.assertNotIn(token, status["last_error"])
+        self.assertIn("graph call failed", status["last_error"])
+
+    def test_worker_status_reports_heartbeat_fields(self):
+        from web import scheduled_publisher as worker
+
+        status = worker.worker_status()
+        for key in ("running", "last_cycle_at", "last_cycle_ok", "last_error", "cycles", "thread_alive"):
+            self.assertIn(key, status)
+        self.assertIn("jitter_threshold_seconds", status)
+
+    def test_scheduler_status_and_run_due_endpoints(self):
+        from web import app as web_app
+
+        web_app.app.config["TESTING"] = True
+        folder, root, output, posts_file = self._fixture({
+            "id": "post-api", "status": "scheduled", "scheduled_time": "2020-01-01 00:00:00",
+            "page_id": "page-1", "page_name": "Page One", "token": "t",
+            "media_file": "clip.mp4", "title": "T", "content": "C",
+        })
+        client = web_app.app.test_client()
+        try:
+            with mock.patch.object(web_app, "POSTS_FILE", posts_file), mock.patch.object(
+                web_app, "OUTPUT_DIR", output
+            ):
+                status_res = client.get("/api/scheduler/status")
+                self.assertEqual(status_res.status_code, 200)
+                payload = status_res.get_json()
+                self.assertTrue(payload["success"])
+                self.assertGreaterEqual(payload["overdue_count"], 1)
+                self.assertEqual(payload["overdue_posts"][0]["id"], "post-api")
+                self.assertGreaterEqual(payload["overdue_posts"][0]["late_seconds"], 300)
+        finally:
+            folder.cleanup()
+
+    def test_ui_has_worker_status_overdue_and_manual_trigger(self):
+        root = Path(__file__).resolve().parent.parent
+        html = (root / "web" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("/api/scheduler/status", html)
+        self.assertIn("/api/scheduler/run-due", html)
+        self.assertIn("scheduler-overdue-banner", html)
+        self.assertIn("QUÁ HẠN", html)
+        self.assertIn("startPostsAutoRefresh", html)
+        self.assertIn("setInterval", html)
+
+    def test_start_worker_thread_is_idempotent(self):
+        from web import scheduled_publisher as worker
+
+        with mock.patch.object(worker, "scheduled_publisher_worker_loop", side_effect=lambda: None):
+            first = worker.start_worker_thread()
+            second = worker.start_worker_thread()
+        self.assertIs(first, second)
+
+
 if __name__ == "__main__":
     unittest.main()
