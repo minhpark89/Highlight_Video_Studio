@@ -168,6 +168,17 @@ class WebsiteArticleService:
 
         content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         is_video = content_type.startswith("video/")
+        generic_endpoint = f"{self.cfg.api_base_url}/uploads/presigned-image-url"
+        generic_request = {
+            "fileName": path.name,
+            "contentType": content_type,
+            "size": path.stat().st_size,
+            "auditContext": {
+                "record_type": "HighlightVideoStudio",
+                "action_label": "publish article asset",
+            },
+        }
+
         if is_video:
             endpoint = f"{self.cfg.api_base_url}/social-planner/media/presign-upload"
             request_data = {
@@ -175,31 +186,37 @@ class WebsiteArticleService:
                 "size_bytes": path.stat().st_size,
                 "filename": path.name,
             }
+            presign = session.http.post(endpoint, json=request_data, timeout=self.cfg.timeout)
+            # Social Planner is a separately licensed CMS feature. Website article
+            # publishing worked before it was introduced, so a package-level 403
+            # must fall back to the CMS' generic asset uploader rather than block
+            # the otherwise-authorized Website workflow.
+            if presign.status_code == 403:
+                presign = session.http.post(
+                    generic_endpoint,
+                    json=generic_request,
+                    timeout=self.cfg.timeout,
+                )
         else:
-            endpoint = f"{self.cfg.api_base_url}/uploads/presigned-image-url"
-            request_data = {
-                "fileName": path.name,
-                "contentType": content_type,
-                "size": path.stat().st_size,
-                "auditContext": {
-                    "record_type": "HighlightVideoStudio",
-                    "action_label": "publish article asset",
-                },
-            }
+            presign = session.http.post(
+                generic_endpoint,
+                json=generic_request,
+                timeout=self.cfg.timeout,
+            )
 
-        presign = session.http.post(endpoint, json=request_data, timeout=self.cfg.timeout)
         payload = self._response_payload(presign)
         data = payload.get("data") or payload
-        if is_video:
-            upload = {
-                "url": data.get("upload_url"),
-                "method": data.get("method") or "PUT",
-                "headers": data.get("headers") or {},
-            }
-            public_url = data.get("public_url")
-        else:
-            upload = data.get("upload") or {}
-            public_url = data.get("fileUrl") or data.get("file_url")
+        upload_data = data.get("upload") or {}
+        upload = {
+            "url": data.get("upload_url") or upload_data.get("url"),
+            "method": data.get("method") or upload_data.get("method") or "PUT",
+            "headers": data.get("headers") or upload_data.get("headers") or {},
+        }
+        public_url = (
+            data.get("public_url")
+            or data.get("fileUrl")
+            or data.get("file_url")
+        )
 
         upload_url = upload.get("url")
         if not upload_url or not public_url:
