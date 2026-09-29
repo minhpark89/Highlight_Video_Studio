@@ -220,8 +220,8 @@ def get_ytdlp_transcript(video_id: str):
         base_args.extend(["--js-runtimes", f"node:{NODE_BIN}"])
     url = f"https://www.youtube.com/watch?v={video_id}"
     attempts = [base_args + [url]]
-    if CHROME_PROFILE_DIR.exists():
-        attempts.append(base_args + ["--cookies-from-browser", f"chrome:{CHROME_PROFILE_DIR}", url])
+    for cookie_spec in _chrome_cookie_specs():
+        attempts.append(base_args + ["--cookies-from-browser", cookie_spec, url])
     try:
         for command in attempts:
             result = subprocess.run(
@@ -252,6 +252,25 @@ def get_ytdlp_transcript(video_id: str):
 
 CHROME_PROFILE_DIR = BASE_DIR / "chrome_profile"
 
+
+def _chrome_cookie_specs():
+    """Return yt-dlp browser specs for app-owned Chrome profile directories.
+
+    yt-dlp expects the *profile directory* (for example ``.../Default``), not
+    Chrome's user-data root (``.../chrome_profile``). The latter silently misses
+    cookies when the login lives under Default/Profile N.
+    """
+    if not CHROME_PROFILE_DIR.is_dir():
+        return []
+    profiles = ["Default", "Profile 1", "Profile 2", "Profile 3"]
+    return [
+        f"chrome:{CHROME_PROFILE_DIR / profile}"
+        for profile in profiles
+        if (CHROME_PROFILE_DIR / profile / "Network" / "Cookies").is_file()
+        or (CHROME_PROFILE_DIR / profile / "Cookies").is_file()
+    ]
+
+
 def download_video_and_audio(url: str, job_id: str, update_status=None):
     """
     Tải video siêu tốc bằng yt-dlp với 8 luồng song song.
@@ -268,12 +287,12 @@ def download_video_and_audio(url: str, job_id: str, update_status=None):
     if NODE_BIN and Path(NODE_BIN).exists():
         base_args.extend(["--js-runtimes", f"node:{NODE_BIN}"])
 
-    def try_download(use_fallback=False):
+    def try_download(use_fallback=False, cookie_spec=None):
         dl_args = list(base_args)
         if use_fallback:
-            if CHROME_PROFILE_DIR.exists():
-                dl_args.extend(["--cookies-from-browser", f"chrome:{CHROME_PROFILE_DIR}"])
-            elif COOKIES_FILE.exists():
+            if cookie_spec:
+                dl_args.extend(["--cookies-from-browser", cookie_spec])
+            elif COOKIES_FILE.is_file():
                 dl_args.extend(["--cookies", str(COOKIES_FILE)])
 
         info_cmd = [YT_DLP_BIN, "--dump-json", "--no-warnings"] + dl_args + [url]
@@ -307,18 +326,24 @@ def download_video_and_audio(url: str, job_id: str, update_status=None):
     if res.returncode != 0 or not out_video.exists():
         err_msg = res.stderr or ""
         is_bot_check = any(k in err_msg.lower() for k in ["sign in to confirm", "bot", "403", "forbidden", "login"])
-        if is_bot_check or CHROME_PROFILE_DIR.exists():
+        cookie_specs = _chrome_cookie_specs()
+        if is_bot_check or cookie_specs or COOKIES_FILE.is_file():
             if update_status:
-                update_status(f"Kích hoạt Fallback Chrome Local: {CHROME_PROFILE_DIR}...")
-            res_fb, fb_title, fb_duration = try_download(use_fallback=True)
-            if res_fb.returncode == 0 and out_video.exists():
-                res = res_fb
-                if fb_title and fb_title != "YouTube Video":
-                    video_title = fb_title
-                if fb_duration:
-                    duration = fb_duration
+                update_status(f"Thử lại YouTube bằng cookie Chrome profile: {cookie_specs[0] if cookie_specs else COOKIES_FILE}...")
+            fallback_specs = cookie_specs or ([None] if COOKIES_FILE.is_file() else [])
+            last_error = err_msg
+            for cookie_spec in fallback_specs:
+                res_fb, fb_title, fb_duration = try_download(use_fallback=True, cookie_spec=cookie_spec)
+                if res_fb.returncode == 0 and out_video.exists():
+                    res = res_fb
+                    if fb_title and fb_title != "YouTube Video":
+                        video_title = fb_title
+                    if fb_duration:
+                        duration = fb_duration
+                    break
+                last_error = res_fb.stderr or last_error
             else:
-                raise RuntimeError(f"yt-dlp tải video thất bại (kể cả khi đã fallback Chrome profile): {res_fb.stderr}")
+                raise RuntimeError(f"yt-dlp tải video thất bại kể cả khi dùng cookie đăng nhập Chrome: {last_error}")
         else:
             raise RuntimeError(f"yt-dlp tải video thất bại: {res.stderr}")
 
