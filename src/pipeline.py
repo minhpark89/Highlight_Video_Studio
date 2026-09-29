@@ -67,7 +67,10 @@ try:
     _PROFILE_CONCURRENCY = max(1, min(4, _PROFILE_CONCURRENCY))
 except (TypeError, ValueError):
     _PROFILE_CONCURRENCY = 1
-RENDER_CONCURRENCY = max(1, int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT_RENDERS", str(_PROFILE_CONCURRENCY))))
+try:
+    RENDER_CONCURRENCY = max(1, min(4, int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT_RENDERS", str(_PROFILE_CONCURRENCY)))))
+except (TypeError, ValueError):
+    RENDER_CONCURRENCY = 1
 RENDER_SEMAPHORE = threading.BoundedSemaphore(RENDER_CONCURRENCY)
 
 

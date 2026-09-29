@@ -324,8 +324,11 @@ def run_job_pipeline(job):
             segments = get_youtube_transcript(v_id)
         
         if not segments:
-            update_msg("Không tìm thấy subtitle YouTube, kích hoạt Whisper CUDA float16...", step=2)
-            segments = transcribe_local_whisper(audio_path)
+            update_msg("Không tìm thấy subtitle YouTube, khởi chạy Whisper với tự động chọn CUDA/CPU...", step=2)
+            segments = transcribe_local_whisper(
+                audio_path,
+                update_status=lambda message: update_msg(message, step=2),
+            )
 
         if not segments:
             raise RuntimeError("Không thể lấy phụ đề hoặc nhận diện giọng nói của video này.")
@@ -337,7 +340,7 @@ def run_job_pipeline(job):
             raise RuntimeError("AI không thể tìm thấy đoạn highlight phù hợp.")
 
         # Bước 4 & 5: Smart Reframe & Render từng clip (kèm Dynamic Subtitle)
-        update_msg(f"Bắt đầu render {len(highlights)} clips highlight 9:16 (NVENC Hardware GPU)...", step=4)
+        update_msg(f"Bắt đầu render {len(highlights)} clips highlight 9:16 (encoder tự động, tối đa {MAX_CONCURRENT_JOBS} job)...", step=4)
         rendered_clips = []
         for idx, h in enumerate(highlights, 1):
             update_msg(f"Đang render clip {idx}/{len(highlights)}: {h.get('title', 'Clip')}...", step=4)
