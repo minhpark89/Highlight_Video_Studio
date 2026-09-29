@@ -265,10 +265,41 @@ def _apply_to_posts(item):
         post["video_url"] = item.get("video_url") or ""
         post["website_status"] = item.get("website_status", post.get("website_status"))
         post["website_error"] = item.get("website_error", "")
-        if result.get("first_comment") and not post.get("first_comment"):
+        if result.get("first_comment"):
             post["first_comment"] = result["first_comment"]
             post["first_comment_status"] = "ready"
+            post["first_comment_error"] = ""
     save_posts_file(posts_file, posts)
+
+
+
+def retry_package_component(package_id, component, mode=None):
+    """Regenerate a selected field and persist it to the queue and linked posts."""
+    if component not in ("hero_title", "article_html", "first_comment", "caption", "hashtags"):
+        raise ValueError("Unknown content component")
+    with _LOCK:
+        items = _read(QUEUE_FILE, [])
+        item = next((entry for entry in items if entry.get("id") == package_id), None)
+        if not item:
+            return None
+        snapshot = dict(item)
+    result = generate_package(
+        snapshot.get("title", ""), snapshot.get("summary", ""), snapshot.get("video_url", ""),
+        mode=mode or snapshot.get("mode", "auto"), component=component,
+        article_url=snapshot.get("article_url", ""),
+    )
+    with _LOCK:
+        items = _read(QUEUE_FILE, [])
+        item = next((entry for entry in items if entry.get("id") == package_id), None)
+        if not item:
+            return None
+        merged = item.get("result") if isinstance(item.get("result"), dict) else {}
+        merged[component] = result.get(component)
+        merged["source"] = result.get("source", "unknown")
+        item.update({"result": merged, "status": "ready", "error": "", "updated_at": _now()})
+        _write(QUEUE_FILE, items)
+    _apply_to_posts(item)
+    return {"component": component, "package": merged, "item": item}
 
 
 def process_content_packages_once():

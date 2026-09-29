@@ -77,11 +77,14 @@ def get_image_provider_config(model_override: str = "") -> dict:
     api_base = str(image_cfg.get("api_base") or llm_cfg.get("api_base") or "").strip()
     generation_url = str(image_cfg.get("generation_url") or "").strip()
     configured_model = str(image_cfg.get("model") or "").strip()
+    if not configured_model:
+        task_models = llm_cfg.get("task_models") if isinstance(llm_cfg.get("task_models"), dict) else {}
+        configured_model = str(task_models.get("image") or "").strip()
     requested_model = str(model_override or "").strip()
     if requested_model == "__video_frame__" or (not requested_model and configured_model == "__video_frame__"):
         selected_model = "__video_frame__"
     else:
-        selected_model = configured_model or requested_model
+        selected_model = requested_model or configured_model
     return {
         "api_base": api_base,
         "generation_url": generation_url,

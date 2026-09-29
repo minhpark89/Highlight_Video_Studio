@@ -712,10 +712,10 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
         update_status(f"Đang render bằng {codec} (tối đa {RENDER_CONCURRENCY} render đồng thời)...")
     with render_slot():
         cmd = build_command(encoder)
-        rendered = subprocess.run(cmd, capture_output=True, text=True, creationflags=NO_WINDOW)
+        rendered = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
         if rendered.returncode != 0 and encoder != "cpu":
             print(f"[FFmpeg Warning] {codec} failed; fallback to libx264: {rendered.stderr[:300]}")
-            rendered = subprocess.run(build_command("cpu"), capture_output=True, text=True, creationflags=NO_WINDOW)
+            rendered = subprocess.run(build_command("cpu"), capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
         if rendered.returncode != 0:
             raise RuntimeError(f"FFmpeg render thất bại: {rendered.stderr}")
 

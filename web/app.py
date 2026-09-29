@@ -2901,7 +2901,8 @@ def api_publish_website_article():
 
 from src.content_packages import (list_packages, get_package, process_content_packages_once,
                                  generate_package, fallback_package, circuit_status,
-                                 start_content_package_worker, enqueue_content_package, sanitize_error)
+                                 start_content_package_worker, enqueue_content_package, sanitize_error,
+                                 retry_package_component)
 
 # ---------------------------------------------------------------------------
 # Content Studio: background Content Package queue for rendered clips.
@@ -3005,13 +3006,13 @@ def api_content_studio_retry():
         return jsonify({"success": False, "error": "KhÃ´ng tÃ¬m tháº¥y Content Package"}), 404
     component = str(payload.get("component") or "").strip()
     try:
-        result = generate_package(
-            item["title"],
-            item.get("summary", ""),
-            item.get("video_url", ""),
-            mode=str(payload.get("mode") or item.get("mode") or "auto"),
-            component=component,
-        )
+        if component:
+            result = retry_package_component(package_id, component, str(payload.get("mode") or item.get("mode") or "auto"))
+            if not result:
+                return jsonify({"success": False, "error": "Không tìm thấy Content Package"}), 404
+            return jsonify({"success": True, **result})
+        result = generate_package(item["title"], item.get("summary", ""), item.get("video_url", ""),
+                                  mode=str(payload.get("mode") or item.get("mode") or "auto"))
     except Exception as exc:
         return jsonify({"success": False, "error": sanitize_error(exc)}), 502
     return jsonify({"success": True, "component": component or "all", "package": result})
