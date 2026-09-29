@@ -1706,15 +1706,17 @@ def api_publish_reel():
 
     target_page_ids = []
     if page_id:
-        target_page_ids.append(page_id)
+        target_page_ids.append(str(page_id).strip())
     if page_ids and isinstance(page_ids, list):
         for pid in page_ids:
-            if pid not in target_page_ids:
+            pid = str(pid).strip()
+            if pid and pid not in target_page_ids:
                 target_page_ids.append(pid)
     if group_id:
-        grp = next((g for g in groups if g.get("id") == group_id), None)
+        grp = next((g for g in groups if isinstance(g, dict) and str(g.get("id")) == str(group_id)), None)
         if grp:
-            for pid in grp.get("page_ids", []):
+            for pid in (grp.get("page_ids", []) if isinstance(grp.get("page_ids", []), list) else []):
+                pid = str(pid).strip()
                 if pid not in target_page_ids:
                     target_page_ids.append(pid)
 
@@ -1730,7 +1732,7 @@ def api_publish_reel():
     # before any post is queued.
     target_pages = []
     for pid in target_page_ids:
-        p_info = next((p for p in pages if str(p.get("page_id")) == str(pid)), None)
+        p_info = next((p for p in pages if isinstance(p, dict) and str(p.get("page_id")) == str(pid)), None)
         if not p_info:
             results.append({"page_id": pid, "success": False, "error": "Không tìm thấy thông tin Page"})
             continue
@@ -1775,7 +1777,7 @@ def api_publish_reel():
         _page_record["token_id"] = ready["token_id"]
 
     for idx, pid in enumerate(target_page_ids):
-        p_info = next((p for p in pages if p.get("page_id") == pid), None)
+        p_info = next((p for p in pages if isinstance(p, dict) and str(p.get("page_id")) == str(pid)), None)
         if not p_info:
             continue
 

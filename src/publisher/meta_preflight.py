@@ -58,6 +58,8 @@ def mapping_error(page_id, page_name, code, *, stage="mapping", token_id="", det
 
 def resolve_page_token(page_entry, token_vault, page_manager):
     """Resolve one exact discovery-backed mapping; never use a fallback token."""
+    if not isinstance(page_entry, dict):
+        return mapping_error("", "", "missing_page", detail="Invalid Page record in the selected target list.")
     page_entry = page_entry or {}
     page_id = str(page_entry.get("page_id") or "").strip()
     page_name = page_entry.get("page_name") or page_id

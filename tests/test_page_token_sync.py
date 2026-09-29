@@ -147,6 +147,23 @@ class FrontendInvariantTests(unittest.TestCase):
 # Backend behaviour of the Page / Token / Group / Sync APIs
 # --------------------------------------------------------------------------- #
 class BackendApiTests(unittest.TestCase):
+    def test_page_manager_filters_invalid_json_entries(self):
+        from src.publisher.page_manager import PageManager
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "pages.json").write_text(json.dumps(["stale", 42, {"page_id": "PAGE_A"}]), encoding="utf-8")
+            (root / "page_groups.json").write_text(json.dumps(["stale", {"id": "grp"}]), encoding="utf-8")
+            manager = PageManager(root)
+            self.assertEqual(manager.list_pages(), [{"page_id": "PAGE_A"}])
+            self.assertEqual(manager.list_groups(), [{"id": "grp"}])
+
+    def test_preflight_invalid_page_entry_fails_closed(self):
+        from src.publisher.meta_preflight import preflight_pages
+
+        verdict = preflight_pages(["stale-record"], mock.Mock(), mock.Mock())
+        self.assertFalse(verdict["ok"])
+        self.assertEqual(verdict["blocked"]["code"], "missing_page")
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)

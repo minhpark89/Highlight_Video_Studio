@@ -37,7 +37,11 @@ class PageManager:
     def list_pages(self):
         try:
             with open(self.pages_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                raw = json.load(f)
+                # Older preview builds could leave scalar/invalid entries in
+                # pages.json after an interrupted sync.  Never expose those
+                # records to callers that expect Page dictionaries.
+                return [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
         except Exception:
             return []
 
@@ -54,13 +58,15 @@ class PageManager:
         credential_fingerprint = self.credential_fingerprint(token_entry.get("token"))
         discovered_ids = set()
 
-        for p in pages_data:
+        for p in pages_data if isinstance(pages_data, list) else []:
+            if not isinstance(p, dict):
+                continue
             page_id = str(p.get("page_id") or p.get("id") or "").strip()
             page_token = str(p.get("page_token") or p.get("access_token") or "").strip()
             if not page_id or not page_token:
                 continue
             discovered_ids.add(page_id)
-            existing = next((item for item in current_pages if item.get("page_id") == page_id), None)
+            existing = next((item for item in current_pages if str(item.get("page_id") or "") == page_id), None)
             binding = {
                 "token_id": token_id,
                 "token_name": token_name,
@@ -189,7 +195,8 @@ class PageManager:
     def list_groups(self):
         try:
             with open(self.groups_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                raw = json.load(f)
+                return [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
         except Exception:
             return []
 
