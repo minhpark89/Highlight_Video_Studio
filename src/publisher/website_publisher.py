@@ -12,11 +12,22 @@ import subprocess
 import logging
 from pathlib import Path
 import requests
+from multi_pc.data_root import canonical_data_root
 
 logger = logging.getLogger("website_publisher")
 
 HVS_DIR = Path(__file__).resolve().parent.parent.parent
+DATA_ROOT = canonical_data_root()
 sys.path.insert(0, str(HVS_DIR))
+
+
+def _runtime_data_root() -> Path:
+    """Resolve mutable config from the active installation root.
+
+    Keeping the HVS_DIR fallback preserves isolated test/install roots while still
+    enforcing the canonical-data-root guard when an explicit environment root is set.
+    """
+    return canonical_data_root(allow_repo_fallback=HVS_DIR)
 
 try:
     from core.website_article_service import WebsiteArticleService, WebsiteServiceError, _BackendSession
@@ -28,7 +39,7 @@ except Exception as exc:
 
 def get_website_config():
     """Lấy config CMS website được lưu cục bộ trong HVS."""
-    cfg_file = HVS_DIR / "config" / "website_config.json"
+    cfg_file = DATA_ROOT / "config" / "website_config.json"
     if cfg_file.exists():
         try:
             with open(cfg_file, "r", encoding="utf-8") as f:
@@ -40,7 +51,7 @@ def get_website_config():
 def get_llm_config():
     """Lấy cấu hình LLM từ config.json."""
     try:
-        with open(HVS_DIR / "config.json", "r", encoding="utf-8") as f:
+        with open(_runtime_data_root() / "config.json", "r", encoding="utf-8") as f:
             cfg = json.load(f)
             return cfg.get("llm", {})
     except Exception:
@@ -56,7 +67,7 @@ def get_task_model(task: str, llm_cfg: dict = None) -> str:
 def get_image_provider_config(model_override: str = "") -> dict:
     """Resolve the dedicated image provider, with legacy LLM image settings as fallback."""
     try:
-        with open(HVS_DIR / "config.json", "r", encoding="utf-8") as f:
+        with open(_runtime_data_root() / "config.json", "r", encoding="utf-8") as f:
             root_cfg = json.load(f)
     except Exception:
         root_cfg = {}

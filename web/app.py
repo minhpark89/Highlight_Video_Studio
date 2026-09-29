@@ -138,7 +138,7 @@ def prepare_website_article_for_schedule(
             cms_result = publish_clip_to_website_cms(clip_filename, title)
             article_url = cms_result[0] if isinstance(cms_result, tuple) else str(cms_result or "")
             if not article_url:
-                raise WebsiteServiceError("CMS khÃ´ng tráº£ Website URL")
+                raise WebsiteServiceError("CMS không trả Website URL")
         if not first_comment:
             try:
                 first_comment = generate_curiosity_comment_with_llm(
@@ -148,8 +148,8 @@ def prepare_website_article_for_schedule(
                 )
             except Exception:
                 first_comment = (
-                    f"ðŸ”¥ Watch the full uncut footage and breakdown here: {article_url}\n"
-                    "ðŸ‘‰ Scroll down the article to stream the complete high-definition video!"
+                    f"🔥 Watch the full uncut footage and breakdown here: {article_url}\n"
+                    "👉 Scroll down the article to stream the complete high-definition video!"
                 )
         result.update({
             "article_url": article_url,
@@ -297,8 +297,8 @@ def run_job_pipeline(job):
             render_highlight_clip,
             extract_video_id,
         ) = get_pipeline_tools()
-        # BÆ°á»›c 1: Táº£i video vÃ  audio
-        update_msg("Äang táº£i video vÃ  bÃ³c tÃ¡ch Ã¢m thanh siÃªu tá»‘c (-N 8)...", step=1)
+        # Bước 1: Tải video và audio
+        update_msg("Đang tải video và bóc tách âm thanh siêu tốc (-N 8)...", step=1)
         dl_res = download_video_and_audio(url, job_id, update_status=lambda m: update_msg(m, step=1))
         video_path = dl_res['video_path']
         audio_path = dl_res['audio_path']
@@ -312,31 +312,31 @@ def run_job_pipeline(job):
             "audio_path": str(audio_path)
         })
 
-        # BÆ°á»›c 2: BÃ³c tÃ¡ch phá»¥ Ä‘á» / transcript
-        update_msg("Äang trÃ­ch xuáº¥t transcript (YouTube Subtitles / Local Whisper)...", step=2)
+        # Bước 2: Bóc tách phụ đề / transcript
+        update_msg("Đang trích xuất transcript (YouTube Subtitles / Local Whisper)...", step=2)
         v_id = extract_video_id(url)
         segments = []
         if v_id:
             segments = get_youtube_transcript(v_id)
         
         if not segments:
-            update_msg("KhÃ´ng tÃ¬m tháº¥y subtitle YouTube, kÃ­ch hoáº¡t Whisper CUDA float16...", step=2)
+            update_msg("Không tìm thấy subtitle YouTube, kích hoạt Whisper CUDA float16...", step=2)
             segments = transcribe_local_whisper(audio_path)
 
         if not segments:
-            raise RuntimeError("KhÃ´ng thá»ƒ láº¥y phá»¥ Ä‘á» hoáº·c nháº­n diá»‡n giá»ng nÃ³i cá»§a video nÃ y.")
+            raise RuntimeError("Không thể lấy phụ đề hoặc nhận diện giọng nói của video này.")
 
-        # BÆ°á»›c 3: AI LLM phÃ¢n tÃ­ch Hook & Highlight
-        update_msg("AI Gemini Ä‘ang phÃ¢n tÃ­ch ná»™i dung, cháº¥m Ä‘iá»ƒm Viral & cáº¯t Hook...", step=3)
+        # Bước 3: AI LLM phân tích Hook & Highlight
+        update_msg("AI Gemini đang phân tích nội dung, chấm điểm Viral & cắt Hook...", step=3)
         highlights = ask_llm_for_highlights(segments, num_clips=num_clips, target_length=job.get("clip_length", "auto"), criteria=job.get("highlight_criteria", "hook_viral"), hook_duration=job.get("hook_duration", 6), update_status=lambda m: update_msg(m, step=3))
         if not highlights:
-            raise RuntimeError("AI khÃ´ng thá»ƒ tÃ¬m tháº¥y Ä‘oáº¡n highlight phÃ¹ há»£p.")
+            raise RuntimeError("AI không thể tìm thấy đoạn highlight phù hợp.")
 
-        # BÆ°á»›c 4 & 5: Smart Reframe & Render tá»«ng clip (kÃ¨m Dynamic Subtitle)
-        update_msg(f"Báº¯t Ä‘áº§u render {len(highlights)} clips highlight 9:16 (NVENC Hardware GPU)...", step=4)
+        # Bước 4 & 5: Smart Reframe & Render từng clip (kèm Dynamic Subtitle)
+        update_msg(f"Bắt đầu render {len(highlights)} clips highlight 9:16 (NVENC Hardware GPU)...", step=4)
         rendered_clips = []
         for idx, h in enumerate(highlights, 1):
-            update_msg(f"Äang render clip {idx}/{len(highlights)}: {h.get('title', 'Clip')}...", step=4)
+            update_msg(f"Đang render clip {idx}/{len(highlights)}: {h.get('title', 'Clip')}...", step=4)
             clip_file = render_highlight_clip(
                 video_path=video_path,
                 audio_path=audio_path,
@@ -366,14 +366,14 @@ def run_job_pipeline(job):
         update_job_status(job_id, {
             "status": "completed",
             "step": 5,
-            "progress_msg": f"HoÃ n táº¥t! ÄÃ£ xuáº¥t {len(rendered_clips)} clips highlight cháº¥t lÆ°á»£ng cao.",
+            "progress_msg": f"Hoàn tất! Đã xuất {len(rendered_clips)} clips highlight chất lượng cao.",
             "clips": rendered_clips
         })
 
     except Exception as e:
         update_job_status(job_id, {
             "status": "error",
-            "progress_msg": f"Lá»—i xá»­ lÃ½: {str(e)}"
+            "progress_msg": f"Lỗi xử lý: {str(e)}"
         })
 
 
@@ -483,7 +483,7 @@ def create_job():
             unique_urls.append(u)
             
     if not unique_urls:
-        return jsonify({"error": "Vui lÃ²ng nháº­p Ã­t nháº¥t 1 Ä‘Æ°á»ng link YouTube há»£p lá»‡."}), 400
+        return jsonify({"error": "Vui lòng nhập ít nhất 1 đường link YouTube hợp lệ."}), 400
 
     created_jobs = []
     jobs = load_jobs()
@@ -502,7 +502,7 @@ def create_job():
             "highlight_criteria": data.get("highlight_criteria", "hook_viral"),
             "status": "queued",
             "step": 0,
-            "progress_msg": "Äang chá» trong hÃ ng Ä‘á»£i...",
+            "progress_msg": "Đang chờ trong hàng đợi...",
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "clips": []
         }
@@ -573,14 +573,14 @@ def get_all_clips():
             pass
 
     seen_files = set()
-    # Chá»‰ láº¥y cÃ¡c clip cÃ³ file video THá»°C Táº¾ Ä‘ang tá»“n táº¡i trÃªn á»• Ä‘Ä©a mÃ¡y nÃ y
+    # Chỉ lấy các clip có file video THỰC TẾ đang tồn tại trên ổ đĩa máy này
     for j in jobs:
         for c in j.get("clips", []):
             fn = c.get("filename")
             if fn:
                 clip_path = OUTPUT_DIR / fn
                 if not clip_path.exists():
-                    continue # Bá» qua náº¿u file video khÃ´ng cÃ³ trÃªn mÃ¡y tÃ­nh nÃ y
+                    continue # Bỏ qua nếu file video không có trên máy tính này
                 seen_files.add(fn)
                 clip_copy = dict(c)
                 clip_copy["job_id"] = j["id"]
@@ -588,7 +588,7 @@ def get_all_clips():
                 clip_copy["is_posted"] = (fn in posted_set)
                 all_clips.append(clip_copy)
             
-    # QuÃ©t trá»±c tiáº¿p cÃ¡c video .mp4 thá»±c táº¿ trong thÆ° má»¥c output/
+    # Quét trực tiếp các video .mp4 thực tế trong thư mục output/
     if OUTPUT_DIR.exists():
         for f in sorted(OUTPUT_DIR.glob("*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
             if f.name not in seen_files:
@@ -600,7 +600,7 @@ def get_all_clips():
                     "file_size": f.stat().st_size,
                     "is_posted": (f.name in posted_set),
                     "job_id": "direct_scan",
-                    "video_source": "Kho video thá»±c táº¿"
+                    "video_source": "Kho video thực tế"
                 })
                 
     return jsonify(all_clips)
@@ -609,10 +609,10 @@ def get_all_clips():
 def play_clip(filename):
     safe_name = Path(str(filename).replace("\\", "/")).name
     if safe_name != filename or not safe_name.lower().endswith(".mp4"):
-        return jsonify({"error": "TÃªn video khÃ´ng há»£p lá»‡"}), 400
+        return jsonify({"error": "Tên video không hợp lệ"}), 400
     target = (OUTPUT_DIR / safe_name).resolve()
     if target.parent != OUTPUT_DIR.resolve() or not target.is_file():
-        return jsonify({"error": "KhÃ´ng tÃ¬m tháº¥y video"}), 404
+        return jsonify({"error": "Không tìm thấy video"}), 404
     return send_from_directory(
         str(OUTPUT_DIR), safe_name,
         as_attachment=request.args.get("download") == "1",
@@ -640,7 +640,7 @@ def api_delete_clip(filename):
             save_jobs(jobs)
 
         # Clean from posts/markings if any
-        return jsonify({"success": True, "message": f"ÄÃ£ xÃ³a clip {filename}"})
+        return jsonify({"success": True, "message": f"Đã xóa clip {filename}"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -650,7 +650,7 @@ def api_mark_clip_posted():
         data = request.json or {}
         filename = data.get("filename")
         if not filename:
-            return jsonify({"success": False, "error": "Thiáº¿u filename"}), 400
+            return jsonify({"success": False, "error": "Thiếu filename"}), 400
 
         posted_file = BASE_DIR / "posted_clips.json"
         posted_data = []
@@ -776,10 +776,10 @@ def _normalise_llm_base(raw_base):
 
     value = str(raw_base or "").strip().rstrip("/")
     if not value:
-        raise ValueError("Vui lÃ²ng nháº­p LLM Provider Endpoint")
+        raise ValueError("Vui lòng nhập LLM Provider Endpoint")
     parsed = urlsplit(value)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise ValueError("Endpoint pháº£i lÃ  URL http:// hoáº·c https:// há»£p lá»‡")
+        raise ValueError("Endpoint phải là URL http:// hoặc https:// hợp lệ")
     path = parsed.path.rstrip("/")
     lower_path = path.lower()
     for suffix in ("/chat/completions", "/completions", "/models"):
@@ -802,16 +802,16 @@ def _normalise_http_url(raw_url, field_name="Endpoint"):
 
     value = str(raw_url or "").strip()
     if not value:
-        raise ValueError(f"Vui lÃ²ng nháº­p {field_name}")
+        raise ValueError(f"Vui lòng nhập {field_name}")
     parsed = urlsplit(value)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise ValueError(f"{field_name} pháº£i lÃ  URL http:// hoáº·c https:// há»£p lá»‡")
+        raise ValueError(f"{field_name} phải là URL http:// hoặc https:// hợp lệ")
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), parsed.query, ""))
 
 
 def _image_model_urls(models_url="", api_base=""):
     if str(models_url or "").strip():
-        exact = _normalise_http_url(models_url, "Endpoint láº¥y model áº£nh")
+        exact = _normalise_http_url(models_url, "Endpoint lấy model ảnh")
         path_only = exact.split("?", 1)[0]
         lower_path = path_only.lower()
         # Recover from the common mistake of pasting a POST generation endpoint
@@ -827,14 +827,14 @@ def _image_generation_candidates(generation_url="", api_base=""):
     """Return only the OpenAI-compatible image-generation endpoint."""
     exact = str(generation_url or "").strip()
     if exact:
-        url = _normalise_http_url(exact, "Endpoint táº¡o áº£nh")
+        url = _normalise_http_url(exact, "Endpoint tạo ảnh")
         path = url.lower().split("?", 1)[0]
         if not path.endswith("/v1/images/generations"):
-            raise ValueError("Endpoint táº¡o áº£nh pháº£i káº¿t thÃºc báº±ng /v1/images/generations")
+            raise ValueError("Endpoint tạo ảnh phải kết thúc bằng /v1/images/generations")
         return [(url, "images")]
     base = _normalise_llm_base(api_base)
     if not base.lower().endswith("/v1"):
-        raise ValueError("API base táº¡o áº£nh pháº£i káº¿t thÃºc báº±ng /v1, hoáº·c nháº­p URL Ä‘áº§y Ä‘á»§ /v1/images/generations")
+        raise ValueError("API base tạo ảnh phải kết thúc bằng /v1, hoặc nhập URL đầy đủ /v1/images/generations")
     return [(f"{base}/images/generations", "images")]
 
 
@@ -940,7 +940,7 @@ def detect_hardware():
 
 @app.route("/api/system/youtube_status", methods=["GET"])
 def api_youtube_status():
-    """Kiá»ƒm tra xem Chrome profile Ä‘Ã£ Ä‘Äƒng nháº­p YouTube hay chÆ°a dá»±a trÃªn cookies xÃ¡c thá»±c Google/YouTube."""
+    """Kiểm tra xem Chrome profile đã đăng nhập YouTube hay chưa dựa trên cookies xác thực Google/YouTube."""
     candidate_dirs = [
         ROOT_DIR / "chrome_profile",
         Path(r"F:\openclaw\.openclaw\workspace\chrome_profile")
@@ -961,7 +961,7 @@ def api_youtube_status():
                 shutil.copyfile(str(cookie_path), str(temp_db))
                 conn = sqlite3.connect(str(temp_db))
                 cur = conn.cursor()
-                # Kiá»ƒm tra cáº£ domain google.com vÃ  youtube.com vÃ¬ Ä‘Äƒng nháº­p tÃ i khoáº£n Google cáº¥p cookie SID/SSID/SAPISID
+                # Kiểm tra cả domain google.com và youtube.com vì đăng nhập tài khoản Google cấp cookie SID/SSID/SAPISID
                 cur.execute("""
                     SELECT COUNT(*) FROM cookies 
                     WHERE (host_key LIKE '%youtube.com%' OR host_key LIKE '%google.com%') 
@@ -1010,7 +1010,7 @@ def api_open_chrome():
                 break
                 
         if not chrome_exe:
-            return jsonify({"success": False, "error": r"KhÃ´ng tÃ¬m tháº¥y Google Chrome táº¡i C:\Program Files\Google\Chrome\Application\chrome.exe"}), 404
+            return jsonify({"success": False, "error": r"Không tìm thấy Google Chrome tại C:\Program Files\Google\Chrome\Application\chrome.exe"}), 404
             
         profile_dir = ROOT_DIR / "chrome_profile"
         profile_dir.mkdir(parents=True, exist_ok=True)
@@ -1029,7 +1029,7 @@ def api_open_chrome():
             "platform": platform,
             "target_url": target_url,
             "profile_dir": str(profile_dir),
-            "message": f"ÄÃ£ má»Ÿ Chrome ({platform.upper()}) vá»›i profile Ä‘á»™c láº­p cá»§a App!"
+            "message": f"Đã mở Chrome ({platform.upper()}) với profile độc lập của App!"
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1063,15 +1063,15 @@ def api_settings():
             frame_mode = str(image_update.get("model") or "") == "__video_frame__"
             try:
                 if str(image_update.get("models_url") or "").strip():
-                    image_update["models_url"] = _normalise_http_url(image_update["models_url"], "Endpoint láº¥y model áº£nh")
+                    image_update["models_url"] = _normalise_http_url(image_update["models_url"], "Endpoint lấy model ảnh")
                 if str(image_update.get("generation_url") or "").strip():
-                    image_update["generation_url"] = _normalise_http_url(image_update["generation_url"], "Endpoint táº¡o áº£nh")
+                    image_update["generation_url"] = _normalise_http_url(image_update["generation_url"], "Endpoint tạo ảnh")
                 if str(image_update.get("api_base") or "").strip():
                     image_update["api_base"] = _normalise_llm_base(image_update["api_base"])
             except ValueError as exc:
                 return jsonify({"success": False, "error": f"Image Provider: {exc}"}), 400
             if not frame_mode and not str(image_update.get("generation_url") or image_update.get("api_base") or "").strip():
-                return jsonify({"success": False, "error": "Image Provider: vui lÃ²ng nháº­p endpoint táº¡o áº£nh khi dÃ¹ng AI áº£nh"}), 400
+                return jsonify({"success": False, "error": "Image Provider: vui lòng nhập endpoint tạo ảnh khi dùng AI ảnh"}), 400
             cfg.setdefault("image_provider", {}).update(image_update)
         if "video_pipeline" in data:
             cfg.setdefault("video_pipeline", {}).update(data["video_pipeline"])
@@ -1110,7 +1110,7 @@ def api_llm_models():
                 continue
             models = _extract_llm_models(response.json())
             if not models:
-                failures.append(f"{models_url}: response khÃ´ng cÃ³ danh sÃ¡ch model")
+                failures.append(f"{models_url}: response không có danh sách model")
                 continue
             return jsonify({
                 "success": True,
@@ -1121,8 +1121,8 @@ def api_llm_models():
         except requests.RequestException as exc:
             failures.append(f"{models_url}: {exc}")
         except ValueError:
-            failures.append(f"{models_url}: server khÃ´ng tráº£ JSON há»£p lá»‡")
-    return jsonify({"success": False, "error": "KhÃ´ng thá»ƒ láº¥y danh sÃ¡ch model. " + " | ".join(failures)}), 502
+            failures.append(f"{models_url}: server không trả JSON hợp lệ")
+    return jsonify({"success": False, "error": "Không thể lấy danh sách model. " + " | ".join(failures)}), 502
 
 
 @app.route("/api/image-provider/models", methods=["POST"])
@@ -1146,10 +1146,10 @@ def api_image_provider_models():
             models = _extract_llm_models(response.json())
             if models:
                 return jsonify({"success": True, "models_url": candidate_url, "models": models, "count": len(models)})
-            failures.append(f"{candidate_url}: response khÃ´ng cÃ³ danh sÃ¡ch model")
+            failures.append(f"{candidate_url}: response không có danh sách model")
         except Exception as exc:
             failures.append(f"{candidate_url}: {exc}")
-    return jsonify({"success": False, "error": "Endpoint láº¥y model khÃ´ng hoáº¡t Ä‘á»™ng; váº«n cÃ³ thá»ƒ nháº­p model thá»§ cÃ´ng vÃ  Test táº¡o áº£nh. " + " | ".join(failures)}), 502
+    return jsonify({"success": False, "error": "Endpoint lấy model không hoạt động; vẫn có thể nhập model thủ công và Test tạo ảnh. " + " | ".join(failures)}), 502
 
 
 @app.route("/api/image-provider/test", methods=["POST"])
@@ -1161,7 +1161,7 @@ def api_image_provider_test():
     api_key = data.get("api_key") or image_cfg.get("api_key", "")
     selected_model = str(data.get("model") or image_cfg.get("model") or "").strip()
     if not selected_model or selected_model == "__video_frame__":
-        return jsonify({"success": False, "error": "Vui lÃ²ng báº­t cháº¿ Ä‘á»™ AI táº¡o áº£nh"}), 400
+        return jsonify({"success": False, "error": "Vui lòng bật chế độ AI tạo ảnh"}), 400
     model = "ag/gemini-3.1-flash-image"
     try:
         candidates = _image_generation_candidates(generation_url, raw_base)
@@ -1184,11 +1184,11 @@ def api_image_provider_test():
             if isinstance(detail, dict):
                 detail = detail.get("message") or str(detail)
             if response.status_code == 200:
-                detail = "HTTP 200 nhÆ°ng response khÃ´ng cÃ³ dá»¯ liá»‡u áº£nh"
+                detail = "HTTP 200 nhưng response không có dữ liệu ảnh"
             failures.append(f"{url}: HTTP {response.status_code} - {detail}")
         except requests.RequestException as exc:
             failures.append(f"{url}: {exc}")
-    return jsonify({"success": False, "error": "Test táº¡o áº£nh tháº¥t báº¡i. " + " | ".join(failures)}), 502
+    return jsonify({"success": False, "error": "Test tạo ảnh thất bại. " + " | ".join(failures)}), 502
 
 
 @app.route("/api/llm/test", methods=["POST"])
@@ -1199,7 +1199,7 @@ def api_llm_test():
     api_key = data.get("api_key") or cfg_llm.get("api_key", "")
     model = str(data.get("model") or cfg_llm.get("model") or "").strip()
     if not model:
-        return jsonify({"success": False, "error": "Vui lÃ²ng chá»n model cáº§n kiá»ƒm tra"}), 400
+        return jsonify({"success": False, "error": "Vui lòng chọn model cần kiểm tra"}), 400
     try:
         api_base = _normalise_llm_base(raw_base)
     except ValueError as exc:
@@ -1228,7 +1228,7 @@ def api_llm_test():
                 detail = detail.get("message") or str(detail)
             return jsonify({
                 "success": False,
-                "error": f"Model cÃ³ trong danh sÃ¡ch nhÆ°ng gá»i chat tháº¥t báº¡i (HTTP {response.status_code}): {detail}",
+                "error": f"Model có trong danh sách nhưng gọi chat thất bại (HTTP {response.status_code}): {detail}",
                 "latency_ms": latency_ms,
             }), 502
         choices = payload.get("choices") or []
@@ -1236,7 +1236,7 @@ def api_llm_test():
         if choices and isinstance(choices[0], dict):
             content = str((choices[0].get("message") or {}).get("content") or choices[0].get("text") or "").strip()
         if not content:
-            return jsonify({"success": False, "error": "Provider tráº£ HTTP 200 nhÆ°ng khÃ´ng cÃ³ ná»™i dung chat"}), 502
+            return jsonify({"success": False, "error": "Provider trả HTTP 200 nhưng không có nội dung chat"}), 502
         return jsonify({
             "success": True,
             "api_base": api_base,
@@ -1245,7 +1245,7 @@ def api_llm_test():
             "sample": content[:80],
         })
     except requests.RequestException as exc:
-        return jsonify({"success": False, "error": f"KhÃ´ng káº¿t ná»‘i Ä‘Æ°á»£c model: {exc}"}), 502
+        return jsonify({"success": False, "error": f"Không kết nối được model: {exc}"}), 502
 
 
 @app.route("/api/content/generate", methods=["POST"])
@@ -1277,8 +1277,8 @@ def api_generate_thumbnail():
     banner_text = data.get("banner_text", "")
     image_model = data.get("image_model", "").strip()
 
-    # DÃ¹ng model áº£nh theo tÃ¡c vá»¥ khi Ä‘Æ°á»£c chá»n; náº¿u provider khÃ´ng tráº£ áº£nh,
-    # tiáº¿p tá»¥c fallback sang thumbnail trÃ­ch tá»« video Ä‘á»ƒ luá»“ng khÃ´ng bá»‹ cháº·n.
+    # Dùng model ảnh theo tác vụ khi được chọn; nếu provider không trả ảnh,
+    # tiếp tục fallback sang thumbnail trích từ video để luồng không bị chặn.
     if image_model != "__video_frame__":
         ai_thumb = generate_llm_hook_image(banner_text or "VIRAL MOMENT", model_override=image_model)
         if ai_thumb and os.path.exists(ai_thumb):
@@ -1292,10 +1292,10 @@ def api_generate_thumbnail():
                 "source": "llm_image",
             })
     
-    # TÃ¬m video file cá»§a clip hoáº·c source video
+    # Tìm video file của clip hoặc source video
     target_video = None
     if job_id:
-        # Kiá»ƒm tra file clip trÆ°á»›c
+        # Kiểm tra file clip trước
         clip_file = OUTPUT_DIR / f"{job_id}_clip_{clip_index}.mp4"
         if clip_file.exists():
             target_video = clip_file
@@ -1305,13 +1305,13 @@ def api_generate_thumbnail():
                 target_video = source_file
                 
     if not target_video or not target_video.exists():
-        # Láº¥y báº¥t ká»³ clip nÃ o trong output Ä‘á»ƒ test náº¿u cáº§n
+        # Lấy bất kỳ clip nào trong output để test nếu cần
         clips = list(OUTPUT_DIR.glob("*.mp4"))
         if clips:
             target_video = clips[0]
             
     if not target_video:
-        return jsonify({"error": "KhÃ´ng tÃ¬m tháº¥y file video Ä‘á»ƒ táº¡o thumbnail"}), 404
+        return jsonify({"error": "Không tìm thấy file video để tạo thumbnail"}), 404
         
     out_thumb_name = f"thumb_{job_id or 'clip'}_{clip_index}_{int(time.time())}.jpg"
     out_thumb_path = OUTPUT_DIR / out_thumb_name
@@ -1330,7 +1330,7 @@ def api_generate_thumbnail():
             "filename": out_thumb_name
         })
     else:
-        return jsonify({"error": "KhÃ´ng thá»ƒ render thumbnail"}), 500
+        return jsonify({"error": "Không thể render thumbnail"}), 500
 
 @app.route("/api/llm/detect", methods=["GET"])
 def api_llm_detect():
@@ -1342,18 +1342,18 @@ def api_llm_detect():
 
 
 
-# ================= QUáº¢N LÃ NHÃ“M TOKEN (LOHA TOKEN GROUPS) =================
+# ================= QUẢN LÝ NHÓM TOKEN (LOHA TOKEN GROUPS) =================
 TOKEN_GROUPS_FILE = BASE_DIR / "token_groups.json"
 
 def load_token_groups():
     if not TOKEN_GROUPS_FILE.exists():
-        # Máº·c Ä‘á»‹nh táº¡o NhÃ³m AutoPool 31 Token
+        # Mặc định tạo Nhóm AutoPool 31 Token
         default_groups = [{
             "id": "tgrp_autopool",
-            "name": "NhÃ³m AutoPool ChÃ­nh (31 Token)",
+            "name": "Nhóm AutoPool Chính (31 Token)",
             "strategy": "least_recently_used", # round_robin | least_recently_used | random
             "token_ids": [t.get("id") for t in token_vault.list_tokens(mask=False)],
-            "note": "Xoay vÃ²ng 31 token chá»‘ng quÃ¡ táº£i Meta",
+            "note": "Xoay vòng 31 token chống quá tải Meta",
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }]
         with open(TOKEN_GROUPS_FILE, "w", encoding="utf-8") as f:
@@ -1395,13 +1395,13 @@ def api_save_token_group():
     page_source_token_id = str(data.get("page_source_token_id") or "").strip()
 
     if not name:
-        return jsonify({"error": "TÃªn nhÃ³m token khÃ´ng Ä‘Æ°á»£c rá»—ng"}), 400
+        return jsonify({"error": "Tên nhóm token không được rỗng"}), 400
     vault_ids = {str(item.get("id")) for item in token_vault.list_tokens(mask=False)}
     unknown_ids = sorted(set(token_ids) - vault_ids)
     if unknown_ids:
-        return jsonify({"error": "Token khÃ´ng tá»“n táº¡i trong Vault: " + ", ".join(unknown_ids)}), 404
+        return jsonify({"error": "Token không tồn tại trong Vault: " + ", ".join(unknown_ids)}), 404
     if page_source_token_id and page_source_token_id not in vault_ids:
-        return jsonify({"error": "Token nguá»“n Page khÃ´ng tá»“n táº¡i trong Vault"}), 404
+        return jsonify({"error": "Token nguồn Page không tồn tại trong Vault"}), 404
     page_ids = _pages_for_source_token(page_source_token_id)
 
     groups = load_token_groups()
@@ -1430,7 +1430,7 @@ def api_save_token_group():
     saved = next((g for g in groups if g.get("id") == gid), None) or {}
     return jsonify({
         "success": True,
-        "message": f"ÄÃ£ lÆ°u NhÃ³m Token '{name}' thÃ nh cÃ´ng!",
+        "message": f"Đã lưu Nhóm Token '{name}' thành công!",
         "group": saved,
     })
 
@@ -1441,17 +1441,17 @@ def api_rebind_token_group_pages(gid):
     groups = load_token_groups()
     group = next((g for g in groups if str(g.get("id")) == str(gid)), None)
     if group is None:
-        return jsonify({"success": False, "error": "NhÃ³m token khÃ´ng tá»“n táº¡i"}), 404
+        return jsonify({"success": False, "error": "Nhóm token không tồn tại"}), 404
     source_id = str(group.get("page_source_token_id") or "").strip()
     if not source_id:
-        return jsonify({"success": False, "error": "NhÃ³m nÃ y chÆ°a binding Page set"}), 400
+        return jsonify({"success": False, "error": "Nhóm này chưa binding Page set"}), 400
     if token_vault.get_token_by_id(source_id) is None:
-        return jsonify({"success": False, "error": "Token nguá»“n khÃ´ng cÃ²n tá»“n táº¡i trong Vault"}), 404
+        return jsonify({"success": False, "error": "Token nguồn không còn tồn tại trong Vault"}), 404
     page_ids = _pages_for_source_token(source_id)
     if not page_ids:
         return jsonify({
             "success": False,
-            "error": "Token nguá»“n chÆ°a cÃ³ Page nÃ o trong cache; hÃ£y Sync Page cho token Ä‘Ã³ trÆ°á»›c",
+            "error": "Token nguồn chưa có Page nào trong cache; hãy Sync Page cho token đó trước",
         }), 409
     group["page_ids"] = page_ids
     group["pages_synced_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1463,7 +1463,7 @@ def api_delete_token_group(gid):
     groups = load_token_groups()
     new_groups = [g for g in groups if g.get("id") != gid]
     save_token_groups(new_groups)
-    return jsonify({"success": True, "message": "ÄÃ£ xÃ³a nhÃ³m token!"})
+    return jsonify({"success": True, "message": "Đã xóa nhóm token!"})
 
 
 @app.route("/api/tokens", methods=["GET"])
@@ -1481,15 +1481,15 @@ def api_add_token():
     note = data.get("note", "").strip()
     page_sync_mode = str(data.get("page_sync_mode") or "each").strip().lower()
     if page_sync_mode not in {"representative", "each", "none"}:
-        return jsonify({"error": "page_sync_mode khÃ´ng há»£p lá»‡"}), 400
+        return jsonify({"error": "page_sync_mode không hợp lệ"}), 400
     
     if not raw_tokens_input:
-        return jsonify({"error": "Thiáº¿u mÃ£ token"}), 400
+        return jsonify({"error": "Thiếu mã token"}), 400
     
     # Check if multiple lines or single
     lines = [l.strip() for l in raw_tokens_input.splitlines() if l.strip()]
     if not lines:
-        return jsonify({"error": "Ná»™i dung token khÃ´ng há»£p lá»‡"}), 400
+        return jsonify({"error": "Nội dung token không hợp lệ"}), 400
 
     # Parse every line up front so a deferred representative retry can reuse its slot.
     entries = []
@@ -1593,9 +1593,9 @@ def api_add_token():
 def api_refresh_token_pages(token_id):
     entry, pages = token_vault.refresh_token_pages(token_id)
     if entry is None:
-        return jsonify({"success": False, "error": "Token khÃ´ng tá»“n táº¡i trong Vault"}), 404
+        return jsonify({"success": False, "error": "Token không tồn tại trong Vault"}), 404
     if entry.get("status") != "ACTIVE":
-        return jsonify({"success": False, "error": entry.get("error_msg") or "Token khÃ´ng há»£p lá»‡"}), 400
+        return jsonify({"success": False, "error": entry.get("error_msg") or "Token không hợp lệ"}), 400
     page_manager.sync_pages_from_token(entry, pages)
     return jsonify({
         "success": True,
@@ -1637,12 +1637,12 @@ def api_save_group():
     folder_binding = data.get("folder_binding") or data.get("folder_path") or str(OUTPUT_DIR)
     schedule_config = data.get("schedule_config")
     if not name:
-        return jsonify({"error": "TÃªn nhÃ³m khÃ´ng Ä‘Æ°á»£c Ä‘á»ƒ trá»‘ng"}), 400
+        return jsonify({"error": "Tên nhóm không được để trống"}), 400
     
     group = page_manager.add_or_update_group(group_id, name, page_ids, folder_binding, schedule_config)
     gid = group.get("id")
 
-    # Äá»“ng bá»™ tÃªn nhÃ³m trá»±c tiáº¿p vÃ o tá»«ng page trong pages.json Ä‘á»ƒ hiá»ƒn thá»‹ tá»©c thÃ¬
+    # Đồng bộ tên nhóm trực tiếp vào từng page trong pages.json để hiển thị tức thì
     try:
         pages = page_manager.list_pages()
         pages_updated = False
@@ -1667,7 +1667,7 @@ def api_save_group():
 def api_delete_group(group_id):
     ok = page_manager.delete_group(group_id)
     if ok:
-        # Gá»¡ nhÃ³m khá»i cÃ¡c page Ä‘ang mang nhÃ³m nÃ y
+        # Gỡ nhóm khỏi các page đang mang nhóm này
         try:
             pages = page_manager.list_pages()
             pages_updated = False
@@ -1675,7 +1675,7 @@ def api_delete_group(group_id):
                 g_ids = p.get("group_ids", [])
                 if group_id in g_ids or p.get("group_id") == group_id:
                     p["group_ids"] = [g for g in g_ids if g != group_id]
-                    p["group_name"] = "ChÆ°a nhÃ³m"
+                    p["group_name"] = "Chưa nhóm"
                     pages_updated = True
             if pages_updated:
                 page_manager.save_pages(pages)
@@ -1697,11 +1697,11 @@ def api_publish_reel():
     stagger_minutes = int(data.get("stagger_minutes", 15)) # Leech gio giua cac page
     
     if not clip_filename:
-        return jsonify({"error": "Thiáº¿u tÃªn file clip"}), 400
+        return jsonify({"error": "Thiếu tên file clip"}), 400
     
     video_path = OUTPUT_DIR / clip_filename
     if not video_path.exists():
-        return jsonify({"error": f"KhÃ´ng tÃ¬m tháº¥y file video: {clip_filename}"}), 404
+        return jsonify({"error": f"Không tìm thấy file video: {clip_filename}"}), 404
 
     pages = page_manager.list_pages()
     groups = page_manager.list_groups()
@@ -1721,7 +1721,7 @@ def api_publish_reel():
                     target_page_ids.append(pid)
 
     if not target_page_ids:
-        return jsonify({"error": "Vui lÃ²ng chá»n Ã­t nháº¥t 1 Fanpage hoáº·c 1 NhÃ³m Page Ä‘á»ƒ Ä‘Äƒng"}), 400
+        return jsonify({"error": "Vui lòng chọn ít nhất 1 Fanpage hoặc 1 Nhóm Page để đăng"}), 400
 
     full_description = f"{title}\n\n{caption}".strip()
     results = []
@@ -1734,7 +1734,7 @@ def api_publish_reel():
     for pid in target_page_ids:
         p_info = next((p for p in pages if str(p.get("page_id")) == str(pid)), None)
         if not p_info:
-            results.append({"page_id": pid, "success": False, "error": "KhÃ´ng tÃ¬m tháº¥y thÃ´ng tin Page"})
+            results.append({"page_id": pid, "success": False, "error": "Không tìm thấy thông tin Page"})
             continue
         target_pages.append(p_info)
 
@@ -1743,7 +1743,7 @@ def api_publish_reel():
     if schedule_time:
         preflight = preflight_pages(target_pages, token_vault, page_manager)
         if not preflight.get("ok"):
-            return jsonify({"success": False, "error": "Preflight quyá»n Ä‘Äƒng bÃ i tháº¥t báº¡i", **preflight["blocked"]}), 400
+            return jsonify({"success": False, "error": 'Preflight quyền đăng bài thất bại', **preflight["blocked"]}), 400
         for ready in preflight["ready"]:
             page_record = next((p for p in target_pages if str(p.get("page_id")) == ready["page_id"]), None)
             if page_record is None:
@@ -1801,7 +1801,7 @@ def api_publish_reel():
                     "page_id": pid,
                     "page_name": p_info.get("page_name"),
                     "success": False,
-                    "error": "Page chÆ°a Ä‘Æ°á»£c xÃ¡c minh quyá»n Ä‘Äƒng bÃ i cho lá»‹ch nÃ y",
+                    "error": "Page chưa được xác minh quyền đăng bài cho lịch này",
                     "reconnect_required": True,
                 })
                 continue
@@ -1816,7 +1816,7 @@ def api_publish_reel():
                     "page_id": pid,
                     "page_name": p_info.get("page_name"),
                     "success": False,
-                    "error": "Video nÃ y Ä‘Ã£ cÃ³ trong hÃ ng Ä‘á»£i hoáº·c Ä‘Ã£ Ä‘Äƒng cho Page",
+                    "error": "Video này đã có trong hàng đợi hoặc đã đăng cho Page",
                     "duplicate_post_id": duplicate.get("id"),
                 })
                 continue
@@ -1872,7 +1872,7 @@ def api_publish_reel():
             continue
 
         if not p_token:
-            results.append({"page_id": pid, "page_name": p_info.get("page_name"), "success": False, "error": "ChÆ°a cÃ³ Token há»£p lá»‡"})
+            results.append({"page_id": pid, "page_name": p_info.get("page_name"), "success": False, "error": "Chưa có Token hợp lệ"})
             continue
 
         res = reel_poster.publish_reel(
@@ -2019,16 +2019,16 @@ def api_save_website_config():
         cfg["video_upload"] = current_video
 
     save_website_config(cfg)
-    return jsonify({"success": True, "message": "ÄÃ£ lÆ°u cáº¥u hÃ¬nh website thÃ nh cÃ´ng"})
+    return jsonify({"success": True, "message": "Đã lưu cấu hình website thành công"})
 
 @app.route("/api/website-config/test", methods=["POST"])
 def api_test_website_config():
     cfg = load_website_config()
     base_url = cfg.get("base_url", "").strip()
     if not base_url:
-        return jsonify({"success": False, "error": "ChÆ°a nháº­p Website URL"}), 400
+        return jsonify({"success": False, "error": "Chưa nhập Website URL"}), 400
     if not HAS_WEBSITE_SVC:
-        return jsonify({"success": False, "error": "Báº£n cÃ i thiáº¿u WebsiteArticleService"}), 500
+        return jsonify({"success": False, "error": "Bản cài thiếu WebsiteArticleService"}), 500
     try:
         result = WebsiteArticleService(WEBSITE_CFG_FILE).test_connection()
         return jsonify(result)
@@ -2038,7 +2038,7 @@ def api_test_website_config():
 @app.route("/api/website-config/test-video", methods=["POST"])
 def api_test_video_uploader():
     if not HAS_WEBSITE_SVC:
-        return jsonify({"success": False, "error": "Báº£n cÃ i thiáº¿u WebsiteArticleService"}), 500
+        return jsonify({"success": False, "error": "Bản cài thiếu WebsiteArticleService"}), 500
     try:
         return jsonify(WebsiteArticleService(WEBSITE_CFG_FILE).test_video_uploader())
     except Exception as e:
@@ -2064,10 +2064,10 @@ def api_clear_posts():
         return jsonify({
             "success": True, 
             "removed_count": removed_count,
-            "message": f"ÄÃ£ há»§y vÃ  xÃ³a {removed_count} bÃ i Ä‘Äƒng thÃ nh cÃ´ng!"
+            "message": f"Đã hủy và xóa {removed_count} bài đăng thành công!"
         })
     except Exception as e:
-        return jsonify({"success": False, "error": str(e), "message": f"Lá»—i: {str(e)}"}), 500
+        return jsonify({"success": False, "error": str(e), "message": f"Lỗi: {str(e)}"}), 500
 
 @app.route("/api/scheduler/status", methods=["GET"])
 def api_scheduler_status():
@@ -2160,9 +2160,9 @@ def api_get_posts():
         facebook_id = post.get("post_fb_id") or post.get("reel_id")
         if facebook_id and not post.get("fb_url"):
             post["fb_url"] = f"https://www.facebook.com/reel/{facebook_id}"
-    # Sáº¯p xáº¿p bÃ i má»›i lÃªn lá»‹ch / má»›i Ä‘Äƒng lÃªn Ä‘áº§u danh sÃ¡ch (Newest First)
+    # Sắp xếp bài mới lên lịch / mới đăng lên đầu danh sách (Newest First)
     def _sort_key(p):
-        # Æ¯u tiÃªn sáº¯p xáº¿p theo thá»i Ä‘iá»ƒm táº¡o bÃ i hoáº·c lÃªn lá»‹ch
+        # Ưu tiên sắp xếp theo thời điểm tạo bài hoặc lên lịch
         c_at = p.get("created_at", "")
         s_at = p.get("scheduled_time", "")
         p_id = p.get("id", "")
@@ -2221,7 +2221,7 @@ def api_retry_post_website(post_id):
     posts = load_posts()
     post = next((item for item in posts if item.get("id") == post_id), None)
     if not post:
-        return jsonify({"success": False, "error": "KhÃ´ng tÃ¬m tháº¥y bÃ i Ä‘Ã£ lÃªn lá»‹ch"}), 404
+        return jsonify({"success": False, "error": "Không tìm thấy bài đã lên lịch"}), 404
     if post.get("article_url") and post.get("website_status") == "ready":
         return jsonify({"success": True, "post": post, "already_ready": True})
 
@@ -2256,16 +2256,16 @@ def api_distribute_batch():
     configured_website_url = str(data.get("article_url") or data.get("website_url") or "").strip()
 
     if not group_id:
-        return jsonify({"error": "Thiáº¿u group_id"}), 400
+        return jsonify({"error": "Thiếu group_id"}), 400
 
     groups = page_manager.list_groups()
     group = next((g for g in groups if g.get("id") == group_id), None)
     if not group:
-        return jsonify({"error": "KhÃ´ng tÃ¬m tháº¥y NhÃ³m Fanpage"}), 404
+        return jsonify({"error": "Không tìm thấy Nhóm Fanpage"}), 404
 
     page_ids = group.get("page_ids", [])
     if not page_ids:
-        return jsonify({"error": "NhÃ³m chÆ°a cÃ³ Fanpage nÃ o Ä‘Æ°á»£c thÃªm"}), 400
+        return jsonify({"error": "Nhóm chưa có Fanpage nào được thêm"}), 400
 
     pages = page_manager.list_pages()
     page_map = {p["page_id"]: p for p in pages}
@@ -2279,7 +2279,7 @@ def api_distribute_batch():
         page_manager,
     )
     if not preflight.get("ok"):
-        return jsonify({"success": False, "error": "Preflight quyá»n Ä‘Äƒng bÃ i tháº¥t báº¡i", **preflight["blocked"]}), 400
+        return jsonify({"success": False, "error": 'Preflight quyền đăng bài thất bại', **preflight["blocked"]}), 400
 
     resolved_page_tokens = {ready["page_id"]: ready["token"] for ready in preflight["ready"]}
     verified_token_ids = {ready["page_id"]: ready["token_id"] for ready in preflight["ready"]}
@@ -2867,13 +2867,6 @@ def api_publish_website_article():
     })
 
 
-if __name__ == "__main__":
-    import waitress
-    bind_host = os.environ.get("HIGHLIGHT_BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
-    print(f"Highlight Video Studio starting on http://{bind_host}:5080 with Waitress (threads=8)...")
-    waitress.serve(app, host=bind_host, port=5080, threads=8, channel_timeout=30)
-
-
 from src.content_packages import (list_packages, get_package, process_content_packages_once,
                                  generate_package, fallback_package, circuit_status,
                                  start_content_package_worker, enqueue_content_package, sanitize_error)
@@ -2890,6 +2883,7 @@ def api_content_studio_queue():
         "queued": sum(1 for i in items if i.get("status") == "queued"),
         "ready": sum(1 for i in items if i.get("status") == "ready"),
         "failed": sum(1 for i in items if i.get("status") == "failed"),
+        "retryable": sum(1 for i in items if i.get("status") == "retryable"),
         "items": items,
         "circuit": circuit_status(),
     })
@@ -2939,6 +2933,37 @@ def api_content_studio_enqueue():
     start_content_package_worker()
     return jsonify({"success": True, "item": item})
 
+@app.route("/api/content-studio/batch", methods=["POST"])
+def api_content_studio_batch():
+    payload = request.json or {}
+    folder = str(payload.get("folder") or payload.get("directory") or "").strip()
+    if not folder:
+        return jsonify({"success": False, "error": "Vui lòng nhập đường dẫn thư mục clip."}), 400
+    folder_path = Path(folder).expanduser()
+    if not folder_path.is_dir():
+        return jsonify({"success": False, "error": f"Không tìm thấy thư mục: {folder}"}), 404
+    extensions = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
+    clips = sorted((p for p in folder_path.iterdir() if p.is_file() and p.suffix.lower() in extensions), key=lambda p: p.name.lower())
+    if not clips:
+        return jsonify({"success": False, "error": "Thư mục không có file video hỗ trợ."}), 400
+    mode = str(payload.get("mode") or "auto")
+    if mode not in ("auto", "llm", "no_llm"):
+        return jsonify({"success": False, "error": "mode phải là auto, llm hoặc no_llm"}), 400
+    created = []
+    for clip_path in clips:
+        title = clip_path.stem.replace("_", " ").strip()
+        try:
+            meta = get_clip_metadata(str(clip_path)) or {}
+            title = str(meta.get("video_title") or meta.get("clean_title") or title).strip()
+        except Exception:
+            pass
+        created.append(enqueue_content_package(
+            clip_filename=str(clip_path), title=title, mode=mode,
+            create_website_article=bool(payload.get("create_website_article")),
+        ))
+    start_content_package_worker()
+    return jsonify({"success": True, "folder": str(folder_path), "count": len(created), "items": created})
+
 @app.route("/api/content-studio/retry", methods=["POST"])
 def api_content_studio_retry():
     payload = request.json or {}
@@ -2971,3 +2996,10 @@ def api_content_studio_fallback():
 @app.route("/api/content-studio/process", methods=["POST"])
 def api_content_studio_process():
     return jsonify({"success": True, **(process_content_packages_once() or {})})
+
+
+if __name__ == "__main__":
+    import waitress
+    bind_host = os.environ.get("HIGHLIGHT_BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    print(f"Highlight Video Studio starting on http://{bind_host}:5080 with Waitress (threads=8)...")
+    waitress.serve(app, host=bind_host, port=5080, threads=8, channel_timeout=30)

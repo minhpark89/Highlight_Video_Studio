@@ -114,7 +114,7 @@ def _llm_package(title, summary, video_url=""):
     from src.content_builder import get_llm_candidates, _get_task_model
 
     cfg = get_llm_candidates()
-    endpoint = str(cfg.get("configured_base") or "").rstrip("/")
+    endpoint = str(cfg.get("configured_base") or ((cfg.get("endpoints") or [""])[0]) or "").rstrip("/")
     model = _get_task_model("content_package") or cfg.get("model")
     if not endpoint or not model:
         raise RuntimeError("LLM content package is not configured")
@@ -180,7 +180,7 @@ def enqueue_content_package(*, clip_filename, title, summary="", video_url="", m
         items = _read(QUEUE_FILE, [])
         item = {
             "id": f"content_{int(time.time())}_{uuid.uuid4().hex[:8]}",
-            "clip_filename": Path(str(clip_filename or "")).name,
+            "clip_filename": str(clip_filename or "").strip(),
             "title": str(title or ""),
             "summary": str(summary or ""),
             "video_url": str(video_url or ""),
@@ -268,7 +268,7 @@ def _apply_to_posts(item):
 def process_content_packages_once():
     with _LOCK:
         items = _read(QUEUE_FILE, [])
-        item = next((entry for entry in items if entry.get("status") == "queued"), None)
+        item = next((entry for entry in items if entry.get("status") == "queued" or (entry.get("status") == "retryable" and not circuit_status().get("open"))), None)
         if not item:
             return {"processed": 0, "items": items}
         item["status"] = "running"
@@ -281,10 +281,12 @@ def process_content_packages_once():
         item["article_url"] = article_url
         item["website_status"] = website_status
         item["website_error"] = website_error
-        item.update({"status": "ready", "result": result, "error": "", "completed_at": _now()})
-        _apply_to_posts(item)
+        retryable = str(result.get("source") or "").startswith("no_llm_quota_fallback")
+        item.update({"status": "retryable" if retryable else "ready", "result": result, "error": "" if not retryable else "LLM quota exhausted; sẽ tự retry khi quota khả dụng.", "completed_at": _now()})
+        if not retryable:
+            _apply_to_posts(item)
     except Exception as exc:
-        item.update({"status": "failed", "error": sanitize_error(exc), "completed_at": _now()})
+        item.update({"status": "retryable" if isinstance(exc, QuotaError) else "failed", "error": sanitize_error(exc), "completed_at": _now()})
     with _LOCK:
         latest = _read(QUEUE_FILE, [])
         for index, existing in enumerate(latest):

@@ -16,13 +16,13 @@ _SECRET_PATTERNS = (
 )
 
 _ACTIONS = {
-    "missing_page": "Sync lại danh sách Page từ đúng credential trước khi lên lịch.",
-    "missing_mapping": "Page chưa có mapping được Meta xác minh; hãy Sync Page từ credential quản lý Page này.",
-    "missing_credential": "Credential nguồn không còn trong Token Vault; hãy thêm lại và Sync Page.",
-    "stale_credential": "Credential nguồn không còn hoạt động; hãy kết nối lại và Sync Page.",
-    "stale_mapping": "Mapping Page-token đã cũ sau khi credential thay đổi; hãy Refresh Pages.",
-    "cross_bound_mapping": "Token được chọn không thuộc Page này; hãy chọn mapping đã được Sync cho đúng page_id.",
-    "publish_capability_missing": "Credential không có quyền tạo nội dung cho Page; hãy cấp lại quyền Meta rồi Refresh Pages.",
+    'missing_page': 'Sync lại danh sách Page từ credential trước khi lên lịch.',
+    'missing_mapping': 'Page chưa có mapping được Meta xác minh; hãy Sync Page từ credential quản lý Page này.',
+    'missing_credential': 'Credential nguồn không còn trong Token Vault; hãy thêm lại và Sync Page.',
+    'stale_credential': 'Credential nguồn không còn hoạt động; hãy kết nối lại và Sync Page.',
+    'stale_mapping': 'Mapping Page-token đã cũ sau khi credential thay đổi; hãy Refresh Pages.',
+    'cross_bound_mapping': 'Token được chọn không thuộc Page này; hãy chọn mapping đã được Sync cho đúng page_id.',
+    'publish_capability_missing': 'Credential không có quyền tạo nội dung cho Page; hãy cấp lại quyền Meta rồi Refresh Pages.',
 }
 
 
@@ -37,7 +37,7 @@ def sanitize_text(value, limit=400):
 
 
 def mapping_error(page_id, page_name, code, *, stage="mapping", token_id="", detail=""):
-    action = _ACTIONS.get(code, "Refresh credential và Sync lại Page trước khi lên lịch.")
+    action = _ACTIONS.get(code, 'Refresh credential và Sync lại Page trước khi lên lịch.')
     return {
         "ok": False,
         "page_id": str(page_id or ""),

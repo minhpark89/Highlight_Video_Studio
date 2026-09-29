@@ -404,6 +404,12 @@
       font-size: 12px;
       border-radius: 6px;
     }
+
+    /* Content Studio actions must remain readable on narrow cards/table cells. */
+    .content-studio-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .content-studio-actions .btn { white-space: nowrap; min-width: max-content; }
+    #pane-content-studio .form-control { min-width: 0; }
+    #pane-content-studio .table td:last-child { white-space: nowrap; }
     /* Grid layout */
     .row {
       display: flex;
@@ -1782,6 +1788,11 @@
               <div style="font-weight: 800; margin-bottom: 12px;"><i class="bi bi-sliders2"></i> Tạo cho clip đã chọn</div>
               <label class="form-label">Tên file clip (trong thư mục output)</label>
               <input id="cs-clip-filename" class="form-control" placeholder="clip_001.mp4" style="margin-bottom: 10px;">
+              <label class="form-label">Folder batch (optional)</label>
+              <div class="content-studio-actions" style="margin-bottom: 10px;">
+                <input id="cs-folder" class="form-control" placeholder="D:\Highlight_Video_Studio\output" style="flex: 1 1 260px;">
+                <button class="btn btn-secondary" type="button" onclick="batchContentPackages()"><i class="bi bi-folder2-open"></i> Batch folder</button>
+              </div>
               <label class="form-label">Tiêu đề (tuỳ chọn)</label>
               <input id="cs-title" class="form-control" placeholder="Để trống sẽ lấy metadata clip" style="margin-bottom: 10px;">
               <label class="form-label">Chế độ</label>
@@ -5933,6 +5944,23 @@
       msg.style.color = '#f87171';
       msg.textContent = 'Lỗi: ' + e.message;
     }
+  };
+
+  window.batchContentPackages = async function() {
+    const msg = document.getElementById('cs-generate-msg');
+    const folder = document.getElementById('cs-folder').value.trim();
+    if (!folder) { msg.style.color = '#f87171'; msg.textContent = 'Vui lòng nhập đường dẫn thư mục.'; return; }
+    try {
+      const res = await fetch('/api/content-studio/batch', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: folder, mode: document.getElementById('cs-mode').value })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Batch thất bại');
+      msg.style.color = '#4ade80';
+      msg.textContent = `Đã đưa ${data.count} clip vào hàng đợi.`;
+      window.loadContentStudioQueue();
+    } catch (e) { msg.style.color = '#f87171'; msg.textContent = 'Lỗi: ' + e.message; }
   };
 
   window.csRetryComponent = async function(packageId, component) {

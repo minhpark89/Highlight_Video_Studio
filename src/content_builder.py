@@ -5,13 +5,15 @@ import time
 import requests
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageOps
+from multi_pc.data_root import canonical_data_root
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = canonical_data_root()
 TEMP_DIR = BASE_DIR / "temp"
 OUTPUT_DIR = BASE_DIR / "output"
+CONFIG_FILE = BASE_DIR / "config.json"
 
 def get_llm_candidates():
-    cfg_file = BASE_DIR / "config.json"
+    cfg_file = CONFIG_FILE
     cfg = {}
     if cfg_file.exists():
         try:
@@ -75,7 +77,7 @@ def test_and_pick_active_llm(model_override: str = ""):
 def _get_task_model(task: str) -> str:
     """Resolve a task model from config.json, falling back to the main model."""
     try:
-        cfg = json.loads((BASE_DIR / "config.json").read_text(encoding="utf-8"))
+        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         llm_cfg = cfg.get("llm") if isinstance(cfg.get("llm"), dict) else {}
         task_models = llm_cfg.get("task_models") if isinstance(llm_cfg.get("task_models"), dict) else {}
         return str(task_models.get(task) or llm_cfg.get("model") or "").strip()
