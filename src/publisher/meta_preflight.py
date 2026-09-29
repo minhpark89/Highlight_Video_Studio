@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import re
 
-PUBLISH_TASKS = {"CREATE_CONTENT", "PROFILE_PLUS_CREATE_CONTENT", "MANAGE"}
+# Meta has returned the canonical task above as well as product-surface aliases
+# for Pages managed through the newer Page experience. These all grant content
+# creation; read-only tasks (ANALYZE, ADVERTISE, MESSAGING, MODERATE) do not.
+PUBLISH_TASKS = {"CREATE_CONTENT", "PROFILE_PLUS_CREATE_CONTENT", "MANAGE", "PROFILE_PLUS_MANAGE"}
 
 _SECRET_PATTERNS = (
     re.compile(r"(access_token|page_token|token|api_key|secret|password|authorization)[=:\s]+[^\s&\"',]+", re.I),

@@ -5710,6 +5710,11 @@
         const safeTokenName = escapeHtml(p.token_name || 'System User');
         const safeComment = escapeHtml(p.first_comment || '');
         const safeArticleUrl = /^https?:\/\//i.test(p.article_url || '') ? escapeHtml(p.article_url) : '';
+        const embedLabel = p.website_embed_status === 'ready'
+          ? '<div style="color:#10b981;margin-top:4px;"><i class="bi bi-film"></i> Video nhúng: đã có</div>'
+          : (p.website_embed_status === 'pending_generation'
+            ? '<div style="color:#f59e0b;margin-top:4px;"><i class="bi bi-hourglass-split"></i> Video nhúng: đang xử lý</div>'
+            : '<div style="color:#64748b;margin-top:4px;"><i class="bi bi-film"></i> Video nhúng: chưa xác nhận</div>');
         const safeFacebookUrl = /^https?:\/\//i.test(p.fb_url || '') ? escapeHtml(p.fb_url) : '';
         const safeLocalVideoUrl = p.local_video_available ? escapeHtml(p.local_video_url || '') : '';
         const safeLocalDownloadUrl = p.local_video_available ? escapeHtml(p.local_download_url || '') : '';
@@ -5786,6 +5791,7 @@
                 <i class="bi bi-chat-quote-fill" style="color: #06b6d4;"></i> ${commentSnippet}
               </div>
               ${articleLink}
+              ${embedLabel}
             </td>
             <td style="padding: 12px 14px;">${statusBadge}</td>
             <td style="padding: 12px 14px; font-size: 12px; color: #e2e8f0; font-family: monospace;">

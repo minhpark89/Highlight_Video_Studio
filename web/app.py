@@ -1855,6 +1855,7 @@ def api_publish_reel():
                     mode="auto",
                     post_ids=[post_entry["id"]],
                     article_url=post_entry.get("article_url", ""),
+                    video_url=str(post_entry.get("video_url") or post_entry.get("youtube_url") or ""),
                     create_website_article=not post_entry.get("article_url"),
                 )
                 post_entry["content_package_id"] = package["id"]
@@ -1869,6 +1870,7 @@ def api_publish_reel():
                 "scheduled_publish_time": curr_sched,
                 "article_url": post_entry["article_url"],
                 "website_status": post_entry["website_status"],
+                "website_embed_status": "pending_generation" if post_entry.get("auto_first_comment") else "unknown",
                 "website_error": post_entry["website_error"],
                 "content_package_id": post_entry.get("content_package_id"),
             })
@@ -2163,6 +2165,13 @@ def api_get_posts():
             post["local_video_url"] = f"/api/clips/play/{media_file}"
             post["local_download_url"] = f"/api/clips/play/{media_file}?download=1"
             post["local_video_available"] = (OUTPUT_DIR / Path(media_file).name).is_file()
+        post["article_url"] = str(post.get("article_url") or post.get("website_url") or "").strip()
+        package = post.get("content_package") if isinstance(post.get("content_package"), dict) else {}
+        item_embed = post.get("embed_status") or package.get("embed_status") or ""
+        youtube_id = post.get("youtube_id") or package.get("youtube_id") or ""
+        video_url = post.get("video_url") or package.get("video_url") or ""
+        post["website_embed_status"] = item_embed or ("ready" if (youtube_id or video_url) else ("pending_generation" if post.get("website_status") in ("pending_generation", "generating") else "unknown"))
+        post["youtube_id"] = youtube_id
         facebook_id = post.get("post_fb_id") or post.get("reel_id")
         if facebook_id and not post.get("fb_url"):
             post["fb_url"] = f"https://www.facebook.com/reel/{facebook_id}"
@@ -2416,6 +2425,7 @@ def api_distribute_batch():
                 mode="auto",
                 post_ids=[post_entry["id"]],
                 article_url=post_entry.get("article_url", ""),
+                video_url=str(post_entry.get("video_url") or post_entry.get("youtube_url") or ""),
                 create_website_article=bool(auto_first_comment) and not post_entry.get("article_url"),
             )
             post_entry["content_package_id"] = package["id"]

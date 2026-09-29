@@ -7,6 +7,25 @@ from unittest import mock
 
 
 class SchedulingPublishFlowTests(unittest.TestCase):
+    def test_meta_page_task_aliases_accept_publish_capability_but_readonly_tasks_fail(self):
+        from src.publisher.meta_preflight import resolve_page_token
+
+        class Vault:
+            def __init__(self, entry): self.entry = entry
+            def get_token_by_id(self, _token_id): return self.entry
+
+        class Manager:
+            def __init__(self, tasks): self.tasks = tasks
+            def resolve_verified_mapping(self, page_id, _entry):
+                return ({"token_id": "tok_verified", "page_token": "page-token", "tasks": self.tasks}, None)
+
+        page = {"page_id": "page-1", "page_name": "Page One", "token_id": "tok_verified"}
+        credential = {"id": "tok_verified", "name": "Test", "token": "cred", "status": "ACTIVE"}
+        self.assertTrue(resolve_page_token(page, Vault(credential), Manager(["PROFILE_PLUS_MANAGE"]))["ok"])
+        blocked = resolve_page_token(page, Vault(credential), Manager(["ANALYZE", "ADVERTISE"]))
+        self.assertFalse(blocked["ok"])
+        self.assertEqual(blocked["code"], "publish_capability_missing")
+
     @staticmethod
     def _verified_page(page_id="page-1", page_name="Page One", token_id="tok_verified", page_token="page-token-verified"):
         """Build a Page record whose token binding is discovery-backed.

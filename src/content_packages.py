@@ -189,6 +189,8 @@ def enqueue_content_package(*, clip_filename, title, summary="", video_url="", m
             "components": components or ["hero_title", "article_html", "first_comment", "caption"],
             "post_ids": list(post_ids or []),
             "article_url": str(article_url or ""),
+            "embed_status": "ready" if str(video_url or "").strip() else "pending_generation",
+            "video_url": str(video_url or ""),
             "create_website_article": bool(create_website_article),
             "status": "queued",
             "attempts": 0,
@@ -258,6 +260,9 @@ def _apply_to_posts(item):
             post["title"] = result["hero_title"]
         if item.get("article_url"):
             post["article_url"] = item["article_url"]
+        post["website_embed_status"] = item.get("embed_status") or "unknown"
+        post["youtube_id"] = item.get("youtube_id") or ""
+        post["video_url"] = item.get("video_url") or ""
         post["website_status"] = item.get("website_status", post.get("website_status"))
         post["website_error"] = item.get("website_error", "")
         if result.get("first_comment") and not post.get("first_comment"):

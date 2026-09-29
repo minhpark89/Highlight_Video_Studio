@@ -1,6 +1,6 @@
 param(
     [string]$Version = "1.0.19",
-    [string]$PreviewRevision = "preview.10",
+    [string]$PreviewRevision = "preview.15",
     [string]$BuildChannel = "desktop-test",
     [switch]$SkipTests,
     [string]$ToolSource = "D:\Highlight_Video_Studio\bin",
@@ -29,7 +29,7 @@ if (-not $SkipTests) {
             @("tests/test_multi_pc_hardware.py", "tests/test_multi_pc_local_mvp.py", "tests/test_multi_pc_phase1.py"),
             @("tests/test_release_guards.py"),
             @("tests/test_page_token_sync.py"),
-            @("tests/test_youtube_embed_publish.py")
+            @("tests/test_youtube_embed_publish.py", "tests/test_scheduling_publish_flow.py")
         )
         foreach ($group in $testGroups) {
             & python -m pytest @group -q --no-header
