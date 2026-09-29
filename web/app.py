@@ -82,6 +82,7 @@ from src.publisher.meta_preflight import (
     preflight_pages,
     resolve_page_token,
 )
+from src.llm_response import chat_text_from_response
 
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -1231,10 +1232,7 @@ def api_llm_test():
                 "error": f"Model có trong danh sách nhưng gọi chat thất bại (HTTP {response.status_code}): {detail}",
                 "latency_ms": latency_ms,
             }), 502
-        choices = payload.get("choices") or []
-        content = ""
-        if choices and isinstance(choices[0], dict):
-            content = str((choices[0].get("message") or {}).get("content") or choices[0].get("text") or "").strip()
+        content = chat_text_from_response(response)
         if not content:
             return jsonify({"success": False, "error": "Provider trả HTTP 200 nhưng không có nội dung chat"}), 502
         return jsonify({
@@ -2268,13 +2266,29 @@ def api_distribute_batch():
         return jsonify({"error": "Nhóm chưa có Fanpage nào được thêm"}), 400
 
     pages = page_manager.list_pages()
-    page_map = {p["page_id"]: p for p in pages}
+    # Group records created by older builds can store numeric IDs while the
+    # synced page registry stores strings. Normalize before preflight; silently
+    # dropping a missing page would otherwise produce a misleading schedule.
+    page_ids = [str(pid).strip() for pid in page_ids if str(pid).strip()]
+    page_map = {str(p.get("page_id")): p for p in pages if p.get("page_id")}
+    missing_page_ids = [pid for pid in page_ids if pid not in page_map]
+    if missing_page_ids:
+        return jsonify({
+            "success": False,
+            "error": "Preflight quy?n dang b?i th?t b?i",
+            "ok": False,
+            "page_id": missing_page_ids[0],
+            "code": "missing_page",
+            "stage": "mapping",
+            "action": "Sync l?i danh s?ch Page t? credential tr??c khi l?n l?ch.",
+            "reconnect_required": True,
+        }), 400
     posts = load_posts()
 
     # Verify exact page/token binding and publish capability before accepting any
     # schedule; a stale or cross-bound credential must never reach the queue.
     preflight = preflight_pages(
-        [page_map.get(pid) for pid in page_ids if page_map.get(pid)],
+        [page_map[pid] for pid in page_ids],
         token_vault,
         page_manager,
     )

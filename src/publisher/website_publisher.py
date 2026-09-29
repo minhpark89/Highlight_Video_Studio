@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 import requests
 from multi_pc.data_root import canonical_data_root
+from src.llm_response import chat_text_from_response, json_from_chat_response
 
 logger = logging.getLogger("website_publisher")
 
@@ -653,10 +654,9 @@ Output strictly valid JSON only:
         }
         resp = requests.post(url, headers=headers, json=payload, timeout=60)
         if resp.status_code == 200:
-            c = resp.json()["choices"][0]["message"]["content"].strip()
-            c = re.sub(r"^```json\s*", "", c)
-            c = re.sub(r"\s*```$", "", c)
-            d = json.loads(c, strict=False)
+            d = json_from_chat_response(resp)
+            if not isinstance(d, dict):
+                raise ValueError("LLM article response is not an object")
             seo_title = d.get("seo_title") or seo_title
             lead = d.get("lead_paragraph") or lead
             s1_title = d.get("section_1_title") or s1_title
@@ -769,8 +769,9 @@ Rules:
         }
         resp = requests.post(url, headers=headers, json=payload, timeout=45)
         if resp.status_code == 200:
-            res_json = resp.json()
-            comment = res_json["choices"][0]["message"]["content"].strip()
+            comment = chat_text_from_response(resp).strip()
+            if not comment:
+                raise ValueError("LLM comment response is empty")
             if comment.startswith('"') and comment.endswith('"'):
                 comment = comment[1:-1].strip()
             if article_url not in comment:

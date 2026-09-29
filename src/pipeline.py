@@ -11,6 +11,7 @@ from contextlib import contextmanager
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
 from pathlib import Path
 import requests
+from src.llm_response import json_from_chat_response
 
 # Expose CUDA/cuDNN DLLs to Python for faster-whisper on Windows
 if os.name == "nt":
@@ -597,14 +598,7 @@ DÆ°á»›i Ä‘Ã¢y lÃ  transcript cÃ³ timestamp:
     try:
         resp = requests.post(f"{LLM_BASE}/chat/completions", json=payload, headers=headers, timeout=120)
         resp.raise_for_status()
-        res_data = resp.json()
-        content = res_data["choices"][0]["message"]["content"]
-        
-        json_match = re.search(r'\[.*\]', content, re.DOTALL)
-        if json_match:
-            clips = json.loads(json_match.group(0))
-        else:
-            clips = json.loads(content)
+        clips = json_from_chat_response(resp)
 
         # Chuáº©n hÃ³a format keys Ä‘á»ƒ tÆ°Æ¡ng thÃ­ch cáº£ app.py vÃ  pipeline
         normalized_clips = []

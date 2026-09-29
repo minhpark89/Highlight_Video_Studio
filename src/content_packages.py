@@ -13,6 +13,7 @@ from pathlib import Path
 import requests
 
 from multi_pc.data_root import ProcessLease, canonical_data_root
+from src.llm_response import json_from_chat_response
 
 DATA_ROOT = canonical_data_root()
 QUEUE_FILE = DATA_ROOT / "data" / "content_packages.json"
@@ -135,9 +136,9 @@ def _llm_package(title, summary, video_url=""):
     if response.status_code in QUOTA_CODES:
         raise QuotaError(f"LLM quota HTTP {response.status_code}")
     response.raise_for_status()
-    text = response.json()["choices"][0]["message"]["content"]
-    match = re.search(r"\{[\s\S]*\}", text)
-    data = json.loads(match.group(0) if match else text)
+    data = json_from_chat_response(response)
+    if not isinstance(data, dict):
+        raise RuntimeError("LLM returned a non-object content package")
     required = ("hero_title", "article_html", "first_comment", "caption")
     if not all(str(data.get(key) or "").strip() for key in required):
         raise RuntimeError("LLM returned an incomplete content package")

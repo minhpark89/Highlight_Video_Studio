@@ -6,6 +6,7 @@ import requests
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageOps
 from multi_pc.data_root import canonical_data_root
+from src.llm_response import json_from_chat_response
 
 BASE_DIR = canonical_data_root()
 TEMP_DIR = BASE_DIR / "temp"
@@ -135,12 +136,7 @@ Thông tin video:
     try:
         r = requests.post(f"{llm['api_base']}/chat/completions", json=payload, headers=headers, timeout=30)
         if r.status_code == 200:
-            res_json = r.json()
-            txt = res_json["choices"][0]["message"]["content"]
-            m = re.search(r'\{[\s\S]*\}', txt)
-            if m:
-                return json.loads(m.group(0))
-            return json.loads(txt)
+            return json_from_chat_response(r)
     except Exception as e:
         print(f"[Content Generator Error]: {e}")
 
