@@ -49,7 +49,25 @@ NODE_BIN = str(BIN_DIR / "node.exe") if (BIN_DIR / "node.exe").exists() else Non
 COOKIES_FILE = CONFIG_DIR / "cookies.txt"
 LOCAL_WHISPER_MODEL = BASE_DIR / "models" / "faster-whisper-small"
 ENCODER_CODECS = {"nvenc": "h264_nvenc", "qsv": "h264_qsv", "amf": "h264_amf", "cpu": "libx264"}
-RENDER_CONCURRENCY = max(1, int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT_RENDERS", "1")))
+
+def _load_render_profile():
+    profile_path = BASE_DIR / "data" / "hardware_profile.json"
+    try:
+        payload = json.loads(profile_path.read_text(encoding="utf-8"))
+        profile = payload.get("profile") if isinstance(payload, dict) else {}
+        return profile if isinstance(profile, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+_RENDER_PROFILE = _load_render_profile()
+_PROFILE_ENCODER = str(_RENDER_PROFILE.get("encoder") or "").lower()
+_PROFILE_CONCURRENCY = int(_RENDER_PROFILE.get("max_concurrent_renders") or _RENDER_PROFILE.get("concurrency") or 1)
+try:
+    _PROFILE_CONCURRENCY = max(1, min(4, _PROFILE_CONCURRENCY))
+except (TypeError, ValueError):
+    _PROFILE_CONCURRENCY = 1
+RENDER_CONCURRENCY = max(1, int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT_RENDERS", str(_PROFILE_CONCURRENCY))))
 RENDER_SEMAPHORE = threading.BoundedSemaphore(RENDER_CONCURRENCY)
 
 
@@ -728,7 +746,8 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
         ass_str = str(ass_path).replace("\\", "/").replace(":", "\\:")
         vf = f"{vf},subtitles='{ass_str}'"
     configured = str(pipeline_cfg.get("encoder") or "auto").lower()
-    encoder = configured if configured in ENCODER_CODECS and configured != "auto" else os.environ.get("HIGHLIGHT_ENCODER", "cpu").lower()
+    env_encoder = os.environ.get("HIGHLIGHT_ENCODER", "").lower()
+    encoder = configured if configured in ENCODER_CODECS and configured != "auto" else (env_encoder or _PROFILE_ENCODER or "cpu")
     if encoder not in ENCODER_CODECS:
         encoder = "cpu"
     codec = ENCODER_CODECS[encoder]

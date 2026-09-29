@@ -367,17 +367,26 @@ def run_job_pipeline(job):
                     "duration": round(h["end"] - h["start"], 1)
                 })
 
+        now = datetime.now().isoformat(timespec="seconds")
         update_job_status(job_id, {
             "status": "completed",
             "step": 5,
             "progress_msg": f"Hoàn tất! Đã xuất {len(rendered_clips)} clips highlight chất lượng cao.",
-            "clips": rendered_clips
+            "clips": rendered_clips,
+            "heartbeat_at": now,
+            "updated_at": now,
+            "finished_at": now,
         })
 
     except Exception as e:
+        now = datetime.now().isoformat(timespec="seconds")
         update_job_status(job_id, {
             "status": "error",
-            "progress_msg": f"Lỗi xử lý: {str(e)}"
+            "progress_msg": f"Lỗi xử lý: {str(e)}",
+            "error": str(e),
+            "heartbeat_at": now,
+            "updated_at": now,
+            "finished_at": now,
         })
 
 
@@ -385,7 +394,18 @@ def run_job_pipeline(job):
 # BACKGROUND QUEUE MANAGER FOR BATCH RENDERING
 # ==========================================
 # The startup profiler writes this value before this module is imported.
-MAX_CONCURRENT_JOBS = max(1, min(2, int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT_RENDERS", "1"))))
+def _profile_concurrency_default():
+    profile_path = BASE_DIR / "data" / "hardware_profile.json"
+    try:
+        payload = json.loads(profile_path.read_text(encoding="utf-8"))
+        profile = payload.get("profile") if isinstance(payload, dict) else {}
+        value = profile.get("max_concurrent_renders", profile.get("concurrency", 1))
+        return max(1, min(4, int(value)))
+    except (OSError, ValueError, TypeError):
+        return 1
+
+
+MAX_CONCURRENT_JOBS = max(1, min(4, int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT_RENDERS", str(_profile_concurrency_default())))))
 JOB_QUEUE = Queue()
 ACTIVE_JOB_IDS = set()
 CANCELLED_JOB_IDS = set()
