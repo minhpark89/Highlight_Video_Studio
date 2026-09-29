@@ -283,10 +283,13 @@ def run_job_pipeline(job):
     subtitle_style = job.get("subtitle_style", "hormozi_yellow")
 
     def update_msg(msg, step=1, status="running"):
+        now = datetime.now().isoformat(timespec="seconds")
         update_job_status(job_id, {
             "status": status,
             "step": step,
-            "progress_msg": msg
+            "progress_msg": msg,
+            "heartbeat_at": now,
+            "updated_at": now,
         })
 
     try:
@@ -389,6 +392,31 @@ CANCELLED_JOB_IDS = set()
 IS_QUEUE_PAUSED = False
 QUEUE_LOCK = threading.Lock()
 
+
+def recover_interrupted_jobs():
+    """Requeue jobs left in running state after an app/process restart."""
+    with JOBS_LOCK:
+        jobs = load_jobs()
+        changed = False
+        now = datetime.now().isoformat(timespec="seconds")
+        for job in jobs:
+            if job.get("status") != "running":
+                continue
+            job["status"] = "queued"
+            job["progress_msg"] = "Render bị gián đoạn khi ứng dụng khởi động lại; đã đưa lại vào hàng đợi."
+            job["updated_at"] = now
+            job["heartbeat_at"] = now
+            job["recovered_at"] = now
+            job["attempt"] = int(job.get("attempt", 0)) + 1
+            changed = True
+        if changed:
+            save_jobs(jobs)
+        return sum(1 for job in jobs if job.get("recovered_at") == now)
+
+
+recover_interrupted_jobs()
+
+
 def queue_worker_loop():
     global IS_QUEUE_PAUSED
     while True:
@@ -398,9 +426,12 @@ def queue_worker_loop():
                 continue
                 
             with QUEUE_LOCK:
-                if len(ACTIVE_JOB_IDS) >= MAX_CONCURRENT_JOBS:
-                    time.sleep(1)
-                    continue
+                at_capacity = len(ACTIVE_JOB_IDS) >= MAX_CONCURRENT_JOBS
+            # Never sleep while holding QUEUE_LOCK: worker cleanup needs it to
+            # release completed slots, otherwise the queue can remain stuck.
+            if at_capacity:
+                time.sleep(1)
+                continue
 
             # Check jobs.json for any pending queued jobs
             all_jobs = load_jobs()
@@ -505,6 +536,8 @@ def create_job():
             "step": 0,
             "progress_msg": "Đang chờ trong hàng đợi...",
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "attempt": 0,
             "clips": []
         }
         jobs.insert(0, job)

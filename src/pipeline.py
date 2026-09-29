@@ -6,6 +6,7 @@ import time
 import subprocess
 import threading
 from contextlib import contextmanager
+from functools import lru_cache
 
 # Hide console window on Windows
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
@@ -67,6 +68,44 @@ def get_whisper_model_source():
     if LOCAL_WHISPER_MODEL.exists() and all((LOCAL_WHISPER_MODEL / name).exists() for name in required):
         return str(LOCAL_WHISPER_MODEL)
     return "small"
+
+
+def _whisper_device():
+    """Choose CUDA only when CTranslate2 can actually see a CUDA device."""
+    try:
+        import ctranslate2
+        if int(ctranslate2.get_cuda_device_count()) > 0:
+            return "cuda", "float16"
+    except Exception as exc:
+        print(f"[Whisper] CUDA unavailable; using CPU int8: {exc}")
+    return "cpu", "int8"
+
+
+@lru_cache(maxsize=2)
+def _load_whisper_model(model_source: str, device: str, compute_type: str):
+    from faster_whisper import WhisperModel
+    return WhisperModel(model_source, device=device, compute_type=compute_type)
+
+
+def _get_whisper_model(update_status=None):
+    """Load Whisper on a verified device and fail over from CUDA to CPU."""
+    model_source = get_whisper_model_source()
+    device, compute_type = _whisper_device()
+    if update_status:
+        update_status(f"Initializing Whisper {device.upper()} ({compute_type})...")
+    try:
+        return _load_whisper_model(model_source, device, compute_type), device, compute_type
+    except Exception as exc:
+        if device != "cuda":
+            raise RuntimeError(f"Whisper CPU initialization failed: {exc}") from exc
+        print(f"[Whisper] CUDA initialization failed; falling back to CPU int8: {exc}")
+        _load_whisper_model.cache_clear()
+        if update_status:
+            update_status("CUDA initialization failed; switching to Whisper CPU int8...")
+        try:
+            return _load_whisper_model(model_source, "cpu", "int8"), "cpu", "int8"
+        except Exception as cpu_exc:
+            raise RuntimeError(f"Whisper failed on CUDA and CPU: {cpu_exc}") from cpu_exc
 
 
 # Load config
@@ -217,7 +256,7 @@ def download_video_and_audio(url: str, job_id: str, update_status=None):
                 dl_args.extend(["--cookies", str(COOKIES_FILE)])
 
         info_cmd = [YT_DLP_BIN, "--dump-json", "--no-warnings"] + dl_args + [url]
-        info_proc = subprocess.run(info_cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore", creationflags=NO_WINDOW)
+        info_proc = subprocess.run(info_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180, creationflags=NO_WINDOW)
         video_title = "YouTube Video"
         duration = 0
         if info_proc.returncode == 0 and info_proc.stdout:
@@ -237,7 +276,7 @@ def download_video_and_audio(url: str, job_id: str, update_status=None):
             "-o", str(out_video),
             "--no-playlist"
         ] + dl_args + [url]
-        res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore", creationflags=NO_WINDOW)
+        res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800, creationflags=NO_WINDOW)
         return res, video_title, duration
 
     # Bước 1: Tải trực tiếp siêu tốc (Không cookies)
@@ -267,7 +306,10 @@ def download_video_and_audio(url: str, job_id: str, update_status=None):
         "-vn", "-acodec", "libmp3lame", "-ar", "16000", "-ac", "1", "-q:a", "2",
         str(out_audio)
     ]
-    subprocess.run(cmd_audio, capture_output=True, creationflags=NO_WINDOW)
+    audio_result = subprocess.run(cmd_audio, capture_output=True, timeout=300, creationflags=NO_WINDOW)
+    if audio_result.returncode != 0 or not out_audio.exists() or out_audio.stat().st_size == 0:
+        details = audio_result.stderr.decode("utf-8", errors="replace") if isinstance(audio_result.stderr, bytes) else str(audio_result.stderr or "")
+        raise RuntimeError(f"FFmpeg không trích xuất được audio: {details[-1200:]}")
     
     return {
         "video_path": str(out_video),
@@ -297,11 +339,9 @@ def get_word_level_transcription(audio_path: str, start_time: float, duration: f
 
     words = []
     try:
-        try:
-            model = WhisperModel(get_whisper_model_source(), device="cuda", compute_type="float16")
-        except Exception as e:
-            print(f"[Whisper CUDA fallback CPU]: {e}")
-            model = WhisperModel(get_whisper_model_source(), device="cpu", compute_type="int8")
+        model, device, compute_type = _get_whisper_model(update_status)
+        if update_status:
+            update_status(f"Đang nhận diện phụ đề bằng Whisper {device.upper()} ({compute_type})...")
 
         segments, _ = model.transcribe(str(clip_audio_tmp), word_timestamps=True, beam_size=1)
         for s in segments:
@@ -316,6 +356,8 @@ def get_word_level_transcription(audio_path: str, start_time: float, duration: f
                         })
     except Exception as e:
         print(f"[Whisper word transcription error]: {e}")
+        if update_status:
+            update_status(f"Whisper phụ đề lỗi: {e}")
     finally:
         if clip_audio_tmp.exists():
             try:
@@ -433,20 +475,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return ass_path
 
 def transcribe_local_whisper(audio_path: str, update_status=None):
-    """Nháº­n diá»‡n toÃ n bá»™ video khi khÃ´ng cÃ³ phá»¥ Ä‘á» sáºµn"""
-    if update_status:
-        update_status("Äang nháº­n diá»‡n giá»ng nÃ³i báº±ng GPU NVIDIA (CUDA float16)...")
+    """Transcribe a video with verified CUDA or a portable CPU fallback."""
     try:
-        from faster_whisper import WhisperModel
+        from faster_whisper import WhisperModel  # noqa: F401 - validate dependency
     except Exception as exc:
         raise RuntimeError(
             "Video không có phụ đề YouTube và bộ nhận diện giọng nói faster-whisper chưa được cài đặt."
         ) from exc
-    try:
-        model = WhisperModel(get_whisper_model_source(), device="cuda", compute_type="float16")
-    except Exception as e:
-        print(f"[Whisper] CUDA khÃ´ng kháº£ dá»¥ng, dÃ¹ng CPU: {e}")
-        model = WhisperModel(get_whisper_model_source(), device="cpu", compute_type="int8")
+    model, device, compute_type = _get_whisper_model(update_status)
+    if update_status:
+        label = "NVIDIA CUDA" if device == "cuda" else "CPU (không cần CUDA)"
+        update_status(f"Đang chạy Whisper {get_whisper_model_source()} trên {label}, chế độ {compute_type}...")
 
     segments, info = model.transcribe(audio_path, beam_size=1)
     results = []
@@ -456,6 +495,10 @@ def transcribe_local_whisper(audio_path: str, update_status=None):
             "duration": s.end - s.start,
             "text": s.text.strip()
         })
+        if update_status and len(results) % 20 == 0:
+            update_status(f"Whisper đang xử lý transcript: {len(results)} đoạn...")
+    if update_status:
+        update_status(f"Whisper hoàn tất: {len(results)} đoạn transcript.")
     return results
 
 def _fallback_highlights(transcript_items, num_clips=3, target_length="auto"):
@@ -712,10 +755,10 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
         update_status(f"Đang render bằng {codec} (tối đa {RENDER_CONCURRENCY} render đồng thời)...")
     with render_slot():
         cmd = build_command(encoder)
-        rendered = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
+        rendered = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=max(900, int(duration * 120)), creationflags=NO_WINDOW)
         if rendered.returncode != 0 and encoder != "cpu":
             print(f"[FFmpeg Warning] {codec} failed; fallback to libx264: {rendered.stderr[:300]}")
-            rendered = subprocess.run(build_command("cpu"), capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
+            rendered = subprocess.run(build_command("cpu"), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=max(900, int(duration * 180)), creationflags=NO_WINDOW)
         if rendered.returncode != 0:
             raise RuntimeError(f"FFmpeg render thất bại: {rendered.stderr}")
 
