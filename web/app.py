@@ -1782,6 +1782,10 @@ def api_publish_reel():
             continue
 
         p_token = p_info.get("page_token")
+        # Keep the verified binding explicit for both scheduled and immediate
+        # publishes. Immediate publishes do not enter the schedule preflight
+        # branch, but the persistence path still needs a safe token_id value.
+        verified = None
 
         # Tinh gio hen kem jitter/stagger cho page nay neu co schedule
         curr_sched = None
