@@ -4912,7 +4912,13 @@
         banner.style.color = '#4ade80';
         const sCount = data.success_count || 1;
         const actionStr = (mode === 'schedule') ? 'Lên lịch thành công' : 'Đã xuất bản trực tiếp';
-        banner.innerHTML = `<strong><i class="bi bi-check-circle-fill"></i> ${actionStr}!</strong> Đã xử lý cho ${sCount} Fanpage. Facebook Video ID: ${data.results?.[0]?.video_id || 'OK'}.`;
+        const failed = (data.results || []).filter(r => !r.success);
+        const failureText = failed.length
+          ? ` <span style="color:#fca5a5;">${failed.length} lỗi: ${failed.map(r => `${escapeHtml(r.page_name || r.page_id || 'Page')} — ${escapeHtml(r.error || 'Không rõ lỗi')}`).join(' | ')}</span>`
+          : '';
+        const websitePending = (data.results || []).filter(r => r.success && ['pending_generation','generating'].includes(r.website_status)).length;
+        const websiteText = websitePending ? ` Website: ${websitePending} bài đang chờ tạo.` : '';
+        banner.innerHTML = `<strong><i class="bi bi-check-circle-fill"></i> ${actionStr}!</strong> Đã xử lý thành công cho ${sCount} Fanpage.${websiteText}${failureText}`;
         showToast(`${actionStr} cho ${sCount} Trang!`);
         btn.innerHTML = '<i class="bi bi-check-lg"></i> Hoàn tất!';
 

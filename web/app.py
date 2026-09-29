@@ -1741,6 +1741,17 @@ def api_publish_reel():
     block_website_fields = None
     schedule_target_pages = [] if schedule_time else []
     if schedule_time:
+        try:
+            s_str = str(schedule_time).strip().replace("T", " ")
+            if len(s_str) == 16:
+                s_str += ":00"
+            dt = datetime.strptime(s_str[:19], "%Y-%m-%d %H:%M:%S")
+            parsed_schedule_ts = int(dt.timestamp())
+        except Exception:
+            try:
+                parsed_schedule_ts = int(schedule_time)
+            except Exception:
+                return jsonify({"success": False, "error": "Thời gian lên lịch không hợp lệ; dùng YYYY-MM-DD HH:MM hoặc timestamp.", "code": "invalid_schedule_time"}), 400
         preflight = preflight_pages(target_pages, token_vault, page_manager)
         if not preflight.get("ok"):
             return jsonify({"success": False, "error": 'Preflight quyền đăng bài thất bại', **preflight["blocked"]}), 400
@@ -1758,17 +1769,7 @@ def api_publish_reel():
     # Tinh toan thoi gian hen gio co stagger cho tung page
     base_schedule_ts = None
     if schedule_time:
-        try:
-            s_str = str(schedule_time).strip().replace("T", " ")
-            if len(s_str) == 16:
-                s_str += ":00"
-            dt = datetime.strptime(s_str[:19], "%Y-%m-%d %H:%M:%S")
-            base_schedule_ts = int(dt.timestamp())
-        except Exception:
-            try:
-                base_schedule_ts = int(schedule_time)
-            except Exception:
-                pass
+        base_schedule_ts = parsed_schedule_ts
 
     # Seed every scheduled target with its exact, verified token so the background
     # publisher never resolves a stale/fallback credential later.
@@ -1833,7 +1834,7 @@ def api_publish_reel():
                 "first_comment_status": "ready" if first_comment else "not_configured",
                 "first_comment_error": "",
                 "article_url": str(data.get("article_url") or data.get("website_url") or "").strip(),
-                "website_status": "ready" if str(data.get("article_url") or data.get("website_url") or "").strip() else "not_configured",
+                "website_status": "ready" if str(data.get("article_url") or data.get("website_url") or "").strip() else ("pending_generation" if bool(data.get("auto_first_comment", False)) else "not_configured"),
                 "website_error": "",
                 "auto_first_comment": bool(data.get("auto_first_comment", False)),
                 "use_llm_comment": bool(data.get("use_llm_comment", True)),
@@ -1853,6 +1854,8 @@ def api_publish_reel():
                     summary=caption,
                     mode="auto",
                     post_ids=[post_entry["id"]],
+                    article_url=post_entry.get("article_url", ""),
+                    create_website_article=not post_entry.get("article_url"),
                 )
                 post_entry["content_package_id"] = package["id"]
                 post_entry["content_package_status"] = "queued"
@@ -1913,6 +1916,9 @@ def api_publish_reel():
                     "type": "reel",
                     "media_file": clip_filename,
                     "first_comment": first_comment,
+                    "article_url": str(data.get("article_url") or data.get("website_url") or "").strip(),
+                    "website_status": "ready" if str(data.get("article_url") or data.get("website_url") or "").strip() else "not_configured",
+                    "website_error": "",
                     "first_comment_status": (
                         "posted" if (res.get("comment_result") or {}).get("success")
                         else ("ready" if first_comment else "not_configured")
@@ -2380,7 +2386,7 @@ def api_distribute_batch():
                 "type": "reel",
                 "media_file": clip_fn,
                 "article_url": configured_website_url,
-                "website_status": "ready" if configured_website_url else "not_configured",
+                "website_status": "ready" if configured_website_url else ("pending_generation" if auto_first_comment else "not_configured"),
                 "website_error": "",
                 "first_comment": configured_first_comment,
                 "first_comment_status": "ready" if configured_first_comment else "not_configured",

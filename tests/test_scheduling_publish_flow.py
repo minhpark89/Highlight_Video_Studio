@@ -48,6 +48,28 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             "status": "ACTIVE",
         }
 
+    def test_invalid_schedule_time_is_rejected_without_immediate_publish(self):
+        from web import app as web_app
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "output"
+            output.mkdir()
+            (output / "clip.mp4").write_bytes(b"video")
+            client = web_app.app.test_client()
+            with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
+                web_app.token_vault, "get_token_by_id", return_value=self._credential_entry()
+            ), mock.patch.object(web_app.page_manager, "list_pages", return_value=[self._verified_page()]), mock.patch.object(
+                web_app.page_manager, "list_groups", return_value=[]
+            ), mock.patch.object(web_app.reel_poster, "publish_reel") as publish:
+                response = client.post("/api/publish/reel", json={
+                    "page_id": "page-1", "filename": "clip.mp4", "schedule_time": "not-a-time",
+                })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["code"], "invalid_schedule_time")
+        publish.assert_not_called()
+
     def test_schedule_payload_persists_comment_website_and_never_calls_meta(self):
         from web import app as web_app
 
@@ -120,7 +142,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             saved = json.loads(posts_file.read_text(encoding="utf-8"))
         self.assertEqual(saved[0]["content_package_status"], "queued")
-        self.assertEqual(saved[0]["website_status"], "not_configured")
+        self.assertEqual(saved[0]["website_status"], "pending_generation")
         self.assertEqual(saved[0]["article_url"], "")
         self.assertEqual(saved[0]["token"], "page-token-verified")
 
@@ -155,7 +177,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["success"])
         self.assertEqual(saved["status"], "scheduled")
-        self.assertEqual(saved["website_status"], "not_configured")
+        self.assertEqual(saved["website_status"], "pending_generation")
         self.assertEqual(saved["content_package_status"], "queued")
         self.assertEqual(saved["website_error"], "")
 
