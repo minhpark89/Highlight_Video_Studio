@@ -384,6 +384,23 @@ class WebsiteArticleService:
                 time.sleep(1.5)
         raise WebsiteServiceError(f"Không xác minh được bài viết public: {last_error}")
 
+    def verify_article_embed(self, article_url: str, *, youtube_id: str = "", video_stream_url: str = "") -> Dict[str, Any]:
+        """Confirm the rendered public article contains its original long-video embed."""
+        markers = []
+        if youtube_id:
+            markers.append(f"youtube-nocookie.com/embed/{youtube_id}")
+        if video_stream_url:
+            markers.append(str(video_stream_url))
+        if not markers:
+            raise WebsiteServiceError("B\u00e0i vi\u1ebft kh\u00f4ng c\u00f3 ngu\u1ed3n video g\u1ed1c \u0111\u1ec3 nh\u00fang")
+        try:
+            response = requests.get(article_url, allow_redirects=True, timeout=self.cfg.timeout)
+        except requests.RequestException as exc:
+            raise WebsiteServiceError(f"Kh\u00f4ng x\u00e1c minh \u0111\u01b0\u1ee3c embed video: {exc}") from exc
+        if response.status_code != 200 or not any(marker in (response.text or "") for marker in markers):
+            raise WebsiteServiceError("B\u00e0i vi\u1ebft CMS ch\u01b0a ch\u1ee9a embed video g\u1ed1c")
+        return {"success": True, "url": response.url, "embed": "youtube" if youtube_id else "html5"}
+
     def publish_article(
         self,
         title: str,

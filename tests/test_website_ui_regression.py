@@ -84,9 +84,9 @@ class WebsiteUiRegressionTests(unittest.TestCase):
         for path in TEMPLATE_PATHS:
             with self.subTest(template=path.relative_to(BASE_DIR)):
                 html = path.read_text(encoding="utf-8")
-                self.assertIn(
-                    "</tr>`;      }).join('');",
+                self.assertRegex(
                     html,
+                    r"</tr>`;\s*\}\)\.join\(''\);",
                     "Content Studio queue renderer must close its template literal before join()",
                 )
                 self.assertNotIn(
@@ -94,6 +94,17 @@ class WebsiteUiRegressionTests(unittest.TestCase):
                     html,
                     "Malformed renderer boundary would prevent all inline JavaScript from parsing",
                 )
+
+    def test_content_studio_retry_has_immediate_busy_feedback(self):
+        for path in TEMPLATE_PATHS:
+            with self.subTest(template=path.relative_to(BASE_DIR)):
+                html = path.read_text(encoding="utf-8")
+                self.assertIn("function csSetBusy(button, busy, label)", html)
+                self.assertIn("aria-busy", html)
+                self.assertIn("cs-spinner", html)
+                self.assertIn(r"\u0110ang t\u1ea1o l\u1ea1i ti\u00eau \u0111\u1ec1...", html)
+                self.assertIn(r"\u0110ang t\u1ea1o l\u1ea1i comment...", html)
+                self.assertIn("create_website_article: true", html)
 
     def test_cms_is_default_and_scp_is_advanced_legacy_option(self):
         for path in TEMPLATE_PATHS:

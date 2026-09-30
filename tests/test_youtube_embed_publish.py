@@ -48,6 +48,24 @@ class YouTubeEmbedPublishTests(unittest.TestCase):
         self.assertIn("<iframe", body_html)
         self.assertNotIn("<source src=", body_html)
         service.verify_article.assert_called_once_with(article_url)
+        service.verify_article_embed.assert_called_once_with(
+            article_url, youtube_id=video_id, video_stream_url=""
+        )
+
+    @mock.patch("core.website_article_service.requests.get")
+    def test_public_article_embed_verification_requires_original_marker(self, get):
+        from core.website_article_service import WebsiteArticleService, WebsiteServiceError
+
+        service = WebsiteArticleService.__new__(WebsiteArticleService)
+        service.cfg = mock.Mock(timeout=3)
+        get.return_value = mock.Mock(status_code=200, url="https://example.test/blog/new", text="<html>other video</html>")
+        with self.assertRaises(WebsiteServiceError):
+            service.verify_article_embed("https://example.test/blog/new", youtube_id="dQw4w9WgXcQ")
+        get.return_value.text = '<iframe src="https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"></iframe>'
+        self.assertEqual(
+            service.verify_article_embed("https://example.test/blog/new", youtube_id="dQw4w9WgXcQ")["embed"],
+            "youtube",
+        )
 
     def test_publish_draft_youtube_embed_skips_video_upload(self):
         from web import app as web_app

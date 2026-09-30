@@ -408,6 +408,9 @@
     /* Content Studio actions must remain readable on narrow cards/table cells. */
     .content-studio-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .content-studio-actions .btn { white-space: nowrap; min-width: max-content; }
+    #pane-content-studio .cs-spinner { display: inline-block; width: 12px; height: 12px; margin-right: 6px; border: 2px solid rgba(255,255,255,.35); border-top-color: currentColor; border-radius: 50%; vertical-align: -2px; animation: cs-spin .7s linear infinite; }
+    #pane-content-studio .cs-retry-btn.is-loading { opacity: .75; cursor: wait; }
+    @keyframes cs-spin { to { transform: rotate(360deg); } }
     #pane-content-studio .form-control { min-width: 0; }
     #pane-content-studio .table td:last-child { white-space: nowrap; }
     /* Grid layout */
@@ -5860,13 +5863,27 @@
   }
 
   // ============================================================
-  // CONTENT STUDIO — Content Package queue cho clip đã render
+  // CONTENT STUDIO - Content Package queue cho clip ?? render
   // ============================================================
   function csEscape(value) {
     return String(value === undefined || value === null ? '' : value)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
-
+  function csSetBusy(button, busy, label) {
+    if (!button) return;
+    if (busy) {
+      button.dataset.csOriginalLabel = button.innerHTML;
+      button.disabled = true;
+      button.classList.add('is-loading');
+      button.innerHTML = '<span class="cs-spinner" aria-hidden="true"></span>' + csEscape(label || '\u0110ang x\u1eed l\u00fd...');
+      button.setAttribute('aria-busy', 'true');
+    } else {
+      button.disabled = false;
+      button.classList.remove('is-loading');
+      button.innerHTML = button.dataset.csOriginalLabel || button.innerHTML;
+      button.removeAttribute('aria-busy');
+    }
+  }
   window.loadContentStudioQueue = async function() {
     const tbody = document.getElementById('cs-queue-tbody');
     const stats = document.getElementById('cs-queue-stats');
@@ -5874,138 +5891,90 @@
     try {
       const res = await fetch('/api/content-studio/queue');
       const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Không tải được hàng đợi');
+      if (!data.success) throw new Error(data.error || 'Kh\u00f4ng t\u1ea3i \u0111\u01b0\u1ee3c h\u00e0ng \u0111\u1ee3i');
       const items = data.items || [];
-      stats.innerHTML =
-        `Queued: <strong>${data.queued}</strong> · Ready: <strong>${data.ready}</strong> · Failed: <strong>${data.failed}</strong>`;
+      stats.innerHTML = `Queued: <strong>${data.queued}</strong> \u00b7 Ready: <strong>${data.ready}</strong> \u00b7 Failed: <strong>${data.failed}</strong>`;
       const c = data.circuit || {};
       circuit.textContent = c.open
-        ? `Circuit breaker ĐANG MỞ — thử lại sau ${c.retry_after_seconds}s (lỗi quota).`
-        : 'Circuit breaker đóng — LLM khả dụng.';
+        ? `Circuit breaker \u0110ANG M\u1ede \u2014 th\u1eed l\u1ea1i sau ${c.retry_after_seconds}s (l\u1ed7i quota).`
+        : 'Circuit breaker \u0111\u00f3ng \u2014 LLM kh\u1ea3 d\u1ee5ng.';
       if (!items.length) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#64748b;">Chưa có Content Package nào.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#64748b;">Ch\u01b0a c\u00f3 Content Package n\u00e0o.</td></tr>';
         return;
       }
       tbody.innerHTML = items.slice().reverse().map(function(item) {
         const mode = item.mode || 'auto';
-        const source = (item.result && item.result.source) || (item.status === 'failed' ? 'error' : '-');
+        const source = (item.result && item.result.source) || (item.status === 'failed' ? 'error' : '\u2014');
         const pending = item.status === 'queued' ? 'queued' : item.status;
         const cs = item.component_statuses || {};
         const mark = (key, label) => {
           const state = cs[key] || {};
           const ok = state.present || state.status === 'ready';
-          const text = ok ? 'C?' : (state.status === 'pending' ? '?ang t?o' : (state.status === 'retryable' ? 'L?i / th? l?i' : 'Ch?a c?'));
+          const text = ok ? 'C\u00f3' : (state.status === 'pending' ? '\u0110ang t\u1ea1o' : (state.status === 'retryable' ? 'L\u1ed7i / th\u1eed l\u1ea1i' : 'Ch\u01b0a c\u00f3'));
           return `<span title="${csEscape(state.value || '')}" style="color:${ok ? '#4ade80' : (state.status === 'pending' ? '#fbbf24' : '#f87171')};">${label}: ${text}</span>`;
         };
         return `<tr>
-          <td>${csEscape(item.clip_filename || '-')}</td>
-          <td>${csEscape(item.title || '-')}</td>
+          <td>${csEscape(item.clip_filename || '\u2014')}</td>
+          <td>${csEscape(item.title || '\u2014')}</td>
           <td>${csEscape(mode)}</td>
           <td>${csEscape(pending)}</td>
-          <td style="line-height:1.6;">${mark('hero_title','Ti?u ??')}<br>${mark('article_html','B?i vi?t')}<br>${mark('first_comment','First Comment')}<br>${mark('website_link','Link web')}<br><small style="color:#94a3b8;">${csEscape(source)}</small></td>
+          <td style="line-height:1.6;">${mark('hero_title','Ti\u00eau \u0111\u1ec1')}<br>${mark('article_html','B\u00e0i vi\u1ebft')}<br>${mark('first_comment','First Comment')}<br>${mark('website_link','Link web')}<br><small style="color:#94a3b8;">${csEscape(source)}</small></td>
           <td class="content-studio-actions">
-            <button class="btn btn-sm btn-outline" onclick="csRetryComponent('${csEscape(item.id)}','hero_title')">T?o l?i ti?u ??</button>
-            <button class="btn btn-sm btn-outline" onclick="csRetryComponent('${csEscape(item.id)}','first_comment')">T?o l?i comment</button>
+            <button class="btn btn-sm btn-outline cs-retry-btn" data-package-id="${csEscape(item.id)}" data-component="hero_title" onclick="csRetryComponent('${csEscape(item.id)}','hero_title', this)">T\u1ea1o l\u1ea1i ti\u00eau \u0111\u1ec1</button>
+            <button class="btn btn-sm btn-outline cs-retry-btn" data-package-id="${csEscape(item.id)}" data-component="first_comment" onclick="csRetryComponent('${csEscape(item.id)}','first_comment', this)">T\u1ea1o l\u1ea1i comment</button>
           </td>
-        </tr>`;      }).join('');
-    } catch (e) {
-      stats.textContent = 'Lỗi: ' + e.message;
-    }
+        </tr>`;
+      }).join('');
+    } catch (e) { stats.textContent = 'L\u1ed7i: ' + e.message; }
   };
-
   window.generateContentPackage = async function() {
     const msg = document.getElementById('cs-generate-msg');
-    msg.style.color = '#94a3b8';
-    msg.textContent = 'Đang tạo nội dung...';
+    msg.style.color = '#94a3b8'; msg.textContent = '\u0110ang t\u1ea1o n\u1ed9i dung...';
     try {
-      const res = await fetch('/api/content-studio/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          clip_filename: document.getElementById('cs-clip-filename').value.trim(),
-          title: document.getElementById('cs-title').value.trim(),
-          mode: document.getElementById('cs-mode').value,
-        }),
-      });
+      const res = await fetch('/api/content-studio/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clip_filename: document.getElementById('cs-clip-filename').value.trim(), title: document.getElementById('cs-title').value.trim(), mode: document.getElementById('cs-mode').value }) });
       const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Tạo nội dung thất bại');
+      if (!data.success) throw new Error(data.error || 'T\u1ea1o n\u1ed9i dung th\u1ea5t b\u1ea1i');
       const pkg = data.package || {};
       document.getElementById('cs-result').style.display = 'block';
-      document.getElementById('cs-result-body').textContent =
-        `Nguồn: ${pkg.source}\n\nHERO: ${pkg.hero_title}\n\nCAPTION: ${pkg.caption}\n\nCOMMENT: ${pkg.first_comment}`;
-      msg.style.color = '#4ade80';
-      msg.textContent = `Xong (nguồn: ${pkg.source}).`;
-    } catch (e) {
-      msg.style.color = '#f87171';
-      msg.textContent = 'Lỗi: ' + e.message;
-    }
+      document.getElementById('cs-result-body').textContent = `Ngu\u1ed3n: ${pkg.source}\n\nHERO: ${pkg.hero_title}\n\nCAPTION: ${pkg.caption}\n\nCOMMENT: ${pkg.first_comment}`;
+      msg.style.color = '#4ade80'; msg.textContent = `Xong (ngu\u1ed3n: ${pkg.source}).`;
+    } catch (e) { msg.style.color = '#f87171'; msg.textContent = 'L\u1ed7i: ' + e.message; }
   };
-
   window.enqueueContentPackage = async function() {
     const msg = document.getElementById('cs-generate-msg');
+    msg.style.color = '#94a3b8'; msg.textContent = '\u0110ang \u0111\u01b0a v\u00e0o h\u00e0ng \u0111\u1ee3i...';
     try {
-      const res = await fetch('/api/content-studio/enqueue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          clip_filename: document.getElementById('cs-clip-filename').value.trim(),
-          title: document.getElementById('cs-title').value.trim(),
-          mode: document.getElementById('cs-mode').value,
-        }),
-      });
+      const res = await fetch('/api/content-studio/enqueue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clip_filename: document.getElementById('cs-clip-filename').value.trim(), title: document.getElementById('cs-title').value.trim(), mode: document.getElementById('cs-mode').value, create_website_article: true }) });
       const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Không xếp hàng được');
-      msg.style.color = '#4ade80';
-      msg.textContent = 'Đã đưa vào hàng đợi: ' + data.item.id;
-      window.loadContentStudioQueue();
-    } catch (e) {
-      msg.style.color = '#f87171';
-      msg.textContent = 'Lỗi: ' + e.message;
-    }
+      if (!data.success) throw new Error(data.error || 'Kh\u00f4ng x\u1ebfp h\u00e0ng \u0111\u01b0\u1ee3c');
+      msg.style.color = '#4ade80'; msg.textContent = '\u0110\u00e3 \u0111\u01b0a v\u00e0o h\u00e0ng \u0111\u1ee3i: ' + data.item.id; window.loadContentStudioQueue();
+    } catch (e) { msg.style.color = '#f87171'; msg.textContent = 'L\u1ed7i: ' + e.message; }
   };
-
   window.batchContentPackages = async function() {
     const msg = document.getElementById('cs-generate-msg');
     const folder = document.getElementById('cs-folder').value.trim();
-    if (!folder) { msg.style.color = '#f87171'; msg.textContent = 'Vui lòng nhập đường dẫn thư mục.'; return; }
+    if (!folder) { msg.style.color = '#f87171'; msg.textContent = 'Vui l\u00f2ng nh\u1eadp \u0111\u01b0\u1eddng d\u1eabn th\u01b0 m\u1ee5c.'; return; }
+    msg.style.color = '#94a3b8'; msg.textContent = '\u0110ang qu\u00e9t folder v\u00e0 \u0111\u01b0a clip m\u1edbi v\u00e0o h\u00e0ng \u0111\u1ee3i...';
     try {
-      const res = await fetch('/api/content-studio/batch', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder: folder, mode: document.getElementById('cs-mode').value })
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Batch thất bại');
-      msg.style.color = '#4ade80';
-      msg.textContent = `Đã đưa ${data.count} clip vào hàng đợi.`;
-      window.loadContentStudioQueue();
-    } catch (e) { msg.style.color = '#f87171'; msg.textContent = 'Lỗi: ' + e.message; }
+      const res = await fetch('/api/content-studio/batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: folder, mode: document.getElementById('cs-mode').value, create_website_article: true }) });
+      const data = await res.json(); if (!data.success) throw new Error(data.error || 'Batch th\u1ea5t b\u1ea1i');
+      msg.style.color = '#4ade80'; msg.textContent = `\u0110\u00e3 \u0111\u01b0a ${data.count} clip m\u1edbi v\u00e0o h\u00e0ng \u0111\u1ee3i; b\u1ecf qua ${data.skipped_count || 0} clip \u0111\u00e3 x\u1eed l\u00fd.`; window.loadContentStudioQueue();
+    } catch (e) { msg.style.color = '#f87171'; msg.textContent = 'L\u1ed7i: ' + e.message; }
   };
-
-  window.csRetryComponent = async function(packageId, component) {
+  window.csRetryComponent = async function(packageId, component, button) {
+    const btn = button || document.querySelector(`button[data-package-id="${CSS.escape(String(packageId))}"][data-component="${CSS.escape(String(component))}"]`);
+    const label = component === 'hero_title' ? '\u0110ang t\u1ea1o l\u1ea1i ti\u00eau \u0111\u1ec1...' : '\u0110ang t\u1ea1o l\u1ea1i comment...';
+    csSetBusy(btn, true, label); const stats = document.getElementById('cs-queue-stats'); if (stats) stats.textContent = label + ' Vui l\u00f2ng ch\u1edd...';
     try {
-      const res = await fetch('/api/content-studio/retry', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: packageId, component: component }),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Retry thất bại');
-      alert('Đã tạo lại ' + component + ' (nguồn: ' + (data.package && data.package.source) + ')');
-      window.loadContentStudioQueue();
-    } catch (e) {
-      alert('Lỗi retry: ' + e.message);
-    }
+      const res = await fetch('/api/content-studio/retry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: packageId, component: component }) });
+      const data = await res.json(); if (!data.success) throw new Error(data.error || 'Retry th\u1ea5t b\u1ea1i');
+      if (stats) stats.textContent = '\u0110\u00e3 t\u1ea1o xong ' + (component === 'hero_title' ? 'ti\u00eau \u0111\u1ec1.' : 'First Comment.'); await window.loadContentStudioQueue();
+    } catch (e) { if (stats) stats.textContent = 'L\u1ed7i retry: ' + e.message; } finally { csSetBusy(btn, false); }
   };
-
-  window.processContentStudioQueue = async function() {
-    try {
-      const res = await fetch('/api/content-studio/process', { method: 'POST' });
-      const data = await res.json();
-      window.loadContentStudioQueue();
-      alert('Đã xử lý ' + (data.processed || 0) + ' mục.');
-    } catch (e) {
-      alert('Lỗi xử lý: ' + e.message);
-    }
+  window.processContentStudioQueue = async function(button) {
+    csSetBusy(button, true, '\u0110ang x\u1eed l\u00fd...');
+    try { const res = await fetch('/api/content-studio/process', { method: 'POST' }); const data = await res.json(); await window.loadContentStudioQueue(); alert('\u0110\u00e3 x\u1eed l\u00fd ' + (data.processed || 0) + ' m\u1ee5c.'); }
+    catch (e) { alert('L\u1ed7i x\u1eed l\u00fd: ' + e.message); } finally { csSetBusy(button, false); }
   };
 
 </script>  <!-- MODAL 1: TRÌNH PHÁT XEM VIDEO GỐC TRỰC TIẾP TRÊN WEB -->

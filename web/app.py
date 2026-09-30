@@ -3020,6 +3020,7 @@ def api_content_studio_enqueue():
         mode=str(payload.get("mode") or "auto"),
         post_ids=list(payload.get("post_ids") or []),
         article_url=str(payload.get("article_url") or ""),
+        create_website_article=bool(payload.get("create_website_article")),
     )
     start_content_package_worker()
     return jsonify({"success": True, "item": item})

@@ -161,13 +161,25 @@ def get_clip_metadata(clip_filename: str) -> dict:
 
     # 1. Tìm trong jobs.json
     matched_job = None
+    requested = Path(str(clip_filename or "")).expanduser()
+    requested_resolved = str(requested.resolve(strict=False)).lower()
+    requested_name = requested.name.lower()
+
+    def _clip_matches(value):
+        candidate = str(value or "").strip()
+        if not candidate:
+            return False
+        path = Path(candidate).expanduser()
+        return (str(path.resolve(strict=False)).lower() == requested_resolved
+                or path.name.lower() == requested_name)
+
     if jobs_file.exists():
         try:
             with open(jobs_file, "r", encoding="utf-8", errors="ignore") as f:
                 jobs = json.load(f)
                 for j in jobs:
                     for c in j.get("clips", []):
-                        if c.get("filename") == clip_filename:
+                        if _clip_matches(c.get("filename")):
                             matched_job = j
                             meta["job_id"] = j.get("id") or ""
                             meta["youtube_url"] = j.get("youtube_url") or ""
@@ -852,5 +864,6 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
     if res.get("status") != "success" or not article_url:
         raise WebsiteServiceError("CMS không xác nhận bài viết đã được tạo")
     svc.verify_article(article_url)
+    svc.verify_article_embed(article_url, youtube_id=youtube_id, video_stream_url=video_stream_url)
 
     return article_url, hero_img

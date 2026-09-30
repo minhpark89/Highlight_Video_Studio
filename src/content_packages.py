@@ -64,6 +64,8 @@ def fallback_package(title: str, summary: str = "", article_url: str = "") -> di
     comment = "👀 Watch the setup again—the detail just before the turning point explains everything."
     if link:
         comment += f" Full breakdown: {link}"
+    else:
+        comment = ""  # No First Comment without a newly published article.
     caption = f"🔥 {clean}\n\n{lead}\n\nWhat detail did you notice first?\n\n#highlight #viral #trending #mustwatch"
     return {
         "hero_title": hero,
@@ -244,7 +246,7 @@ def resolve_article_url(item):
     a slow or failing CMS can no longer drop an accepted Facebook schedule.
     """
     existing = str(item.get("article_url") or "").strip()
-    if existing or not item.get("create_website_article"):
+    if not item.get("create_website_article"):
         return existing, "ready" if existing else "not_configured", ""
     try:
         from src.publisher.website_publisher import publish_clip_to_website_cms
@@ -252,7 +254,6 @@ def resolve_article_url(item):
         result = publish_clip_to_website_cms(
             item.get("clip_filename", ""),
             item.get("title", ""),
-            youtube_video_id=fallback_video_label(item.get("title", ""), item.get("video_url", "")),
         )
         url = result[0] if isinstance(result, tuple) else str(result or "")
         if not url:
@@ -308,6 +309,8 @@ def retry_package_component(package_id, component, mode=None):
         if not item:
             return None
         snapshot = dict(item)
+    if component == "first_comment" and (not snapshot.get("create_website_article") or snapshot.get("website_status") != "ready" or not snapshot.get("article_url")):
+        raise ValueError("First Comment requires a newly published CMS article with original video embed")
     result = generate_package(
         snapshot.get("title", ""), snapshot.get("summary", ""), snapshot.get("video_url", ""),
         mode=mode or snapshot.get("mode", "auto"), component=component,
@@ -342,12 +345,21 @@ def process_content_packages_once():
         item["article_url"] = article_url
         item["website_status"] = website_status
         item["website_error"] = website_error
+        item["embed_status"] = "ready" if website_status == "ready" and article_url else "failed"
         # Generate the comment after the CMS URL is known so the persisted
         # first comment contains the exact website link shown in Post Management.
+        if "first_comment" in (item.get("components") or ["first_comment"]) and (website_status != "ready" or not article_url):
+            raise RuntimeError("First Comment requires a newly published CMS article with original video embed")
         result = generate_package(
             item["title"], item.get("summary", ""), item.get("video_url", ""),
             item.get("mode", "auto"), article_url=article_url,
         )
+        if "first_comment" in (item.get("components") or ["first_comment"]):
+            comment = str(result.get("first_comment") or "").strip()
+            if not comment or article_url not in comment:
+                result["first_comment"] = fallback_package(item["title"], item.get("summary", ""), article_url)["first_comment"]
+            if not result.get("first_comment") or article_url not in result["first_comment"]:
+                raise RuntimeError("First Comment không chứa đúng URL bài CMS mới")
         retryable = str(result.get("source") or "").startswith("no_llm_quota_fallback")
         item.update({"status": "retryable" if retryable else "ready", "result": result, "error": "" if not retryable else "LLM quota exhausted; sẽ tự retry khi quota khả dụng.", "completed_at": _now()})
         if not retryable:
