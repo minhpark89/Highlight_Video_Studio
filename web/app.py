@@ -1233,11 +1233,12 @@ def api_image_provider_test():
     selected_model = str(data.get("model") or image_cfg.get("model") or "").strip()
     if not selected_model or selected_model == "__video_frame__":
         return jsonify({"success": False, "error": "Vui lòng bật chế độ AI tạo ảnh"}), 400
-    model = "ag/gemini-3.1-flash-image"
+    model = selected_model
     try:
         candidates = _image_generation_candidates(generation_url, raw_base)
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
+    from web.scheduled_publisher import sanitize_error
     failures = []
     started = time.perf_counter()
     for url, endpoint_type in candidates:
@@ -1256,9 +1257,9 @@ def api_image_provider_test():
                 detail = detail.get("message") or str(detail)
             if response.status_code == 200:
                 detail = "HTTP 200 nhưng response không có dữ liệu ảnh"
-            failures.append(f"{url}: HTTP {response.status_code} - {detail}")
+            failures.append(f"HTTP {response.status_code} - {sanitize_error(detail)}")
         except requests.RequestException as exc:
-            failures.append(f"{url}: {exc}")
+            failures.append(sanitize_error(exc))
     return jsonify({"success": False, "error": "Test tạo ảnh thất bại. " + " | ".join(failures)}), 502
 
 
@@ -3232,6 +3233,12 @@ def api_content_studio_batch():
                 posted_keys.update(_clip_keys(record.get(field)))
         else:
             posted_keys.update(_clip_keys(record))
+    # The legacy clip ledger can lag behind a confirmed posts.json revision.
+    # A published post with a Meta object id is stronger evidence than an
+    # absent ledger row; neither scheduled nor ambiguous posts are "posted".
+    for post in load_posts():
+        if post.get("status") == "published" and (post.get("post_fb_id") or post.get("reel_id")):
+            posted_keys.update(_clip_keys(post.get("media_file") or post.get("clip_filename")))
     existing_keys = set()
     for item in list_packages():
         if str(item.get("status") or "") in ("queued", "running", "ready", "retryable"):
@@ -3277,7 +3284,10 @@ def api_content_studio_retry():
             if not result:
                 return jsonify({"success": False, "error": "Không tìm thấy Content Package"}), 404
             return jsonify({"success": True, **result})
-        queued = retry_package(package_id)
+        mode = str(payload.get("mode") or "").strip()
+        if mode and mode not in ("auto", "llm", "no_llm"):
+            return jsonify({"success": False, "error": "mode phải là auto, llm hoặc no_llm"}), 400
+        queued = retry_package(package_id, mode=mode or None)
         if not queued:
             return jsonify({"success": False, "error": "Không tìm thấy Content Package"}), 404
         if queued.get("status") != "queued":

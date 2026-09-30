@@ -1836,7 +1836,7 @@
             <div id="cs-result-body" style="font-size: 13px; color: #cbd5e1; line-height: 1.6; white-space: pre-wrap;"></div>
           </div>
 
-          <div style="margin-bottom:10px;"><label for="cs-status-filter">Lọc Content Package: </label><select id="cs-status-filter" class="form-control" style="display:inline-block;width:auto;" onchange="loadContentStudioQueue()"><option value="all">Tất cả</option><option value="failed">Lỗi / cần thử lại</option></select></div>
+          <div style="margin-bottom:10px;"><label for="cs-status-filter">Lọc Content Package: </label><select id="cs-status-filter" class="form-control" style="display:inline-block;width:auto;" onchange="loadContentStudioQueue()"><option value="all">Tất cả</option><option value="failed">Lỗi / cần thử lại</option></select> <button class="btn btn-sm btn-outline" onclick="csSelectFailedPackages()">Chọn tất cả bài lỗi</button> <button class="btn btn-sm btn-outline" onclick="csRetrySelectedPackages(this)">Tạo lại bằng LLM</button></div>
           <div id="cs-action-msg" role="status" aria-live="polite" style="margin-bottom:10px;font-size:13px;min-height:1.4em;"></div>
           <div class="table-responsive" style="background: #111c33; border: 1px solid #23304d; border-radius: 10px;">
             <table class="table" style="margin-bottom: 0;">
@@ -5939,6 +5939,7 @@
           <td>${csEscape(pending)}${item.error ? `<div style="color:#f87171;font-size:11px;white-space:normal;">${csEscape(item.error)}</div>` : ''}${websiteError && websiteError !== item.error ? `<div style="color:#f87171;font-size:11px;white-space:normal;">CMS: ${csEscape(websiteError)}</div>` : ''}</td>
           <td style="line-height:1.6;">${mark('hero_title','Ti\u00eau \u0111\u1ec1')}<br>${mark('article_html','B\u00e0i vi\u1ebft')}<br>${mark('first_comment','First Comment')}<br>${mark('website_link','Link web')}<br><small style="color:#94a3b8;">${csEscape(source)}</small>${fallbackReason ? `<br><small style="color:#fbbf24;">LLM fallback: ${csEscape(fallbackReason)}</small>` : ''}</td>
           <td class="content-studio-actions">
+            ${['failed','retryable'].includes(item.status) ? `<input type="checkbox" class="cs-failed-select" value="${csEscape(item.id)}" aria-label="Chọn bài lỗi ${csEscape(item.title || item.id)}">` : ''}
             ${['failed','retryable'].includes(item.status) ? `<button class="btn btn-sm btn-outline cs-retry-btn" onclick="csRetryPackage('${csEscape(item.id)}', this)">Thử lại mục lỗi</button>` : ''}
             <button class="btn btn-sm btn-outline cs-retry-btn" data-package-id="${csEscape(item.id)}" data-component="hero_title" onclick="csRetryComponent('${csEscape(item.id)}','hero_title', this)">T\u1ea1o l\u1ea1i ti\u00eau \u0111\u1ec1</button>
             <button class="btn btn-sm btn-outline cs-retry-btn" data-package-id="${csEscape(item.id)}" data-component="first_comment" onclick="csRetryComponent('${csEscape(item.id)}','first_comment', this)" ${websiteReady ? '' : 'disabled title="Cần bài CMS có URL trước khi tạo comment"'}>T\u1ea1o l\u1ea1i comment</button>
@@ -5994,6 +5995,30 @@
       if (feedback) { feedback.style.color = '#4ade80'; feedback.textContent = 'Đã tạo xong ' + (component === 'hero_title' ? 'tiêu đề.' : 'First Comment.'); }
       await window.loadContentStudioQueue();
     } catch (e) { if (feedback) { feedback.style.color = '#f87171'; feedback.textContent = 'Lỗi tạo lại: ' + e.message; } } finally { csSetBusy(btn, false); }
+  };
+  window.csSelectFailedPackages = function() {
+    document.getElementById('cs-status-filter').value = 'failed';
+    window.loadContentStudioQueue().then(() => document.querySelectorAll('.cs-failed-select').forEach(box => { box.checked = true; }));
+  };
+  window.csRetrySelectedPackages = async function(button) {
+    const ids = [...document.querySelectorAll('.cs-failed-select:checked')].map(box => box.value);
+    const feedback = document.getElementById('cs-action-msg');
+    if (!ids.length) { feedback.textContent = 'Chưa chọn bài lỗi.'; return; }
+    csSetBusy(button, true, 'Đang tạo lại bằng LLM...');
+    let done = 0, errors = [];
+    try {
+      for (const id of ids) {
+        try {
+          const response = await fetch('/api/content-studio/retry', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id, mode:'llm'})});
+          const result = await response.json();
+          if (!response.ok || !result.success) throw new Error(result.error || 'Không thể xếp hàng');
+          done++;
+        } catch (err) { errors.push(id + ': ' + err.message); }
+      }
+      feedback.style.color = errors.length ? '#fbbf24' : '#4ade80';
+      feedback.textContent = `Đã xếp hàng ${done}/${ids.length} bài để tạo lại bằng LLM.` + (errors.length ? ' Lỗi: ' + errors.join('; ') : '');
+      await window.loadContentStudioQueue();
+    } finally { csSetBusy(button, false); }
   };
   window.csRetryPackage = async function(packageId, button) {
     if (button?.disabled) return;

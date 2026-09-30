@@ -52,12 +52,31 @@ class ContentStudioPrompt22Tests(unittest.TestCase):
             self.assertTrue(response.get_json()["queued"])
             worker.assert_called_once()
 
+    def test_failed_retry_uses_explicit_llm_mode_without_creating_article_in_request(self):
+        from web import app as web_app
+        from src import content_packages
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            queue = Path(folder) / "content_packages.json"
+            queue.write_text(json.dumps([{"id": "pkg-1", "status": "failed", "mode": "no_llm",
+                                         "article_url": "https://example.test/existing", "error": "LLM failed"}]), encoding="utf-8")
+            with mock.patch.object(content_packages, "QUEUE_FILE", queue), mock.patch.object(web_app, "start_content_package_worker"):
+                response = web_app.app.test_client().post("/api/content-studio/retry", json={"id": "pkg-1", "mode": "llm"})
+                saved = json.loads(queue.read_text(encoding="utf-8"))[0]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(saved["mode"], "llm")
+        self.assertEqual(saved["status"], "queued")
+        self.assertEqual(saved["article_url"], "https://example.test/existing")
+
     def test_both_content_studio_templates_have_failed_filter_and_feedback(self):
         base = Path(__file__).resolve().parent.parent
         for relative in ("web/index.html", "web/templates/index.html"):
             html = (base / relative).read_text(encoding="utf-8")
             self.assertIn('id="cs-status-filter"', html)
             self.assertIn("csRetryPackage", html)
+            self.assertIn("csSelectFailedPackages", html)
+            self.assertIn("csRetrySelectedPackages", html)
             self.assertIn('id="cs-action-msg"', html)
             self.assertIn("aria-busy", html)
             self.assertIn("fallback_reason", html)

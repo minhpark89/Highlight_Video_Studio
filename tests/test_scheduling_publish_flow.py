@@ -455,6 +455,31 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         self.assertEqual(payload["skipped_count"], 2)
         self.assertEqual({item["reason"] for item in payload["skipped"]}, {"already_posted", "already_in_content_queue"})
 
+    def test_content_batch_uses_confirmed_posts_when_legacy_ledger_is_behind(self):
+        from web import app as web_app
+        from src import content_packages
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "confirmed.mp4").write_bytes(b"video")
+            (root / "unconfirmed.mp4").write_bytes(b"video")
+            posts_file = root / "posts.json"
+            posts_file.write_text(json.dumps([
+                {"status": "published", "media_file": "confirmed.mp4", "post_fb_id": "video-123"},
+                {"status": "scheduled", "media_file": "unconfirmed.mp4"},
+            ]), encoding="utf-8")
+            queue = root / "queue.json"
+            with mock.patch.object(web_app, "BASE_DIR", root), mock.patch.object(
+                web_app, "POSTS_FILE", posts_file
+            ), mock.patch.object(content_packages, "QUEUE_FILE", queue), mock.patch.object(
+                web_app, "get_clip_metadata", return_value={"video_title": "Test"}
+            ), mock.patch.object(web_app, "start_content_package_worker"):
+                response = web_app.app.test_client().post("/api/content-studio/batch", json={"folder": str(root), "mode": "no_llm"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["count"], 1)
+        self.assertEqual(response.get_json()["skipped"][0]["reason"], "already_posted")
+
     def test_content_package_first_comment_receives_generated_website_url(self):
         from src import content_packages
         with tempfile.TemporaryDirectory() as folder:
@@ -484,6 +509,36 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
         posts_file = root / "posts.json"
         posts_file.write_text(json.dumps([post]), encoding="utf-8")
         return folder, root, output, posts_file
+
+    def test_confirmed_reel_remains_published_when_comment_and_ledger_fail(self):
+        from src.publisher import first_comment_queue
+        from web import scheduled_publisher as worker
+
+        poster = mock.Mock()
+        poster.publish_reel.return_value = {"success": True, "video_id": "video-confirmed"}
+        poster.post_first_comment.side_effect = RuntimeError("comment unavailable")
+        folder, root, output, posts_file = self._fixture({
+            "id": "post-confirmed", "status": "scheduled", "scheduled_time": "2026-09-30 23:53:00",
+            "page_id": "page-1", "token": "fixture-token", "media_file": "clip.mp4",
+            "first_comment": "Read existing article", "website_status": "ready",
+        })
+        try:
+            with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
+                worker, "OUTPUT_DIR", output
+            ), mock.patch.object(first_comment_queue, "QUEUE_FILE", root / "comments.json"), mock.patch.object(
+                worker, "_record_posted_clip", side_effect=OSError("ledger unavailable")
+            ):
+                result = worker.process_scheduled_posts_once(poster=poster, now=datetime(2026, 10, 1, 0, 9, 0))
+                saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+        finally:
+            folder.cleanup()
+        self.assertEqual(result["failed"], 0)
+        self.assertEqual(saved["status"], "published")
+        self.assertEqual(saved["post_fb_id"], "video-confirmed")
+        self.assertFalse(saved["retryable"])
+        self.assertEqual(saved["first_comment_status"], "generation_failed")
+        self.assertIn("ledger unavailable", saved["ledger_error"])
+        poster.publish_reel.assert_called_once()
 
     def test_worker_holds_due_post_while_content_package_is_running(self):
         from src.publisher import first_comment_queue

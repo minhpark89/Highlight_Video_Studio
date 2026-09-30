@@ -203,7 +203,7 @@ class ReleaseGuardTests(unittest.TestCase):
         self.assertTrue(result.get_json()["success"])
         self.assertEqual(post.call_args.args[0], "https://images.test/v1/images/generations")
         self.assertEqual(post.call_args.kwargs["json"], {
-            "model": "ag/gemini-3.1-flash-image",
+            "model": "image-1",
             "prompt": "A simple blue circle on white background",
             "n": 1,
             "size": "auto",

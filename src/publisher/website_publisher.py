@@ -141,8 +141,9 @@ def get_clip_metadata(clip_filename: str) -> dict:
     Tìm thông tin video gốc từ jobs.json hoặc crawled_videos.json.
     Tuyệt đối loại bỏ triệt để mọi chữ 'Clip 1', 'Clip 2', 'job_...', 'Video Highlight'.
     """
-    jobs_file = HVS_DIR / "jobs.json"
-    crawled_file = HVS_DIR / "crawled_videos.json"
+    data_root = _runtime_data_root()
+    jobs_file = data_root / "jobs.json"
+    crawled_file = data_root / "crawled_videos.json"
 
     meta = {
         "clip_filename": clip_filename,
@@ -205,13 +206,13 @@ def get_clip_metadata(clip_filename: str) -> dict:
 
     # Kiểm tra file video gốc dài trong downloads/
     if meta.get("job_id"):
-        long_path = HVS_DIR / "downloads" / f"{meta['job_id']}.mp4"
+        long_path = data_root / "downloads" / f"{meta['job_id']}.mp4"
         if long_path.exists():
             meta["long_video_path"] = str(long_path)
     source_path = Path(str(meta.get("source_video_path") or ""))
     if not source_path.is_absolute():
-        source_path = HVS_DIR / source_path
-    if source_path.exists():
+        source_path = data_root / source_path
+    if source_path.is_file() and source_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm"):
         meta["source_video_path"] = str(source_path)
     elif meta.get("long_video_path"):
         meta["source_video_path"] = meta["long_video_path"]
@@ -496,76 +497,50 @@ def upload_long_video_to_public_stream(meta: dict, clip_filename: str) -> str:
     return public_url
 
 def extract_and_upload_article_assets(clip_filename: str, video_title: str) -> tuple:
-    """
-    1. Tạo ảnh Hook bằng AI Gemini (gemini-3.1-flash-image) chuẩn hình mẫu boss gửi.
-    2. Upload ảnh Hook lên CDN để làm Thumbnail đầu trang (og:image / first comment).
-    3. Trích xuất 2 frame từ video làm ảnh minh họa diễn biến trong bài.
-    """
-    cfg_data, cfg_file = get_website_config()
-    sess = None
-    svc = None
-    if HAS_WEBSITE_SVC and cfg_file.exists():
-        svc = WebsiteArticleService(str(cfg_file))
-        sess = _BackendSession(svc.cfg)
-        svc._ensure_session(sess)
+    """Use the original long-form source for non-AI hero and article images."""
+    _, cfg_file = get_website_config()
+    if not HAS_WEBSITE_SVC or not cfg_file.exists():
+        return "", []
+    svc = WebsiteArticleService(str(cfg_file))
+    sess = _BackendSession(svc.cfg)
+    svc._ensure_session(sess)
+    meta = get_clip_metadata(clip_filename)
+    youtube_id = extract_youtube_video_id(meta.get("youtube_id") or meta.get("youtube_url"))
+    source_path = next((str(path) for path in (
+        meta.get("source_video_path"), meta.get("long_video_path")
+    ) if path and Path(path).is_file()), "")
+    hero = ""
+    if get_image_provider_config()["model"] != "__video_frame__":
+        generated = generate_llm_hook_image(video_title)
+        if generated and _valid_image_file(generated, landscape=True):
+            try:
+                hero = svc._presign_and_upload(sess, generated) or ""
+            except Exception as exc:
+                logger.warning("AI hook upload failed: %s", exc)
 
-    # 1. Sinh ảnh Hook LLM
-    hook_img_local = generate_llm_hook_image(video_title)
-    hero_cdn_url = ""
-
-    if hook_img_local and os.path.exists(hook_img_local) and sess:
-        try:
-            hero_cdn_url = svc._presign_and_upload(sess, hook_img_local)
-            logger.info(f"Uploaded LLM Hook image to CDN: {hero_cdn_url}")
-        except Exception as _e_hook:
-            logger.warning(f"Failed to upload LLM Hook image to CDN: {_e_hook}")
-
-    # 2. Trích xuất ảnh minh họa từ video
-    body_imgs_cdn = []
-    video_path = HVS_DIR / "output" / clip_filename
-    if not video_path.exists():
-        video_path = HVS_DIR / "downloads" / clip_filename
-
-    if video_path.exists() and sess:
-        try:
-            if HAS_CV2:
-                cap = cv2.VideoCapture(str(video_path))
-                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                if total_frames > 10:
-                    for idx, pct in enumerate([0.40, 0.80]):
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, int(total_frames * pct))
-                        ret, frame = cap.read()
-                        if ret:
-                            fpath = HVS_DIR / "temp" / f"body_frame_{Path(clip_filename).stem}_{idx}.jpg"
-                            cv2.imwrite(str(fpath), frame)
-                            try:
-                                cdn_link = svc._presign_and_upload(sess, str(fpath))
-                                body_imgs_cdn.append(cdn_link)
-                            except Exception:
-                                pass
-                cap.release()
-            else:
-                ffmpeg_bin = str(HVS_DIR / "bin" / "ffmpeg.exe")
-                if not os.path.exists(ffmpeg_bin):
-                    ffmpeg_bin = "ffmpeg"
-                for idx, ss in enumerate(["00:00:03", "00:00:08"]):
-                    fpath = HVS_DIR / "temp" / f"body_frame_{Path(clip_filename).stem}_{idx}.jpg"
-                    fpath.parent.mkdir(parents=True, exist_ok=True)
-                    subprocess.run([ffmpeg_bin, "-y", "-ss", ss, "-i", str(video_path), "-vframes", "1", "-q:v", "2", str(fpath)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    if fpath.exists():
-                        try:
-                            cdn_link = svc._presign_and_upload(sess, str(fpath))
-                            body_imgs_cdn.append(cdn_link)
-                        except Exception:
-                            pass
-        except Exception as e:
-            logger.warning(f"Error extracting body frames: {e}")
-
-    # Fallback nếu LLM hook lỗi thì lấy frame đầu
-    if not hero_cdn_url and body_imgs_cdn:
-        hero_cdn_url = body_imgs_cdn[0]
-
-    return hero_cdn_url, body_imgs_cdn
+    images = []
+    if source_path:
+        # Never silently crop the short portrait highlight into a fake landscape image.
+        for index, (start, end) in enumerate(((meta.get("clip_start"), meta.get("clip_end")), (None, None))):
+            frame = select_smart_video_frame(source_path, start, end,
+                str(HVS_DIR / "temp" / f"source_frame_{Path(clip_filename).stem}_{index}.jpg"))
+            if not frame:
+                continue
+            try:
+                url = svc._presign_and_upload(sess, frame)
+                if url:
+                    images.append(url)
+            except Exception as exc:
+                logger.warning("Original-source frame upload failed: %s", exc)
+    if not hero and images:
+        hero = images[0]
+    if not hero and youtube_id:
+        hero = f"https://i.ytimg.com/vi/{youtube_id}/hqdefault.jpg"
+    if not hero:
+        raise WebsiteServiceError("Không có ảnh ngang từ video gốc hoặc YouTube; không dùng frame clip dọc")
+    if not images and youtube_id:
+        images = [f"https://i.ytimg.com/vi/{youtube_id}/hqdefault.jpg"]
+    return hero, images[:2]
 
 def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: list, video_stream_url: str = "", youtube_id: str = "") -> tuple:
     """

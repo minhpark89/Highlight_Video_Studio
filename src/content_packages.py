@@ -402,8 +402,8 @@ def retry_package_component(package_id, component, mode=None):
     return {"component": component, "package": merged, "item": item}
 
 
-def retry_package(package_id):
-    """Put a failed/retryable package back in the worker queue."""
+def retry_package(package_id, mode=None):
+    """Put a failed/retryable package back in the worker queue with optional mode."""
     with _LOCK:
         items = _read(QUEUE_FILE, [])
         item = next((entry for entry in items if entry.get("id") == package_id), None)
@@ -411,6 +411,10 @@ def retry_package(package_id):
             return None
         if item.get("status") not in ("failed", "retryable"):
             return dict(item)
+        if mode is not None:
+            if mode not in ("auto", "llm", "no_llm"):
+                raise ValueError("Invalid content generation mode")
+            item["mode"] = mode
         item.update({"status": "queued", "error": "", "updated_at": _now()})
         _write(QUEUE_FILE, items)
         return dict(item)

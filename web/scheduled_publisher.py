@@ -16,7 +16,7 @@ from multi_pc.data_root import ProcessLease
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 POSTS_FILE = canonical_posts_file()
-POSTED_CLIPS_FILE = BASE_DIR / "posted_clips.json"
+POSTED_CLIPS_FILE = POSTS_FILE.parent / "posted_clips.json"
 OUTPUT_DIR = BASE_DIR / "output"
 SCHEDULER_HEARTBEAT_FILE = BASE_DIR / "data" / "scheduler_heartbeat.json"
 
@@ -116,9 +116,16 @@ def _record_posted_clip(clip_filename):
         posted_list = []
         if POSTED_CLIPS_FILE.exists():
             posted_list = json.loads(POSTED_CLIPS_FILE.read_text(encoding="utf-8"))
+        if not isinstance(posted_list, list):
+            raise ValueError("posted_clips ledger must be a JSON array")
         if clip_filename not in posted_list:
             posted_list.append(clip_filename)
-            POSTED_CLIPS_FILE.write_text(json.dumps(posted_list, indent=2), encoding="utf-8")
+            temp = POSTED_CLIPS_FILE.with_name(POSTED_CLIPS_FILE.name + ".tmp")
+            try:
+                temp.write_text(json.dumps(posted_list, indent=2), encoding="utf-8")
+                temp.replace(POSTED_CLIPS_FILE)
+            finally:
+                temp.unlink(missing_ok=True)
 
 
 def _process_scheduled_posts_once(
@@ -312,25 +319,32 @@ def _process_scheduled_posts_once(
                 "retryable": False,
             })
 
+            # Persist the Meta object id before optional local/comment side effects.
+            # A comment or ledger failure must never turn a confirmed Reel into a
+            # failed Reel that an operator could inadvertently publish twice.
+            save_posts(posts)
+            try:
+                _record_posted_clip(clip_filename)
+            except Exception as exc:
+                post["ledger_error"] = sanitize_error(exc)
             if first_comment:
-                comment_result = poster.post_first_comment(facebook_id, page_token, first_comment)
-                if comment_result.get("success"):
-                    post["comment_id"] = comment_result.get("comment_id")
-                    post["first_comment_status"] = "posted"
-                    post["first_comment_error"] = ""
-                else:
-                    queued = enqueue_first_comment(
-                        facebook_id,
-                        page_token,
-                        first_comment,
-                        int(current_dt.timestamp()) + 30,
-                        post_id=post_id,
-                    )
-                    post["first_comment_status"] = "pending_retry"
-                    post["first_comment_error"] = comment_result.get("error", "Không thể đăng First Comment")
-                    post["first_comment_queue_id"] = queued.get("queue_id")
-
-            _record_posted_clip(clip_filename)
+                try:
+                    comment_result = poster.post_first_comment(facebook_id, page_token, first_comment)
+                    if comment_result.get("success"):
+                        post["comment_id"] = comment_result.get("comment_id")
+                        post["first_comment_status"] = "posted"
+                        post["first_comment_error"] = ""
+                    else:
+                        queued = enqueue_first_comment(
+                            facebook_id, page_token, first_comment,
+                            int(current_dt.timestamp()) + 30, post_id=post_id,
+                        )
+                        post["first_comment_status"] = "pending_retry"
+                        post["first_comment_error"] = comment_result.get("error", "Không thể đăng First Comment")
+                        post["first_comment_queue_id"] = queued.get("queue_id")
+                except Exception as exc:
+                    post["first_comment_status"] = "generation_failed"
+                    post["first_comment_error"] = sanitize_error(exc)
         except Exception:
             post.update({
                 "status": "failed",
