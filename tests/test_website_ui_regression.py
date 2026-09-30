@@ -80,6 +80,21 @@ class WebsiteUiRegressionTests(unittest.TestCase):
             "web/index.html and web/templates/index.html must ship the same Website/CMS UI",
         )
 
+    def test_inline_content_studio_renderer_closes_template_literal(self):
+        for path in TEMPLATE_PATHS:
+            with self.subTest(template=path.relative_to(BASE_DIR)):
+                html = path.read_text(encoding="utf-8")
+                self.assertIn(
+                    "</tr>`;      }).join('');",
+                    html,
+                    "Content Studio queue renderer must close its template literal before join()",
+                )
+                self.assertNotIn(
+                    "</tr>      }).join('');",
+                    html,
+                    "Malformed renderer boundary would prevent all inline JavaScript from parsing",
+                )
+
     def test_cms_is_default_and_scp_is_advanced_legacy_option(self):
         for path in TEMPLATE_PATHS:
             with self.subTest(template=path.relative_to(BASE_DIR)):
