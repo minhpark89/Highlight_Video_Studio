@@ -991,6 +991,16 @@
                   <button type="button" class="btn btn-secondary btn-sm text-danger" onclick="clearRenderQueue()" title="Hủy các link đang chờ"><i class="bi bi-stop-circle"></i> Hủy hàng chờ</button>
                 </div>
               </div>
+              <div id="queue-concurrency-controls" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin: 0 0 16px; padding: 10px 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px;">
+                <label for="queue-concurrency-mode" style="font-size:12px; color:var(--text-dim);">Job render đồng thời</label>
+                <select id="queue-concurrency-mode" onchange="onQueueConcurrencyModeChange()" style="min-width:110px;">
+                  <option value="auto">Auto (khuyến nghị)</option>
+                  <option value="manual">Tự chọn</option>
+                </select>
+                <input id="queue-concurrency-manual" type="number" min="1" max="4" step="1" value="1" disabled aria-label="Số job render đồng thời thủ công" style="width:72px;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="saveQueueConcurrency()">Áp dụng</button>
+                <span id="queue-concurrency-help" style="font-size:11px; color:var(--text-dim);">Auto dùng cấu hình phần cứng đã kiểm tra; không đổi 8 mảnh tải yt-dlp/job.</span>
+              </div>
 
               <form id="createJobForm">
                 <div style="margin-bottom: 16px;">
@@ -2045,7 +2055,7 @@
             <td><code style="color: #f472b6;">${j.id.substring(0, 8)}</code></td>
             <td>
               <div style="font-weight: 700; max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                ${j.video_title || j.youtube_url}
+                ${escapeHtml(String(j.video_title || j.youtube_url || ''))}
               </div>
               <div style="font-size: 11px; color: var(--text-dim);">${j.duration ? Math.round(j.duration) + 's' : 'Đang tải...'}</div>
             </td>
@@ -2140,7 +2150,7 @@
         ? '<span class="badge" style="background: rgba(34, 197, 94, 0.2); color: #4ade80; font-size: 10px;"><i class="bi bi-check2-all"></i> ĐÃ POST</span>'
         : '<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b; font-size: 10px;"><i class="bi bi-clock"></i> CHƯA POST</span>';
 
-      const title = c.title || c.hook_title || c.filename;
+      const title = escapeHtml(String(c.title || c.hook_title || c.filename || ''));
       const videoSrc = `/api/clips/play/${encodeURIComponent(c.filename)}`;
       const cardId = `clip-card-${startIndex + idx}`;
 
@@ -2164,7 +2174,7 @@
               ${title}
             </div>
             <div style="font-size: 11px; color: #64748b; margin-bottom: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-              ${c.filename}
+              ${escapeHtml(String(c.filename || ''))}
             </div>
 
             <div style="margin-top: auto; display: flex; justify-content: space-between; align-items: center; gap: 6px; border-top: 1px solid #1e293b; padding-top: 10px;">
@@ -3323,7 +3333,7 @@
         <div style="display: flex; flex-direction: column; gap: 16px;">
           <div style="background: #0f172a; border: 1px solid #23304d; border-radius: 8px; padding: 14px;">
             <div style="font-size: 11px; color: #94a3b8; font-weight: 700; text-transform: uppercase;">Nguồn Video</div>
-            <div style="font-size: 14px; font-weight: 700; color: #fff; margin-top: 4px;">${j.video_title || 'Chưa có tiêu đề'}</div>
+            <div style="font-size: 14px; font-weight: 700; color: #fff; margin-top: 4px;">${escapeHtml(String(j.video_title || 'Chưa có tiêu đề'))}</div>
             <div style="font-size: 12px; color: #38bdf8; word-break: break-all; margin-top: 2px;"><a href="${j.youtube_url}" target="_blank" style="color:#38bdf8;">${j.youtube_url}</a></div>
           </div>
           <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
@@ -3342,12 +3352,12 @@
           </div>
           <div style="background: #0f172a; border: 1px solid #23304d; border-radius: 8px; padding: 14px;">
             <div style="font-size: 11px; color: #94a3b8; font-weight: 700; text-transform: uppercase;">Thông điệp tiến độ</div>
-            <div style="font-size: 13px; color: #cbd5e1; margin-top: 6px; font-family: monospace;">${j.progress_msg || 'Không có thông báo tiến độ mới.'}</div>
+            <div style="font-size: 13px; color: #cbd5e1; margin-top: 6px; font-family: monospace;">${escapeHtml(String(j.progress_msg || 'Không có thông báo tiến độ mới.'))}</div>
           </div>
           ${j.error ? `
           <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 14px;">
             <div style="font-size: 11px; color: #ef4444; font-weight: 700; text-transform: uppercase;">Chi tiết lỗi</div>
-            <div style="font-size: 12.5px; color: #fca5a5; margin-top: 6px; font-family: monospace; white-space: pre-wrap;">${j.error}</div>
+            <div style="font-size: 12.5px; color: #fca5a5; margin-top: 6px; font-family: monospace; white-space: pre-wrap;">${escapeHtml(String(j.error))}</div>
           </div>` : ''}
           ${(j.clips && j.clips.length > 0) ? `
           <div>
@@ -3356,7 +3366,7 @@
               ${j.clips.map(c => `
                 <div style="display: flex; justify-content: space-between; align-items: center; background: #0f172a; border: 1px solid #23304d; border-radius: 8px; padding: 10px 14px;">
                   <div>
-                    <div style="font-size: 13px; font-weight: 700; color: #fff;">${c.hook_title || c.filename}</div>
+                    <div style="font-size: 13px; font-weight: 700; color: #fff;">${escapeHtml(String(c.hook_title || c.title || c.filename || ''))}</div>
                     <div style="font-size: 11px; color: #94a3b8;">Thời lượng: ${Math.round(c.duration||0)}s | Điểm viral: ${c.viral_score||95}/100</div>
                   </div>
                   <a href="/api/clips/play/${encodeURIComponent(c.filename)}" download class="btn btn-primary btn-sm"><i class="bi bi-download"></i> Tải clip</a>
@@ -4981,6 +4991,13 @@
       if (document.getElementById('q-stat-queued')) document.getElementById('q-stat-queued').textContent = data.queued || 0;
       if (document.getElementById('q-stat-running')) document.getElementById('q-stat-running').textContent = data.running || 0;
       if (document.getElementById('q-stat-completed')) document.getElementById('q-stat-completed').textContent = data.completed || 0;
+      const runningBadge = document.querySelector('#q-stat-running')?.parentElement;
+      if (runningBadge) runningBadge.innerHTML = `Đang render: <strong id="q-stat-running">${data.running || 0}</strong> / ${data.max_concurrent || 1}`;
+      const mode = document.getElementById('queue-concurrency-mode');
+      const manual = document.getElementById('queue-concurrency-manual');
+      if (mode && document.activeElement !== mode) mode.value = data.concurrency_mode || 'auto';
+      if (manual && document.activeElement !== manual) manual.value = data.max_concurrent || data.auto_concurrency || 1;
+      onQueueConcurrencyModeChange();
 
       const btnPause = document.getElementById('btn-queue-pause');
       const dot = document.getElementById('queue-status-dot');
@@ -5000,6 +5017,26 @@
     } catch(e){}
   }
   setInterval(updateQueueStatus, 3000);
+
+  function onQueueConcurrencyModeChange() {
+    const mode = document.getElementById('queue-concurrency-mode');
+    const manual = document.getElementById('queue-concurrency-manual');
+    const help = document.getElementById('queue-concurrency-help');
+    const isManual = mode && mode.value === 'manual';
+    if (manual) manual.disabled = !isManual;
+    if (help) help.textContent = isManual ? 'Cho 1–4 job đồng thời; giảm mức chỉ áp dụng cho job mới. Không đổi 8 mảnh tải yt-dlp/job.' : 'Auto dùng cấu hình phần cứng đã kiểm tra; không đổi 8 mảnh tải yt-dlp/job.';
+  }
+
+  async function saveQueueConcurrency() {
+    const mode = document.getElementById('queue-concurrency-mode')?.value || 'auto';
+    const manual = document.getElementById('queue-concurrency-manual')?.value;
+    try {
+      const res = await fetch('/api/queue/concurrency', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({mode, manual_concurrency: Number(manual)}) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Không thể cập nhật số luồng');
+      await updateQueueStatus();
+    } catch (e) { alert('Lỗi: ' + e.message); }
+  }
 
   async function toggleQueuePause() {
     const btn = document.getElementById('btn-queue-pause');

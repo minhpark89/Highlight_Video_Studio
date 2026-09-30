@@ -153,7 +153,7 @@ def extract_video_id(url: str) -> str:
     return "video_" + str(int(time.time()))
 
 def get_youtube_transcript(video_id: str):
-    """Láº¥y transcript tá»« YouTube API siÃªu tá»‘c náº¿u cÃ³ phá»¥ Ä‘á» gá»‘c/auto-caption"""
+    """Lấy transcript từ YouTube API siêu tốc nếu có phụ đề gốc/auto-caption"""
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
         yta = YouTubeTranscriptApi()
@@ -177,7 +177,7 @@ def get_youtube_transcript(video_id: str):
         except Exception:
             pass
     except Exception as e:
-        print(f"[Transcript API] KhÃ´ng tÃ¬m tháº¥y transcript trá»±c tiáº¿p tá»« YouTube: {e}")
+        print(f"[Transcript API] Không tìm thấy transcript trực tiếp từ YouTube: {e}")
     # youtube-transcript-api is frequently blocked while yt-dlp can still read
     # the same automatic captions through the authenticated player response.
     return get_ytdlp_transcript(video_id)
@@ -365,14 +365,14 @@ def download_video_and_audio(url: str, job_id: str, update_status=None):
     }
 
 def get_word_level_transcription(audio_path: str, start_time: float, duration: float, update_status=None):
-    """Cáº¯t Ä‘oáº¡n audio ngáº¯n tÆ°Æ¡ng á»©ng vá»›i clip rá»“i dÃ¹ng faster-whisper (CUDA float16) trÃ­ch xuáº¥t tá»«ng tá»« kÃ¨m timestamp"""
+    """Cắt đoạn audio ngắn tương ứng với clip rồi dùng faster-whisper (CUDA float16) trích xuất từng từ kèm timestamp"""
     try:
         from faster_whisper import WhisperModel
     except Exception:
         WhisperModel = None
     clip_audio_tmp = TEMP_DIR / f"sub_slice_{int(time.time()*1000)}.mp3"
     
-    # Cáº¯t chÃ­nh xÃ¡c Ä‘oáº¡n audio ngáº¯n nÃ y Ä‘á»ƒ Whisper nháº­n diá»‡n cá»±c nhanh (chá»‰ máº¥t 1-2s trÃªn GPU)
+    # Cắt chính xác đoạn audio ngắn này để Whisper nhận diện cực nhanh (chỉ mất 1-2s trên GPU)
     cmd_cut = [
         "ffmpeg", "-y",
         "-ss", str(start_time),
@@ -456,9 +456,9 @@ def transcript_segments_to_words(segments, clip_start: float, clip_duration: flo
     return words
 
 def generate_karaoke_ass(words, ass_path: str, style_name="hormozi_yellow"):
-    """Táº¡o file phá»¥ Ä‘á» ASS vá»›i hiá»‡u á»©ng cháº¡y chá»¯ Karaoke (Hormozi style) ná»•i báº­t"""
-    active_color = "&H0022FFFF&" # VÃ ng neon ná»•i báº­t
-    inactive_color = "&H00FFFFFF&" # Tráº¯ng tinh
+    """Tạo file phụ đề ASS với hiệu ứng chạy chữ Karaoke (Hormozi style) nổi bật"""
+    active_color = "&H0022FFFF&" # Vàng neon nổi bật
+    inactive_color = "&H00FFFFFF&" # Trắng tinh
     if style_name == "clean_white":
         active_color = "&H0000FFFF&"
     elif style_name == "neon_green":
@@ -485,7 +485,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f.write(header)
         return ass_path
 
-    # NhÃ³m 3-4 tá»« thÃ nh 1 cá»¥m hiá»ƒn thá»‹ (chunk) giÃºp ngÆ°á»i xem Ä‘á»c lÆ°á»›t dá»… dÃ ng
+    # Nhóm 3-4 từ thành 1 cụm hiển thị (chunk) giúp người xem đọc lướt dễ dàng
     GROUP_SIZE = 3
     lines = []
     clean_words = []
@@ -506,7 +506,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             t_start = format_ass_time(active_item["start"])
             t_end = format_ass_time(active_item["end"])
             
-            # TÃ´ mÃ u tá»« Ä‘ang nÃ³i (Active Karaoke word)
+            # Tô màu từ đang nói (Active Karaoke word)
             parts = []
             for j, item in enumerate(chunk):
                 if j == idx:
@@ -635,9 +635,9 @@ def ask_llm_for_highlights(transcript_items, *args, num_clips=3, target_length="
         hook_duration = kwargs["hook_duration"]
     if "update_status" in kwargs:
         update_status = kwargs["update_status"]
-    """Gá»­i transcript vÃ o LLM Ä‘á»ƒ phÃ¢n tÃ­ch vÃ  trÃ­ch xuáº¥t cÃ¡c Ä‘oáº¡n highlight Ä‘áº¯t giÃ¡ nháº¥t"""
+    """Gửi transcript vào LLM để phân tích và trích xuất các đoạn highlight đắt giá nhất"""
     if update_status:
-        update_status(f"AI ({LLM_MODEL}) Ä‘ang phÃ¢n tÃ­ch ká»‹ch báº£n tÃ¬m {num_clips} highlight...")
+        update_status(f"AI ({LLM_MODEL}) đang phân tích kịch bản tìm {num_clips} highlight...")
     
     lines = []
     for item in transcript_items:
@@ -646,30 +646,30 @@ def ask_llm_for_highlights(transcript_items, *args, num_clips=3, target_length="
     full_text = "\n".join(lines)
     
     if len(full_text) > 35000:
-        full_text = full_text[:35000] + "\n...[Ná»™i dung tiáº¿p tá»¥c]..."
+        full_text = full_text[:35000] + "\n...[Nội dung tiếp tục]..."
 
-    prompt = f"""Báº¡n lÃ  má»™t chuyÃªn gia biÃªn táº­p video ngáº¯n viral (TikTok, Reels, YouTube Shorts) hÃ ng Ä‘áº§u, tÆ°Æ¡ng tá»± nhÆ° thuáº­t toÃ¡n cá»§a Vizard.ai vÃ  OpusClip.
-Nhiá»‡m vá»¥ cá»§a báº¡n lÃ  Ä‘á»c báº£n ghi Ã¢m cÃ³ timestamp dÆ°á»›i Ä‘Ã¢y vÃ  chá»n ra Ä‘Ãºng {num_clips} Ä‘oáº¡n HIGHLIGHT Ä‘áº¯t giÃ¡ nháº¥t Ä‘á»ƒ cáº¯t thÃ nh video ngáº¯n.
+    prompt = f"""Bạn là một chuyên gia biên tập video ngắn viral (TikTok, Reels, YouTube Shorts) hàng đầu, tương tự như thuật toán của Vizard.ai và OpusClip.
+Nhiệm vụ của bạn là đọc bản ghi âm có timestamp dưới đây và chọn ra đúng {num_clips} đoạn HIGHLIGHT đắt giá nhất để cắt thành video ngắn.
 
-TIÃŠU CHÃ Lá»ŒC:
-- Äá»‹nh dáº¡ng yÃªu cáº§u: {criteria} (Táº­p trung vÃ o Ä‘oáº¡n má»Ÿ Ä‘áº§u cÃ³ Hook giáº­t gÃ¢n, cao trÃ o, hoáº·c bÃ i há»c sÃ¢u sáº¯c).
-- Äá»™ dÃ i má»—i clip: khoáº£ng {30 if target_length=='short' else 45} Ä‘áº¿n {60 if target_length=='short' else 75} giÃ¢y.
-- Äiá»ƒm báº¯t Ä‘áº§u (start_time): Pháº£i lÃ  má»™t cÃ¢u nÃ³i má»Ÿ Ä‘áº§u cuá»‘n hÃºt, gÃ¢y tÃ² mÃ² kÃ­ch thÃ­ch cao trÃ o ngay láº­p tá»©c (trong {hook_duration} giÃ¢y Ä‘áº§u tiÃªn cá»§a Ä‘oáº¡n clip).
-- Äiá»ƒm káº¿t thÃºc (end_time): Pháº£i lÃ  Ä‘iá»ƒm káº¿t thÃºc trá»n váº¹n má»™t Ã½ nghÄ© hoáº·c cÃ¢u chuyá»‡n, khÃ´ng bá»‹ cáº¯t giá»¯a chá»«ng khi ngÆ°á»i nÃ³i chÆ°a háº¿t cÃ¢u.
-- TÃ­nh Ä‘iá»ƒm viral (viral_score): tá»« 80 Ä‘áº¿n 99 Ä‘iá»ƒm.
+TIÊU CHÍ LỌC:
+- Định dạng yêu cầu: {criteria} (Tập trung vào đoạn mở đầu có Hook giật gân, cao trào, hoặc bài học sâu sắc).
+- Độ dài mỗi clip: khoảng {30 if target_length=='short' else 45} đến {60 if target_length=='short' else 75} giây.
+- Điểm bắt đầu (start_time): Phải là một câu nói mở đầu cuốn hút, gây tò mò kích thích cao trào ngay lập tức (trong {hook_duration} giây đầu tiên của đoạn clip).
+- Điểm kết thúc (end_time): Phải là điểm kết thúc trọn vẹn một ý nghĩ hoặc câu chuyện, không bị cắt giữa chừng khi người nói chưa hết câu.
+- Tính điểm viral (viral_score): từ 80 đến 99 điểm.
 
-Äá»ŠNH Dáº NG TRáº¢ Vá»€: Tráº£ vá» duy nháº¥t má»™t JSON Array há»£p lá»‡, khÃ´ng giáº£i thÃ­ch gÃ¬ thÃªm:
+ĐỊNH DẠNG TRẢ VỀ: Trả về duy nhất một JSON Array hợp lệ, không giải thích gì thêm:
 [
   {{
     "start_time": 12.5,
     "end_time": 58.0,
-    "hook_title": "TiÃªu Ä‘á» giáº­t gÃ¢n tiáº¿ng Viá»‡t kÃ­ch thÃ­ch tÃ² mÃ²",
-    "summary": "TÃ³m táº¯t ngáº¯n gá»n ná»™i dung clip trong 1 cÃ¢u",
+    "hook_title": "Tiêu đề giật gân tiếng Việt kích thích tò mò",
+    "summary": "Tóm tắt ngắn gọn nội dung clip trong 1 câu",
     "viral_score": 96
   }}
 ]
 
-DÆ°á»›i Ä‘Ã¢y lÃ  transcript cÃ³ timestamp:
+Dưới đây là transcript có timestamp:
 {full_text}
 """
     headers = {
@@ -689,7 +689,7 @@ DÆ°á»›i Ä‘Ã¢y lÃ  transcript cÃ³ timestamp:
         resp.raise_for_status()
         clips = json_from_chat_response(resp)
 
-        # Chuáº©n hÃ³a format keys Ä‘á»ƒ tÆ°Æ¡ng thÃ­ch cáº£ app.py vÃ  pipeline
+        # Chuẩn hóa format keys để tương thích cả app.py và pipeline
         normalized_clips = []
         raw_list = clips if isinstance(clips, list) else [clips]
         for c in raw_list:
@@ -711,7 +711,7 @@ DÆ°á»›i Ä‘Ã¢y lÃ  transcript cÃ³ timestamp:
             })
         return _ensure_highlight_count(normalized_clips, transcript_items, num_clips, target_length)
     except Exception as e:
-        print(f"[LLM Error] KhÃ´ng trÃ­ch xuáº¥t Ä‘Æ°á»£c highlight tá»« LLM: {e}")
+        print(f"[LLM Error] Không trích xuất được highlight từ LLM: {e}")
         return _fallback_highlights(transcript_items, num_clips, target_length)
 
 def render_highlight_clip(source_video: str = None, audio_path: str = None, start_time: float = None, end_time: float = None, output_path: str = None, aspect_ratio="9:16", reframe_mode="face_center", subtitle_style="hormozi_yellow", update_status=None, **kwargs):
@@ -730,15 +730,15 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
         output_path = out_dir / f"{j_id}_clip_{c_idx}.mp4"
     else:
         output_path = Path(output_path)
-    """Cáº¯t, táº¡o phá»¥ Ä‘á» Ä‘á»™ng Karaoke vÃ  render video báº±ng FFmpeg hardware encoder (auto)"""
+    """Cắt, tạo phụ đề động Karaoke và render video bằng FFmpeg hardware encoder (auto)"""
     duration = end_time - start_time
     if duration <= 0:
         duration = 30
         
     if update_status:
-        update_status(f"Äang phÃ¢n tÃ­ch lá»i thoáº¡i vÃ  táº¡o phá»¥ Ä‘á» cháº¡y chá»¯ ({subtitle_style})...")
+        update_status(f"Đang phân tích lời thoại và tạo phụ đề chạy chữ ({subtitle_style})...")
 
-    # 1. Táº¡o phá»¥ Ä‘á» ASS Karaoke tá»« Ä‘oáº¡n audio
+    # 1. Tạo phụ đề ASS Karaoke từ đoạn audio
     ass_path = TEMP_DIR / f"{Path(output_path).stem}.ass"
     words = []
     if subtitle_style and subtitle_style != "none":
@@ -749,14 +749,14 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
             generate_karaoke_ass(words, str(ass_path), style_name=subtitle_style)
 
     if update_status:
-        update_status(f"Äang render video 9:16 ({duration:.1f}s) qua GPU (auto)...")
+        update_status(f"Đang render video 9:16 ({duration:.1f}s) qua GPU (auto)...")
 
-    # 2. XÃ¢y dá»±ng filter FFmpeg theo aspect ratio
+    # 2. Xây dựng filter FFmpeg theo aspect ratio
     if aspect_ratio == "9:16":
         if reframe_mode == "blur_bg":
             vf = "split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=20[bg];[b]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2"
         else:
-            # Crop 9:16 á»Ÿ giá»¯a khung hÃ¬nh (1080x1920)
+            # Crop 9:16 ở giữa khung hình (1080x1920)
             vf = "scale=-1:1920,crop=1080:1920:(in_w-1080)/2:0"
     elif aspect_ratio == "1:1":
         vf = "crop=min(in_w\\,in_h):min(in_w\\,in_h),scale=1080:1080"
@@ -765,12 +765,12 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
 
     pipeline_cfg = config.get("video_pipeline", {}) if isinstance(config.get("video_pipeline"), dict) else {}
 
-    # GhÃ©p filter phá»¥ Ä‘á» ASS náº¿u cÃ³. Video nguá»“n thÆ°á»ng Ä‘Ã£ burn caption sáºµn;
-    # che má» vÃ¹ng caption cá»§a nguá»“n Ä‘á»ƒ trÃ¡nh hai lá»›p chá»¯ chá»“ng nhau sau khi crop 9:16.
+    # Ghép filter phụ đề ASS nếu có. Video nguồn thường đã burn caption sẵn;
+    # che mờ vùng caption của nguồn để tránh hai lớp chữ chồng nhau sau khi crop 9:16.
     if ass_path.exists() and ass_path.stat().st_size > 300:
         if aspect_ratio == "9:16" and pipeline_cfg.get("source_caption_cleanup", True):
             vf = f"{vf},drawbox=x=0:y=ih*0.70:w=iw:h=ih*0.22:color=black@0.90:t=fill"
-        # ÄÆ°á»ng dáº«n cho FFmpeg trÃªn Windows cáº§n escape dáº¥u hai cháº¥m vÃ  gáº¡ch chÃ©o
+        # Đường dẫn cho FFmpeg trên Windows cần escape dấu hai chấm và gạch chéo
         ass_str = str(ass_path).replace("\\", "/").replace(":", "\\:")
         vf = f"{vf},subtitles='{ass_str}'"
     configured = str(pipeline_cfg.get("encoder") or "auto").lower()

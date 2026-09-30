@@ -27,6 +27,12 @@ import uuid
 import threading
 from queue import Queue
 import time
+
+from multi_pc.concurrency import (
+    HARD_MAX_CONCURRENT_RENDERS,
+    bounded_concurrency,
+    resolve_concurrency,
+)
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -83,6 +89,7 @@ from src.publisher.meta_preflight import (
     resolve_page_token,
 )
 from src.llm_response import chat_text_from_response
+from core.text_encoding import repair_mojibake
 
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -408,7 +415,14 @@ def _profile_concurrency_default():
         return 1
 
 
-MAX_CONCURRENT_JOBS = max(1, min(4, int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT_RENDERS", str(_profile_concurrency_default())))))
+AUTO_CONCURRENT_JOBS = max(1, min(
+    HARD_MAX_CONCURRENT_RENDERS,
+    int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT_RENDERS", str(_profile_concurrency_default()))),
+))
+# Keep the existing profile/env default as Auto. A manual choice is runtime-only,
+# bounded, and never changes the encoder or the persisted hardware profile.
+CONCURRENCY_MODE = "auto"
+MAX_CONCURRENT_JOBS = AUTO_CONCURRENT_JOBS
 JOB_QUEUE = Queue()
 ACTIVE_JOB_IDS = set()
 CANCELLED_JOB_IDS = set()
@@ -501,14 +515,14 @@ def index():
 
 @app.route("/api/jobs", methods=["GET"])
 def get_jobs():
-    return jsonify(load_jobs())
+    return jsonify(repair_mojibake(load_jobs()))
 
 @app.route("/api/jobs/<job_id>", methods=["GET"])
 def get_job(job_id):
     jobs = load_jobs()
     for j in jobs:
         if j["id"] == job_id:
-            return jsonify(j)
+            return jsonify(repair_mojibake(j))
     return jsonify({"error": "Job not found"}), 404
 
 @app.route("/api/jobs", methods=["POST"])
@@ -660,7 +674,7 @@ def get_all_clips():
                     "video_source": "Kho video thực tế"
                 })
                 
-    return jsonify(all_clips)
+    return jsonify(repair_mojibake(all_clips))
 
 @app.route("/api/clips/play/<path:filename>")
 def play_clip(filename):
@@ -2400,7 +2414,7 @@ def api_distribute_batch():
                 available_clips.append(p.name)
 
     if not available_clips:
-        return jsonify({"error": "KhÃ´ng cÃ²n video clip má»›i nÃ o chÆ°a Ä‘Äƒng/chÆ°a háº¹n Ä‘á»ƒ phÃ¢n bá»•! HÃ£y render thÃªm hoáº·c kiá»ƒm tra thÆ° má»¥c nguá»“n."}), 400
+        return jsonify({"error": "Không còn video clip mới nào chưa đăng/chưa hẹn để phân bổ! Hãy render thêm hoặc kiểm tra thư mục nguồn."}), 400
 
     now_ts = datetime.now()
     scheduled_count = 0
@@ -2435,7 +2449,7 @@ def api_distribute_batch():
             sched_dt = slot_base_dt + timedelta(minutes=(idx * group_stagger))
             sched_time_str = sched_dt.strftime("%Y-%m-%d %H:%M:%S")
 
-            # Láº¥y thÃ´ng tin video bÃ¡m sÃ¡t ná»™i dung gá»‘c
+            # Lấy thông tin video bám sát nội dung gốc
             meta = get_clip_metadata(clip_fn)
             video_title = meta.get("video_title") or meta.get("clean_title") or f"Highlight Moments #{scheduled_count+1}"
 
@@ -2447,7 +2461,7 @@ def api_distribute_batch():
                 "page_id": pid,
                 "page_name": p_info.get("page_name", f"Fanpage {pid}"),
                 "group_id": group_id,
-                "group_name": group.get("name", "NhÃ³m Fanpage"),
+                "group_name": group.get("name", "Nhóm Fanpage"),
                 "type": "reel",
                 "media_file": clip_fn,
                 "article_url": configured_website_url,
@@ -2493,7 +2507,7 @@ def api_distribute_batch():
         "scheduled_count": scheduled_count,
         "posts_per_page": posts_per_page,
         "website_failed_count": 0,
-        "message": f"ÄÃ£ phÃ¢n bá»• thÃ nh cÃ´ng {scheduled_count} bÃ i viáº¿t cho {len(page_ids)} Fanpage ({posts_per_page} bÃ i/page)!"
+        "message": f"Đã phân bổ thành công {scheduled_count} bài viết cho {len(page_ids)} Fanpage ({posts_per_page} bài/page)!"
     })
 
 SCHEDULE_RULES_FILE = BASE_DIR / "config" / "schedule_rules.json"
@@ -2555,6 +2569,47 @@ def api_tokens_health():
     }
     return jsonify({"success": True, "data": stats})
 
+@app.route("/api/queue/concurrency", methods=["GET", "POST"])
+def api_queue_concurrency():
+    global CONCURRENCY_MODE, MAX_CONCURRENT_JOBS
+    if request.method == "GET":
+        return jsonify({
+            "mode": CONCURRENCY_MODE,
+            "concurrency": MAX_CONCURRENT_JOBS,
+            "auto_concurrency": AUTO_CONCURRENT_JOBS,
+            "max_allowed": HARD_MAX_CONCURRENT_RENDERS,
+            "active": len(ACTIVE_JOB_IDS),
+            "semantics": "simultaneous render jobs; yt-dlp download fragments are unchanged",
+        })
+
+    data = request.get_json(silent=True) or {}
+    try:
+        mode, selected = resolve_concurrency(
+            data.get("mode", "auto"),
+            data.get("manual_concurrency", data.get("concurrency")),
+            AUTO_CONCURRENT_JOBS,
+            maximum=HARD_MAX_CONCURRENT_RENDERS,
+        )
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+
+    # Changing the limit cannot cancel or duplicate work. Lowering it only
+    # affects future leases; already-running jobs finish normally.
+    with QUEUE_LOCK:
+        CONCURRENCY_MODE = mode
+        MAX_CONCURRENT_JOBS = selected
+        active = len(ACTIVE_JOB_IDS)
+    return jsonify({
+        "success": True,
+        "mode": mode,
+        "concurrency": selected,
+        "auto_concurrency": AUTO_CONCURRENT_JOBS,
+        "max_allowed": HARD_MAX_CONCURRENT_RENDERS,
+        "active": active,
+        "semantics": "simultaneous render jobs; yt-dlp download fragments are unchanged",
+    })
+
+
 @app.route("/api/queue/status", methods=["GET"])
 def api_queue_status():
     all_jobs = load_jobs()
@@ -2565,6 +2620,10 @@ def api_queue_status():
     return jsonify({
         "is_paused": IS_QUEUE_PAUSED,
         "max_concurrent": MAX_CONCURRENT_JOBS,
+        "concurrency_mode": CONCURRENCY_MODE,
+        "auto_concurrency": AUTO_CONCURRENT_JOBS,
+        "max_concurrent_allowed": HARD_MAX_CONCURRENT_RENDERS,
+        "active": len(ACTIVE_JOB_IDS),
         "queued": queued_count,
         "running": running_count,
         "completed": completed_count,
@@ -2576,13 +2635,13 @@ def api_queue_status():
 def api_queue_pause():
     global IS_QUEUE_PAUSED
     IS_QUEUE_PAUSED = True
-    return jsonify({"success": True, "is_paused": True, "message": "ÄÃ£ táº¡m dá»«ng nháº­n link má»›i tá»« hÃ ng Ä‘á»£i."})
+    return jsonify({"success": True, "is_paused": True, "message": "Đã tạm dừng nhận link mới từ hàng đợi."})
 
 @app.route("/api/queue/resume", methods=["POST"])
 def api_queue_resume():
     global IS_QUEUE_PAUSED
     IS_QUEUE_PAUSED = False
-    return jsonify({"success": True, "is_paused": False, "message": "ÄÃ£ tiáº¿p tá»¥c xá»­ lÃ½ hÃ ng Ä‘á»£i."})
+    return jsonify({"success": True, "is_paused": False, "message": "Đã tiếp tục xử lý hàng đợi."})
 
 @app.route("/api/queue/clear", methods=["POST"])
 def api_queue_clear():
@@ -2591,11 +2650,11 @@ def api_queue_clear():
     for j in jobs:
         if j.get("status") == "queued":
             j["status"] = "cancelled"
-            j["progress_msg"] = "ÄÃ£ há»§y bá»Ÿi ngÆ°á»i dÃ¹ng"
+            j["progress_msg"] = "Đã hủy bởi người dùng"
             CANCELLED_JOB_IDS.add(j["id"])
             cancelled_count += 1
     save_jobs(jobs)
-    return jsonify({"success": True, "cancelled_count": cancelled_count, "message": f"ÄÃ£ há»§y {cancelled_count} jobs Ä‘ang chá»."})
+    return jsonify({"success": True, "cancelled_count": cancelled_count, "message": f"Đã hủy {cancelled_count} jobs đang chờ."})
 
 @app.route("/api/jobs/<job_id>/cancel", methods=["POST"])
 def api_job_cancel(job_id):
@@ -2604,14 +2663,14 @@ def api_job_cancel(job_id):
     for j in jobs:
         if j.get("id") == job_id:
             j["status"] = "cancelled"
-            j["progress_msg"] = "ÄÃ£ dá»«ng/há»§y tiáº¿n trÃ¬nh"
+            j["progress_msg"] = "Đã dừng/hủy tiến trình"
             CANCELLED_JOB_IDS.add(job_id)
             found = True
             break
     if found:
         save_jobs(jobs)
-        return jsonify({"success": True, "message": f"ÄÃ£ há»§y job {job_id}"})
-    return jsonify({"error": "Job khÃ´ng tá»“n táº¡i"}), 404
+        return jsonify({"success": True, "message": f"Đã hủy job {job_id}"})
+    return jsonify({"error": "Job không tồn tại"}), 404
 
 
 @app.route("/api/pages/update_binding", methods=["POST"])
@@ -2622,7 +2681,7 @@ def api_update_page_binding():
     token_id = str(data.get("token_id", "")).strip()
 
     if not page_id:
-        return jsonify({"success": False, "error": "Thiáº¿u page_id"}), 400
+        return jsonify({"success": False, "error": "Thiếu page_id"}), 400
 
     pages = page_manager.list_pages()
     groups = page_manager.list_groups()
@@ -2630,15 +2689,15 @@ def api_update_page_binding():
 
     target_page = next((p for p in pages if str(p.get("page_id") or p.get("id")) == page_id), None)
     if not target_page:
-        return jsonify({"success": False, "error": "KhÃ´ng tÃ¬m tháº¥y Fanpage"}), 404
+        return jsonify({"success": False, "error": "Không tìm thấy Fanpage"}), 404
 
-    # 1. Cáº­p nháº­t nhÃ³m
+    # 1. Cập nhật nhóm
     if group_id:
         matched_grp = next((g for g in groups if g.get("id") == group_id or g.get("name") == group_id), None)
         if matched_grp:
             target_page["group_ids"] = [matched_grp.get("id")]
             target_page["group_name"] = matched_grp.get("name")
-            # Cáº­p nháº­t page_id vÃ o group náº¿u chÆ°a cÃ³
+            # Cập nhật page_id vào group nếu chưa có
             p_ids = matched_grp.get("page_ids", [])
             if page_id not in p_ids:
                 p_ids.append(page_id)
@@ -2646,13 +2705,13 @@ def api_update_page_binding():
                 page_manager.save_groups(groups)
     else:
         target_page["group_ids"] = []
-        target_page["group_name"] = "ChÆ°a nhÃ³m"
+        target_page["group_name"] = "Chưa nhóm"
 
-    # 2. Cáº­p nháº­t token: only select a discovery-backed binding for this Page.
+    # 2. Cập nhật token: only select a discovery-backed binding for this Page.
     if token_id:
         matched_tok = next((t for t in tokens if str(t.get("id")) == token_id), None)
         if not matched_tok:
-            return jsonify({"success": False, "error": "Token khÃ´ng tá»“n táº¡i trong Vault"}), 404
+            return jsonify({"success": False, "error": "Token không tồn tại trong Vault"}), 404
         binding = (target_page.get("token_bindings") or {}).get(token_id)
         if not binding or str(binding.get("verified_page_id") or "") != page_id:
             return jsonify({
@@ -2666,12 +2725,12 @@ def api_update_page_binding():
         target_page["mapping_verified_at"] = binding.get("verified_at", "")
     else:
         target_page["token_id"] = ""
-        target_page["token_name"] = "AutoPool (Tá»± Ä‘á»™ng)"
+        target_page["token_name"] = "AutoPool (Tự động)"
 
     page_manager.save_pages(pages)
     return jsonify({
         "success": True, 
-        "message": f"ÄÃ£ cáº­p nháº­t NhÃ³m '{target_page.get('group_name')}' & Token '{target_page.get('token_name')}' cho trang {target_page.get('page_name')}!"
+        "message": f"Đã cập nhật Nhóm '{target_page.get('group_name')}' & Token '{target_page.get('token_name')}' cho trang {target_page.get('page_name')}!"
     })
 
 
@@ -2682,12 +2741,12 @@ def api_assign_token():
     token_id = str(data.get("token_id", ""))
     
     if not page_id:
-        return jsonify({"error": "Thiáº¿u page_id"}), 400
+        return jsonify({"error": "Thiếu page_id"}), 400
         
     pages = page_manager.list_pages()
     token_entry = token_vault.get_token_by_id(token_id) if token_id else None
     if token_id and not token_entry:
-        return jsonify({"error": "Token khÃ´ng tá»“n táº¡i trong Vault"}), 404
+        return jsonify({"error": "Token không tồn tại trong Vault"}), 404
     updated = False
     for p in pages:
         if str(p.get("page_id")) == page_id:
@@ -2702,15 +2761,15 @@ def api_assign_token():
                 p["mapping_status"] = "VERIFIED"
                 p["mapping_verified_at"] = binding.get("verified_at", "")
             else:
-                p["token_name"] = "AutoPool (Tá»± Ä‘á»™ng)"
+                p["token_name"] = "AutoPool (Tự động)"
                 p.pop("page_token", None)
             updated = True
             break
             
     if updated:
         page_manager.save_pages(pages)
-        return jsonify({"success": True, "message": f"ÄÃ£ gÃ¡n Token {token_id} cho Page {page_id}"})
-    return jsonify({"error": "KhÃ´ng tÃ¬m tháº¥y Page"}), 404
+        return jsonify({"success": True, "message": f"Đã gán Token {token_id} cho Page {page_id}"})
+    return jsonify({"error": "Không tìm thấy Page"}), 404
 
 @app.route("/api/pages/batch_assign_token", methods=["POST"])
 def api_batch_assign_token():
@@ -2718,14 +2777,14 @@ def api_batch_assign_token():
     pages = page_manager.list_pages()
     count = 0
 
-    # 1. Há»— trá»£ dáº¡ng máº£ng gÃ¡n chi tiáº¿t tá»«ng page (round-robin assignments)
+    # 1. Hỗ trợ dạng mảng gán chi tiết từng page (round-robin assignments)
     assignments = data.get("assignments")
     if isinstance(assignments, list) and assignments:
         assign_map = {str(a.get("page_id")): str(a.get("token_id")) for a in assignments if a.get("page_id") and a.get("token_id")}
         vault_map = {str(t.get("id")): t for t in token_vault.list_tokens(mask=False)}
         unknown_ids = sorted({tid for tid in assign_map.values() if tid not in vault_map})
         if unknown_ids:
-            return jsonify({"error": "Token khÃ´ng tá»“n táº¡i trong Vault: " + ", ".join(unknown_ids)}), 404
+            return jsonify({"error": "Token không tồn tại trong Vault: " + ", ".join(unknown_ids)}), 404
         blocked = []
         for p in pages:
             pid = str(p.get("page_id"))
@@ -2745,20 +2804,20 @@ def api_batch_assign_token():
                 "success": False,
                 "stage": "mapping",
                 "code": "cross_bound_mapping",
-                "action": "Sync tá»«ng Page tá»« Ä‘Ãºng credential; khÃ´ng thá»ƒ gÃ¡n token theo vá»‹ trÃ­ hoáº·c vÃ²ng trÃ²n.",
+                "action": "Sync từng Page từ đúng credential; không thể gán token theo vị trí hoặc vòng tròn.",
                 "blocked": blocked,
             }), 409
         page_manager.save_pages(pages)
-        return jsonify({"success": True, "count": count, "message": f"ÄÃ£ tá»± Ä‘á»™ng xoay vÃ²ng chia Ä‘á»u token cho {count} trang."})
+        return jsonify({"success": True, "count": count, "message": f"Đã tự động xoay vòng chia đều token cho {count} trang."})
 
-    # 2. Há»— trá»£ dáº¡ng gÃ¡n 1 token_id cho danh sÃ¡ch page_ids
+    # 2. Hỗ trợ dạng gán 1 token_id cho danh sách page_ids
     token_id = str(data.get("token_id", ""))
     page_ids = [str(pid) for pid in data.get("page_ids", [])]
     if not token_id:
-        return jsonify({"error": "Thiáº¿u token_id hoáº·c danh sÃ¡ch phÃ¢n bá»• assignments"}), 400
+        return jsonify({"error": "Thiếu token_id hoặc danh sách phân bổ assignments"}), 400
     token_entry = token_vault.get_token_by_id(token_id)
     if not token_entry:
-        return jsonify({"error": "Token khÃ´ng tá»“n táº¡i trong Vault"}), 404
+        return jsonify({"error": "Token không tồn tại trong Vault"}), 404
 
     for p in pages:
         if str(p.get("page_id")) in page_ids:
@@ -2768,7 +2827,7 @@ def api_batch_assign_token():
                     "success": False,
                     "stage": "mapping",
                     "code": "cross_bound_mapping",
-                    "action": "Token khÃ´ng cÃ³ mapping Ä‘Æ°á»£c xÃ¡c minh cho má»™t hoáº·c nhiá»u Page Ä‘Ã£ chá»n.",
+                    "action": "Token không có mapping được xác minh cho một hoặc nhiều Page đã chọn.",
                 }), 409
             p["token_id"] = token_id
             p["token_name"] = token_entry.get("name", "System User")
@@ -2776,18 +2835,18 @@ def api_batch_assign_token():
             count += 1
 
     page_manager.save_pages(pages)
-    return jsonify({"success": True, "count": count, "message": f"ÄÃ£ gÃ¡n cá»©ng Token cho {count} trang."})
+    return jsonify({"success": True, "count": count, "message": f"Đã gán cứng Token cho {count} trang."})
 
 
 @app.route("/api/clips/purge_posted", methods=["POST"])
 def api_purge_posted_clips():
     """
-    XÃ³a táº¥t cáº£ cÃ¡c video clip Ä‘Ã£ Ä‘Æ°á»£c Ä‘Ã¡nh dáº¥u 'is_posted' hoáº·c Ä‘Ã£ Ä‘Æ°a vÃ o lá»‹ch thÃ nh cÃ´ng
-    giÃºp giáº£i phÃ³ng dung lÆ°á»£ng á»• D vÃ  chá»‘ng Ä‘Äƒng trÃ¹ng video.
+    Xóa tất cả các video clip đã được đánh dấu 'is_posted' hoặc đã đưa vào lịch thành công
+    giúp giải phóng dung lượng ổ D và chống đăng trùng video.
     """
     posted_file = BASE_DIR / "posted_clips.json"
     if not posted_file.exists():
-        return jsonify({"success": True, "deleted_count": 0, "freed_mb": 0, "message": "ChÆ°a cÃ³ clip nÃ o Ä‘Æ°á»£c Ä‘Ã¡nh dáº¥u Ä‘Ã£ Ä‘Äƒng."})
+        return jsonify({"success": True, "deleted_count": 0, "freed_mb": 0, "message": "Chưa có clip nào được đánh dấu đã đăng."})
     
     try:
         posted_data = json.loads(posted_file.read_text(encoding="utf-8"))
@@ -2795,7 +2854,7 @@ def api_purge_posted_clips():
         posted_data = []
 
     if not posted_data:
-        return jsonify({"success": True, "deleted_count": 0, "freed_mb": 0, "message": "Danh sÃ¡ch Ä‘Ã£ Ä‘Äƒng rá»—ng."})
+        return jsonify({"success": True, "deleted_count": 0, "freed_mb": 0, "message": "Danh sách đã đăng rỗng."})
 
     deleted_count = 0
     total_freed_bytes = 0
@@ -2812,7 +2871,7 @@ def api_purge_posted_clips():
             except Exception as err:
                 print(f"[Purge] Error deleting {fn}: {err}")
 
-        # Äá»“ng bá»™ xoÃ¡ khá»i jobs.json
+        # Đồng bộ xoá khỏi jobs.json
         for j in jobs:
             clips = j.get("clips", [])
             new_clips = [c for c in clips if c.get("filename") != fn]
@@ -2828,19 +2887,19 @@ def api_purge_posted_clips():
         "success": True,
         "deleted_count": deleted_count,
         "freed_mb": freed_mb,
-        "message": f"ÄÃ£ xÃ³a thÃ nh cÃ´ng {deleted_count} video Ä‘Ã£ dÃ¹ng, giáº£i phÃ³ng {freed_mb} MB trÃªn á»• D!"
+        "message": f"Đã xóa thành công {deleted_count} video đã dùng, giải phóng {freed_mb} MB trên ổ D!"
     })
 
 @app.route("/api/website/publish_draft", methods=["POST"])
 def api_publish_website_article():
     """
-    Táº¡o bÃ i viáº¿t web kÃ¨m video dÃ i trá»±c tiáº¿p (khÃ´ng link ngoÃ i) vÃ  áº£nh hook gÃ¢y tÃ² mÃ².
-    Sinh link chÃ­nh thá»©c Ä‘á»ƒ Ä‘Æ°a vÃ o First Comment kÃ©o traffic vá» web.
+    Tạo bài viết web kèm video dài trực tiếp (không link ngoài) và ảnh hook gây tò mò.
+    Sinh link chính thức để đưa vào First Comment kéo traffic về web.
     """
     data = request.json or {}
     title = data.get("title", "").strip()
     summary = data.get("summary", "").strip()
-    hook_img = data.get("hook_image", "") # Ä‘Æ°á»ng dáº«n hoáº·c URL áº£nh hook
+    hook_img = data.get("hook_image", "") # đường dẫn hoặc URL ảnh hook
     long_video = data.get("video_path", "")
     youtube_url = data.get("youtube_url", "")
     dry_run = data.get("dry_run", False)
@@ -2848,24 +2907,24 @@ def api_publish_website_article():
 
 
     if not title:
-        return jsonify({"success": False, "error": "Thiáº¿u tiÃªu Ä‘á» bÃ i viáº¿t"}), 400
+        return jsonify({"success": False, "error": "Thiếu tiêu đề bài viết"}), 400
 
     cfg_file = BASE_DIR / "config" / "website_config.json"
     if not HAS_WEBSITE_SVC:
-        return jsonify({"success": False, "error": "Báº£n cÃ i thiáº¿u WebsiteArticleService"}), 500
+        return jsonify({"success": False, "error": "Bản cài thiếu WebsiteArticleService"}), 500
 
     try:
         svc = WebsiteArticleService(str(cfg_file))
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
 
-    # Æ¯u tiÃªn YouTube embed Ä‘á»ƒ khÃ´ng upload MP4 lÃªn server. Luá»“ng upload cÅ© chá»‰
-    # lÃ  fallback tÆ°Æ¡ng thÃ­ch cho draft khÃ´ng cÃ³ nguá»“n YouTube.
+    # Ưu tiên YouTube embed để không upload MP4 lên server. Luồng upload cũ chỉ
+    # là fallback tương thích cho draft không có nguồn YouTube.
     youtube_id = extract_youtube_video_id(youtube_url)
     public_video_url = ""
     local_video_path = None
     if youtube_url and not youtube_id:
-        return jsonify({"success": False, "error": "Link YouTube khÃ´ng há»£p lá»‡"}), 400
+        return jsonify({"success": False, "error": "Link YouTube không hợp lệ"}), 400
     if youtube_id:
         public_video_url = f"https://www.youtube.com/watch?v={youtube_id}"
     elif str(long_video).startswith("https://"):
@@ -2892,11 +2951,11 @@ def api_publish_website_article():
             except Exception:
                 continue
         if not local_video_path:
-            return jsonify({"success": False, "error": "KhÃ´ng tÃ¬m tháº¥y video local há»£p lá»‡ Ä‘á»ƒ upload"}), 400
+            return jsonify({"success": False, "error": "Không tìm thấy video local hợp lệ để upload"}), 400
         try:
             public_video_url = svc.upload_video(str(local_video_path))
         except Exception as exc:
-            return jsonify({"success": False, "error": f"Upload video tháº¥t báº¡i: {exc}"}), 502
+            return jsonify({"success": False, "error": f"Upload video thất bại: {exc}"}), 502
 
     safe_title = html.escape(title)
     safe_summary = html.escape(summary or title)
@@ -2909,7 +2968,7 @@ def api_publish_website_article():
         <div class="video-container" style="margin: 20px 0; text-align: center;">
           <video controls playsinline preload="metadata" style="width: 100%; max-width: 720px; border-radius: 8px; background: #000;" poster="{safe_hook_url}">
             <source src="{safe_video_url}" type="video/mp4">
-            TrÃ¬nh duyá»‡t cá»§a báº¡n khÃ´ng há»— trá»£ phÃ¡t video trá»±c tiáº¿p.
+            Trình duyệt của bạn không hỗ trợ phát video trực tiếp.
           </video>
         </div>
         """
@@ -2917,7 +2976,7 @@ def api_publish_website_article():
     <div class="article-content">
       <p class="lead-summary"><strong>{safe_summary}</strong></p>
       {video_html}
-      <p>Xem toÃ n bá»™ diá»…n biáº¿n chi tiáº¿t vÃ  cáº­p nháº­t má»›i nháº¥t á»Ÿ trÃªn.</p>
+      <p>Xem toàn bộ diễn biến chi tiết và cập nhật mới nhất ở trên.</p>
     </div>
     """
 
@@ -2933,11 +2992,11 @@ def api_publish_website_article():
         )
         article_url = res.get("article_url")
         if not article_url:
-            raise WebsiteServiceError("CMS khÃ´ng tráº£ article_url")
+            raise WebsiteServiceError("CMS không trả article_url")
     except Exception as exc:
-        return jsonify({"success": False, "error": f"ÄÄƒng bÃ i CMS tháº¥t báº¡i: {exc}"}), 502
+        return jsonify({"success": False, "error": f"Đăng bài CMS thất bại: {exc}"}), 502
 
-    # First comment kÃ­ch thÃ­ch tÃ² mÃ² cÃ³ kÃ¨m áº£nh hook & link web
+    # First comment kích thích tò mò có kèm ảnh hook & link web
     try:
         from src.publisher.website_publisher import generate_curiosity_comment_with_llm
         first_comment = generate_curiosity_comment_with_llm(title, article_url, enable_llm=True)
@@ -2988,10 +3047,10 @@ def api_content_studio_generate():
         meta = get_clip_metadata(clip)
         title = str(meta.get("video_title") or meta.get("clean_title") or "").strip()
     if not title:
-        return jsonify({"success": False, "error": "Thiáº¿u tiÃªu Ä‘á» hoáº·c clip Ä‘á»ƒ táº¡o ná»™i dung"}), 400
+        return jsonify({"success": False, "error": "Thiếu tiêu đề hoặc clip để tạo nội dung"}), 400
     mode = str(payload.get("mode") or "auto")
     if mode not in ("auto", "llm", "no_llm"):
-        return jsonify({"success": False, "error": "mode pháº£i lÃ  auto, llm hoáº·c no_llm"}), 400
+        return jsonify({"success": False, "error": "mode phải là auto, llm hoặc no_llm"}), 400
     component = str(payload.get("component") or "").strip()
     try:
         result = generate_package(
@@ -3011,7 +3070,7 @@ def api_content_studio_enqueue():
     clip = str(payload.get("clip_filename") or payload.get("filename") or "").strip()
     title = str(payload.get("title") or "").strip()
     if not clip and not title:
-        return jsonify({"success": False, "error": "Cáº§n clip_filename hoáº·c title Ä‘á»ƒ xáº¿p hÃ ng"}), 400
+        return jsonify({"success": False, "error": "Cần clip_filename hoặc title để xếp hàng"}), 400
     item = enqueue_content_package(
         clip_filename=clip,
         title=title or clip,
@@ -3103,7 +3162,7 @@ def api_content_studio_retry():
     package_id = str(payload.get("id") or "").strip()
     item = get_package(package_id) if package_id else None
     if not item:
-        return jsonify({"success": False, "error": "KhÃ´ng tÃ¬m tháº¥y Content Package"}), 404
+        return jsonify({"success": False, "error": "Không tìm thấy Content Package"}), 404
     component = str(payload.get("component") or "").strip()
     try:
         if component:
