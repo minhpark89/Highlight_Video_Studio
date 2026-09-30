@@ -5888,20 +5888,26 @@
       }
       tbody.innerHTML = items.slice().reverse().map(function(item) {
         const mode = item.mode || 'auto';
-        const source = (item.result && item.result.source) || (item.status === 'failed' ? 'error' : '—');
+        const source = (item.result && item.result.source) || (item.status === 'failed' ? 'error' : '-');
         const pending = item.status === 'queued' ? 'queued' : item.status;
+        const cs = item.component_statuses || {};
+        const mark = (key, label) => {
+          const state = cs[key] || {};
+          const ok = state.present || state.status === 'ready';
+          const text = ok ? 'C?' : (state.status === 'pending' ? '?ang t?o' : (state.status === 'retryable' ? 'L?i / th? l?i' : 'Ch?a c?'));
+          return `<span title="${csEscape(state.value || '')}" style="color:${ok ? '#4ade80' : (state.status === 'pending' ? '#fbbf24' : '#f87171')};">${label}: ${text}</span>`;
+        };
         return `<tr>
-          <td>${csEscape(item.clip_filename || '—')}</td>
-          <td>${csEscape(item.title || '—')}</td>
+          <td>${csEscape(item.clip_filename || '-')}</td>
+          <td>${csEscape(item.title || '-')}</td>
           <td>${csEscape(mode)}</td>
           <td>${csEscape(pending)}</td>
-          <td>${csEscape(source)}</td>
-          <td>
-            <button class="btn btn-sm btn-outline" onclick="csRetryComponent('${csEscape(item.id)}','hero_title')">Tạo lại tiêu đề</button>
-            <button class="btn btn-sm btn-outline" onclick="csRetryComponent('${csEscape(item.id)}','first_comment')">Tạo lại first comment</button>
+          <td style="line-height:1.6;">${mark('hero_title','Ti?u ??')}<br>${mark('article_html','B?i vi?t')}<br>${mark('first_comment','First Comment')}<br>${mark('website_link','Link web')}<br><small style="color:#94a3b8;">${csEscape(source)}</small></td>
+          <td class="content-studio-actions">
+            <button class="btn btn-sm btn-outline" onclick="csRetryComponent('${csEscape(item.id)}','hero_title')">T?o l?i ti?u ??</button>
+            <button class="btn btn-sm btn-outline" onclick="csRetryComponent('${csEscape(item.id)}','first_comment')">T?o l?i comment</button>
           </td>
-        </tr>`;
-      }).join('');
+        </tr>      }).join('');
     } catch (e) {
       stats.textContent = 'Lỗi: ' + e.message;
     }

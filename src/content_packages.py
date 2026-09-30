@@ -212,6 +212,31 @@ def get_package(package_id):
     return next((item for item in list_packages() if item.get("id") == package_id), None)
 
 
+def component_statuses(item):
+    """Return explicit presence/status data for the Content Studio UI."""
+    item = item or {}
+    result = item.get("result") if isinstance(item.get("result"), dict) else {}
+    package_status = str(item.get("status") or "queued")
+    output = {}
+    for name in ("hero_title", "article_html", "first_comment", "caption", "hashtags"):
+        value = result.get(name)
+        if value:
+            output[name] = {"status": "ready", "present": True}
+        elif package_status in ("queued", "running"):
+            output[name] = {"status": "pending", "present": False}
+        elif package_status in ("retryable", "failed"):
+            output[name] = {"status": "retryable", "present": False}
+        else:
+            output[name] = {"status": "missing", "present": False}
+    article_url = str(item.get("article_url") or "").strip()
+    output["website_link"] = {
+        "status": str(item.get("website_status") or ("ready" if article_url else "not_configured")),
+        "present": bool(article_url),
+        "value": article_url,
+    }
+    return output
+
+
 def resolve_article_url(item):
     """Create the CMS article only when the queue item definitely needs one.
 
@@ -313,11 +338,16 @@ def process_content_packages_once():
         item["attempts"] = int(item.get("attempts") or 0) + 1
         _write(QUEUE_FILE, items)
     try:
-        result = generate_package(item["title"], item.get("summary", ""), item.get("video_url", ""), item.get("mode", "auto"))
         article_url, website_status, website_error = resolve_article_url(item)
         item["article_url"] = article_url
         item["website_status"] = website_status
         item["website_error"] = website_error
+        # Generate the comment after the CMS URL is known so the persisted
+        # first comment contains the exact website link shown in Post Management.
+        result = generate_package(
+            item["title"], item.get("summary", ""), item.get("video_url", ""),
+            item.get("mode", "auto"), article_url=article_url,
+        )
         retryable = str(result.get("source") or "").startswith("no_llm_quota_fallback")
         item.update({"status": "retryable" if retryable else "ready", "result": result, "error": "" if not retryable else "LLM quota exhausted; sẽ tự retry khi quota khả dụng.", "completed_at": _now()})
         if not retryable:

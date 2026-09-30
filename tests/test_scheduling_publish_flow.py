@@ -394,6 +394,52 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         self.assertIn("Xem video", html)
 
 
+    def test_content_batch_skips_posted_and_existing_packages(self):
+        from web import app as web_app
+        from src import content_packages
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            clip_posted = root / "posted.mp4"
+            clip_queued = root / "queued.mp4"
+            clip_new = root / "new.mp4"
+            for clip in (clip_posted, clip_queued, clip_new):
+                clip.write_bytes(b"video")
+            posted_file = root / "posted_clips.json"
+            posted_file.write_text(json.dumps([str(clip_posted)]), encoding="utf-8")
+            queue_file = root / "content_packages.json"
+            queue_file.write_text(json.dumps([{"id": "p1", "clip_filename": str(clip_queued), "status": "queued"}]), encoding="utf-8")
+            client = web_app.app.test_client()
+            with mock.patch.object(web_app, "BASE_DIR", root), mock.patch.object(
+                content_packages, "QUEUE_FILE", queue_file
+            ), mock.patch.object(web_app, "get_clip_metadata", return_value={"video_title": "New"}):
+                response = client.post("/api/content-studio/batch", json={"folder": str(root), "mode": "no_llm"})
+            payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["skipped_count"], 2)
+        self.assertEqual({item["reason"] for item in payload["skipped"]}, {"already_posted", "already_in_content_queue"})
+
+    def test_content_package_first_comment_receives_generated_website_url(self):
+        from src import content_packages
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            queue_file = root / "content_packages.json"
+            queue_file.write_text(json.dumps([{
+                "id": "pkg-1", "clip_filename": "clip.mp4", "title": "Title", "summary": "Summary",
+                "mode": "no_llm", "video_url": "", "create_website_article": True,
+                "post_ids": [], "article_url": "", "status": "queued", "attempts": 0, "result": {}
+            }]), encoding="utf-8")
+            with mock.patch.object(content_packages, "QUEUE_FILE", queue_file), mock.patch.object(
+                content_packages, "resolve_article_url", return_value=("https://example.test/article", "ready", "")
+            ):
+                content_packages.process_content_packages_once()
+            item = json.loads(queue_file.read_text(encoding="utf-8"))[0]
+        self.assertIn("https://example.test/article", item["result"]["first_comment"])
+        self.assertEqual(item["website_status"], "ready")
+
+
 class SchedulerWorkerHardeningTests(unittest.TestCase):
     def _fixture(self, post):
         folder = tempfile.TemporaryDirectory()
@@ -404,6 +450,33 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
         posts_file = root / "posts.json"
         posts_file.write_text(json.dumps([post]), encoding="utf-8")
         return folder, root, output, posts_file
+
+    def test_worker_holds_due_post_while_content_package_is_running(self):
+        from src.publisher import first_comment_queue
+        from web import scheduled_publisher as worker
+
+        poster = mock.Mock()
+        folder, root, output, posts_file = self._fixture({
+            "id": "post-package-running", "status": "scheduled",
+            "scheduled_time": "2026-01-01 00:00:00", "page_id": "page-1",
+            "token": "fixture-token", "media_file": "clip.mp4",
+            "auto_first_comment": True, "content_package_status": "running",
+        })
+        try:
+            with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
+                worker, "OUTPUT_DIR", output
+            ), mock.patch.object(worker, "POSTED_CLIPS_FILE", root / "posted.json"), mock.patch.object(
+                first_comment_queue, "QUEUE_FILE", root / "comments.json"
+            ):
+                result = worker.process_scheduled_posts_once(
+                    poster=poster, now=datetime(2026, 1, 1, 1, 0, 0)
+                )
+                saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+        finally:
+            folder.cleanup()
+        self.assertEqual(result["claimed"], 0)
+        self.assertEqual(saved["status"], "scheduled")
+        poster.publish_reel.assert_not_called()
 
     def test_overdue_six_minutes_post_is_claimed_not_left_scheduled(self):
         """Field report: post due 12:25 still shown as scheduled at 12:31 (6 minutes late)."""

@@ -195,6 +195,11 @@ def _process_scheduled_posts_once(
     for post in posts:
         if post.get("status") != "scheduled":
             continue
+        # Content package generation is asynchronous. Hold due posts while the
+        # required website/comment package is queued or running, then publish on
+        # a later cycle once the package has persisted its results.
+        if post.get("auto_first_comment") and post.get("content_package_status") in ("queued", "running"):
+            continue
         scheduled_time = post.get("scheduled_time")
         if not scheduled_time:
             continue

@@ -2958,7 +2958,7 @@ def api_publish_website_article():
 from src.content_packages import (list_packages, get_package, process_content_packages_once,
                                  generate_package, fallback_package, circuit_status,
                                  start_content_package_worker, enqueue_content_package, sanitize_error,
-                                 retry_package_component)
+                                 retry_package_component, component_statuses)
 
 # ---------------------------------------------------------------------------
 # Content Studio: background Content Package queue for rendered clips.
@@ -2967,6 +2967,8 @@ from src.content_packages import (list_packages, get_package, process_content_pa
 @app.route("/api/content-studio/queue", methods=["GET"])
 def api_content_studio_queue():
     items = list_packages()
+    for item in items:
+        item["component_statuses"] = component_statuses(item)
     return jsonify({
         "success": True,
         "queued": sum(1 for i in items if i.get("status") == "queued"),
@@ -3038,20 +3040,61 @@ def api_content_studio_batch():
     mode = str(payload.get("mode") or "auto")
     if mode not in ("auto", "llm", "no_llm"):
         return jsonify({"success": False, "error": "mode phải là auto, llm hoặc no_llm"}), 400
+    # A clip is already handled when it is in posted_clips.json or already has
+    # a package in the persisted queue. Compare normalized absolute paths and
+    # basenames so old records created with a different folder prefix do not
+    # get re-enqueued.
+    def _clip_keys(value):
+        raw = str(value or "").strip()
+        if not raw:
+            return set()
+        path = Path(raw)
+        return {raw.lower(), path.name.lower()}
+
+    posted_file = BASE_DIR / "posted_clips.json"
+    posted_records = []
+    if posted_file.exists():
+        try:
+            posted_records = json.loads(posted_file.read_text(encoding="utf-8"))
+        except Exception:
+            posted_records = []
+    posted_keys = set()
+    for record in posted_records if isinstance(posted_records, list) else []:
+        if isinstance(record, dict):
+            for field in ("clip_filename", "media_file", "filename", "path"):
+                posted_keys.update(_clip_keys(record.get(field)))
+        else:
+            posted_keys.update(_clip_keys(record))
+    existing_keys = set()
+    for item in list_packages():
+        if str(item.get("status") or "") in ("queued", "running", "ready", "retryable"):
+            existing_keys.update(_clip_keys(item.get("clip_filename")))
+
     created = []
+    skipped = []
     for clip_path in clips:
+        keys = _clip_keys(clip_path) | _clip_keys(str(clip_path))
+        if keys & posted_keys:
+            skipped.append({"clip": str(clip_path), "reason": "already_posted"})
+            continue
+        if keys & existing_keys:
+            skipped.append({"clip": str(clip_path), "reason": "already_in_content_queue"})
+            continue
         title = clip_path.stem.replace("_", " ").strip()
         try:
             meta = get_clip_metadata(str(clip_path)) or {}
             title = str(meta.get("video_title") or meta.get("clean_title") or title).strip()
         except Exception:
             pass
-        created.append(enqueue_content_package(
+        created_item = enqueue_content_package(
             clip_filename=str(clip_path), title=title, mode=mode,
             create_website_article=bool(payload.get("create_website_article")),
-        ))
-    start_content_package_worker()
-    return jsonify({"success": True, "folder": str(folder_path), "count": len(created), "items": created})
+        )
+        created.append(created_item)
+        existing_keys.update(keys)
+    if created:
+        start_content_package_worker()
+    return jsonify({"success": True, "folder": str(folder_path), "count": len(created), "skipped_count": len(skipped), "skipped": skipped, "items": created})
 
 @app.route("/api/content-studio/retry", methods=["POST"])
 def api_content_studio_retry():
