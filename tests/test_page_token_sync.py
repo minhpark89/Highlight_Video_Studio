@@ -619,6 +619,41 @@ class BackendApiTests(unittest.TestCase):
         groups = self.client.get("/api/token-groups").get_json()["groups"]
         self.assertNotIn("tgrp_1", [g["id"] for g in groups])
 
+    def test_fast_token_group_creates_distinct_manageable_groups(self):
+        token = self._seed_token()
+        self.appmod.save_token_groups([])
+        first = self.client.post("/api/token-groups", json={"name": "Pool A", "token_ids": [token["id"]]}).get_json()
+        second = self.client.post("/api/token-groups", json={"name": "Pool B", "token_ids": [token["id"]]}).get_json()
+        self.assertNotEqual(first["group"]["id"], second["group"]["id"])
+        groups = self.client.get("/api/token-groups").get_json()["groups"]
+        self.assertEqual({g["name"] for g in groups}, {"Pool A", "Pool B"})
+
+    def test_token_list_reports_current_page_binding_count(self):
+        token = self._seed_token()
+        self.pages.save_pages([{"page_id": "PAGE_A", "token_id": token["id"]}, {"page_id": "PAGE_B"}])
+        listed = self.client.get("/api/tokens").get_json()["tokens"]
+        self.assertEqual(listed[0]["pages_count"], 1)
+
+    def test_group_allocation_assigns_only_verified_one_page_one_token(self):
+        token = {"id": "tok_1", "name": "T1", "token": "EAAB_one", "status": "ACTIVE"}
+        self.vault._save([token])
+        self.pages.sync_pages_from_token(token, [{"id": "PAGE_A", "name": "A", "access_token": "page-a"}])
+        self.appmod.save_token_groups([{"id": "pool_1", "name": "Pool", "token_ids": ["tok_1"], "page_ids": ["PAGE_A"]}])
+        resp = self.client.post("/api/pages/batch_assign_token", json={"token_group_id": "pool_1", "page_ids": ["PAGE_A"]})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["count"], 1)
+        self.assertEqual(self.pages.list_pages()[0]["token_id"], "tok_1")
+
+    def test_group_allocation_explains_unverified_page_mapping(self):
+        token = {"id": "tok_1", "name": "T1", "token": "EAAB_one", "status": "ACTIVE"}
+        self.vault._save([token])
+        self.pages.save_pages([{"page_id": "PAGE_A", "page_name": "A"}])
+        self.appmod.save_token_groups([{"id": "pool_1", "name": "Pool", "token_ids": ["tok_1"], "page_ids": ["PAGE_A"]}])
+        resp = self.client.post("/api/pages/batch_assign_token", json={"token_group_id": "pool_1", "page_ids": ["PAGE_A"]})
+        self.assertEqual(resp.status_code, 409)
+        self.assertIn("verified", resp.get_json()["error"])
+        self.assertEqual(resp.get_json()["blocked"][0]["page_id"], "PAGE_A")
+
 
 if __name__ == "__main__":
     unittest.main()

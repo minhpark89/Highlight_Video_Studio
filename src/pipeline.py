@@ -711,7 +711,13 @@ Dưới đây là transcript có timestamp:
             })
         return _ensure_highlight_count(normalized_clips, transcript_items, num_clips, target_length)
     except Exception as e:
-        print(f"[LLM Error] Không trích xuất được highlight từ LLM: {e}")
+        # Desktop stdout can be a redirected legacy Windows code page. Keep the
+        # original failure visible as ASCII escapes without masking the fallback.
+        message = f"[LLM Error] Không trích xuất được highlight từ LLM: {e}"
+        try:
+            print(message.encode("ascii", errors="backslashreplace").decode("ascii"))
+        except (OSError, UnicodeError, ValueError):
+            pass  # An unavailable log stream must not turn LLM fallback into a failed job.
         return _fallback_highlights(transcript_items, num_clips, target_length)
 
 def render_highlight_clip(source_video: str = None, audio_path: str = None, start_time: float = None, end_time: float = None, output_path: str = None, aspect_ratio="9:16", reframe_mode="face_center", subtitle_style="hormozi_yellow", update_status=None, **kwargs):

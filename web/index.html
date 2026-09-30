@@ -1405,6 +1405,7 @@
                 </div>
               </div>
               <div style="display: flex; align-items: center; gap: 6px;">
+                <select id="token-allocation-group" style="max-width: 150px; background: #0f172a; border: 1px solid #334155; color: #38bdf8; padding: 5px; border-radius: 6px; font-size: 11px;"><option value="">All verified mappings</option></select>
                 <input type="number" id="pages-per-token-input" min="1" max="50" value="4" style="width: 50px; background: #0f172a; border: 1px solid #334155; color: #10b981; padding: 5px; border-radius: 6px; font-weight: 700; text-align: center;">
                 <button class="btn btn-sm btn-primary" onclick="rebalanceTokenPageAllocation()" style="padding: 4px 8px; font-size: 11px; font-weight: 700; background: #10b981; border: none;" title="Chia đều lại toàn bộ Page cho dàn Token">
                   <i class="bi bi-shuffle"></i> Gán Lại
@@ -1428,6 +1429,7 @@
               </div>
             </div>
           </div>
+            <div id="loha-token-group-pills" style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px;" aria-label="Token groups"></div>
             <table class="table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;">
               <thead>
                 <tr style="background: rgba(15, 23, 42, 0.85); border-bottom: 2px solid var(--border); color: #94a3b8; font-weight: 700;">
@@ -4049,10 +4051,13 @@
         });
       });
 
+      const allocationGroupId = document.getElementById('token-allocation-group')?.value || '';
       const resAssign = await fetch('/api/pages/batch_assign_token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assignments: assignments })
+        body: allocationGroupId
+          ? JSON.stringify({ token_group_id: allocationGroupId, page_ids: targetPages.map(p => p.page_id || p.id) })
+          : JSON.stringify({ assignments: assignments })
       });
 
       const dataRes = await resAssign.json();
@@ -4066,7 +4071,8 @@
         loadTokensOnly();
         if (typeof loadTokensAndPages === 'function') loadTokensAndPages();
       } else {
-        alert('Lỗi: ' + (dataRes.error || 'Không thể phân bổ'));
+        const details = (dataRes.blocked || []).map(item => item.page_id || item).join(", ");
+        alert("Lỗi phân bổ: " + (dataRes.error || dataRes.action || "Mapping Page/Token chưa được xác minh.") + (details ? " Page cần Sync: " + details : ""));
       }
     } catch (e) {
       alert('Lỗi kết nối máy chủ: ' + e.message);
@@ -4074,7 +4080,7 @@
   }
 
   async function loadTokensOnly() {
-    await loadTokenGroupsPills();
+    await Promise.all([loadTokenGroupsPills(), loadTokenAllocationGroups()]);
     try {
       const [resTok, resGrp] = await Promise.all([
         fetch('/api/tokens'),
@@ -4083,6 +4089,7 @@
       const data = await resTok.json();
       const dataGrp = await resGrp.json();
       let tokens = data.tokens || [];
+      globalTokensCatalog = tokens;
       const groups = dataGrp.groups || [];
 
       // Create token-id to group names map
@@ -4302,6 +4309,14 @@
           sel.innerHTML = grps.map(g => `<option value="${g.id}">${g.name} (${(g.page_ids||[]).length} Page)</option>`).join('');
         }
       }
+      const tokenSel = document.getElementById('modal-dist-token-group');
+      if (tokenSel) {
+        fetch('/api/token-groups').then(r => r.json()).then(td => {
+          tokenSel.innerHTML = '<option value="">Dùng mapping hiện tại</option>' + (td.groups || []).map(g =>
+            `<option value="${g.id}">${escapeHtml(g.name)} (${(g.page_ids || []).length} Page)</option>`
+          ).join('');
+        });
+      }
     });
 
     // Default start time: 20 phút tới
@@ -4339,6 +4354,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           group_id: groupId,
+          token_group_id: document.getElementById('modal-dist-token-group')?.value || '',
           start_time: startTime,
           stagger_minutes: stagger,
           auto_first_comment: true,
@@ -5088,6 +5104,18 @@
   // ================= TỰ ĐỘNG CHIA TOKEN CHO FANPAGE (LOHAPAGE MODEL) =================
   // [TDZ fix] globalTokensCatalog moved to top
 
+  async function loadTokenAllocationGroups() {
+    const select = document.getElementById('token-allocation-group');
+    if (!select) return;
+    try {
+      const res = await fetch('/api/token-groups');
+      const data = await res.json();
+      select.innerHTML = '<option value="">All verified mappings</option>' + (data.groups || []).map(g =>
+        `<option value="${g.id}">${escapeHtml(g.name)} (${(g.page_ids || []).length} Pages)</option>`
+      ).join('');
+    } catch (e) { console.warn('Token groups unavailable:', e); }
+  }
+
   function openTokenAllocModal() {
     const m = document.getElementById('modal-token-alloc');
     if (!m) return;
@@ -5107,6 +5135,7 @@
     if (banner) banner.style.display = 'none';
 
     toggleAllocMode();
+    loadTokenAllocationGroups();
     m.style.display = 'flex';
   }
 
@@ -6473,6 +6502,8 @@
         <div style="margin-bottom: 16px;">
           <label style="font-size: 12px; font-weight: 700; color: #94a3b8;">1. Chọn Nhóm Fanpage vệ tinh:</label>
           <select id="modal-dist-group" class="form-select form-select-sm" style="background: #0b1329; border-color: #23304d;"></select>
+          <label style="font-size: 12px; color: #94a3b8;">Nhóm Token đăng (tuỳ chọn):</label>
+          <select id="modal-dist-token-group" class="form-select form-select-sm" style="background: #0b1329; border-color: #23304d;"><option value="">Dùng mapping hiện tại</option></select>
         </div>
         <div style="margin-bottom: 16px;">
           <label style="font-size: 12px; font-weight: 700; color: #94a3b8;">2. Thời gian bắt đầu lên lịch:</label>

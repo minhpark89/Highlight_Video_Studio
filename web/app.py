@@ -1454,7 +1454,8 @@ def _pages_for_source_token(page_source_token_id):
 @app.route("/api/token-groups", methods=["POST"])
 def api_save_token_group():
     data = request.json or {}
-    gid = data.get("id") or f"tgrp_{int(time.time())}"
+    # UUID ids prevent two fast saves from replacing the previous group.
+    gid = data.get("id") or f"tgrp_{uuid.uuid4().hex[:12]}"
     name = data.get("name", "").strip()
     token_ids = list(dict.fromkeys(str(tid) for tid in data.get("token_ids", []) if tid))
     strategy = data.get("strategy", "least_recently_used")
@@ -1537,6 +1538,14 @@ def api_delete_token_group(gid):
 @app.route("/api/tokens", methods=["GET"])
 def api_list_tokens():
     tokens = token_vault.list_tokens(mask=True)
+    # Vault counters lag page synchronization; show currently assigned pages.
+    page_counts = {}
+    for page in page_manager.list_pages():
+        token_id = str(page.get("token_id") or "")
+        if token_id:
+            page_counts[token_id] = page_counts.get(token_id, 0) + 1
+    for token in tokens:
+        token["pages_count"] = page_counts.get(str(token.get("id")), 0)
     return jsonify({"success": True, "tokens": tokens})
 
 @app.route("/api/tokens", methods=["POST"])
@@ -2332,6 +2341,7 @@ def api_distribute_batch():
     from datetime import datetime, timedelta
     data = request.json or {}
     group_id = data.get("group_id")
+    token_group_id = str(data.get("token_group_id") or "").strip()
     clip_filenames = data.get("clip_filenames", [])
     posts_per_page = int(data.get("posts_per_page", 1))
     stagger_minutes = int(data.get("stagger_minutes", 15))
@@ -2349,6 +2359,15 @@ def api_distribute_batch():
         return jsonify({"error": "Không tìm thấy Nhóm Fanpage"}), 404
 
     page_ids = group.get("page_ids", [])
+    if token_group_id:
+        token_group = next((g for g in load_token_groups() if str(g.get("id")) == token_group_id), None)
+        if not token_group:
+            return jsonify({"success": False, "error": "Token group not found"}), 404
+        # Explicit posting scope; page group still supplies schedule/folder.
+        allowed = {str(pid) for pid in group.get("page_ids", [])}
+        page_ids = [pid for pid in token_group.get("page_ids", []) if str(pid) in allowed]
+        if not page_ids:
+            return jsonify({"success": False, "error": "No Pages shared by the Page group and Token group snapshot"}), 400
     if not page_ids:
         return jsonify({"error": "Nhóm chưa có Fanpage nào được thêm"}), 400
 
@@ -2382,6 +2401,12 @@ def api_distribute_batch():
     if not preflight.get("ok"):
         return jsonify({"success": False, "error": 'Preflight quyền đăng bài thất bại', **preflight["blocked"]}), 400
 
+    if token_group_id:
+        allowed_tokens = {str(tid) for tid in token_group.get("token_ids", [])}
+        outside = [ready["page_id"] for ready in preflight["ready"] if str(ready["token_id"]) not in allowed_tokens]
+        if outside:
+            return jsonify({"success": False, "error": "Page is not bound to a verified Token in the selected group",
+                            "stage": "mapping", "page_ids": outside}), 409
     resolved_page_tokens = {ready["page_id"]: ready["token"] for ready in preflight["ready"]}
     verified_token_ids = {ready["page_id"]: ready["token_id"] for ready in preflight["ready"]}
 
@@ -2777,6 +2802,59 @@ def api_batch_assign_token():
     pages = page_manager.list_pages()
     count = 0
 
+    # 0. Assign one Page to one verified Token from a selected token group.
+    token_group_id = str(data.get("token_group_id") or "").strip()
+    auto_verified = data.get("auto_verified") is True
+    if token_group_id or auto_verified:
+        token_group = next((g for g in load_token_groups() if str(g.get("id")) == token_group_id), None) if token_group_id else None
+        if token_group_id and not token_group:
+            return jsonify({"success": False, "error": "Token group not found"}), 404
+        requested = {str(pid) for pid in data.get("page_ids", []) if pid}
+        if token_group:
+            group_pages = {str(pid) for pid in token_group.get("page_ids", [])}
+            if requested - group_pages:
+                return jsonify({"success": False, "error": "Page is outside selected Token group snapshot",
+                                "blocked": sorted(requested - group_pages)}), 409
+            requested = requested or group_pages
+        candidates = [p for p in pages if not requested or str(p.get("page_id")) in requested]
+        missing = requested - {str(p.get("page_id")) for p in candidates}
+        if missing:
+            return jsonify({"success": False, "error": "Page not found", "blocked": sorted(missing)}), 404
+        if not candidates:
+            return jsonify({"success": False, "error": "No Pages in selected Token group"}), 400
+        vault_map = {str(t.get("id")): t for t in token_vault.list_tokens(mask=False)}
+        token_ids = [str(tid) for tid in token_group.get("token_ids", [])] if token_group else list(vault_map)
+        blocked = []
+        assigned = 0
+        for idx, page in enumerate(candidates):
+            pid = str(page.get("page_id"))
+            choices = []
+            for tid in token_ids:
+                binding = (page.get("token_bindings") or {}).get(tid)
+                if binding and str(binding.get("verified_page_id") or "") == pid:
+                    choices.append((tid, binding))
+            if not choices:
+                blocked.append({"page_id": pid, "code": "missing_mapping"})
+                continue
+            tid, binding = min(choices, key=lambda choice: (sum(
+                1 for other in candidates if str(other.get("token_id")) == choice[0]
+            ), token_ids.index(choice[0])))
+            tok = vault_map.get(tid)
+            if not tok:
+                blocked.append({"page_id": pid, "token_id": tid, "code": "missing_token"})
+                continue
+            page["token_id"] = tid
+            page["token_name"] = tok.get("name", "System User")
+            page["page_token"] = binding.get("page_token", "")
+            page["mapping_status"] = "VERIFIED"
+            assigned += 1
+        if blocked:
+            return jsonify({"success": False, "stage": "mapping", "code": "missing_mapping",
+                            "error": "Some selected Pages have no verified Token mapping in this group.",
+                            "blocked": blocked, "count": assigned}), 409
+        page_manager.save_pages(pages)
+        return jsonify({"success": True, "count": assigned, "message": f"Assigned {assigned} Pages to verified group Tokens."})
+
     # 1. Hỗ trợ dạng mảng gán chi tiết từng page (round-robin assignments)
     assignments = data.get("assignments")
     if isinstance(assignments, list) and assignments:
@@ -2786,6 +2864,8 @@ def api_batch_assign_token():
         if unknown_ids:
             return jsonify({"error": "Token không tồn tại trong Vault: " + ", ".join(unknown_ids)}), 404
         blocked = []
+        found = {str(p.get("page_id")) for p in pages}
+        blocked.extend({"page_id": pid, "code": "missing_page"} for pid in assign_map if pid not in found)
         for p in pages:
             pid = str(p.get("page_id"))
             if pid in assign_map:
@@ -2804,6 +2884,7 @@ def api_batch_assign_token():
                 "success": False,
                 "stage": "mapping",
                 "code": "cross_bound_mapping",
+                "error": "Page/Token mapping is not verified; sync the Page with that token first.",
                 "action": "Sync từng Page từ đúng credential; không thể gán token theo vị trí hoặc vòng tròn.",
                 "blocked": blocked,
             }), 409
