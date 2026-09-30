@@ -232,42 +232,37 @@ def _process_scheduled_posts_once(
             (page for page in page_manager.list_pages() if str(page.get("page_id")) == str(page_id)),
             None,
         )
-        verified = None
-        if page_record is not None:
-            verdict = preflight_pages([page_record], token_vault, page_manager)
-            if verdict.get("ok"):
-                verified = verdict["ready"][0]
-            elif page_record.get("token_id"):
-                # The Page claims a credential but Meta-backed discovery no longer
-                # confirms the binding: fail closed with actionable reconnect text.
-                blocked = verdict.get("blocked") or {}
-                post.update({
-                    "status": "failed",
-                    "retryable": True,
-                    "retry_stage": "meta_preflight",
-                    "error": blocked.get("action") or "Meta preflight quyền đăng bài thất bại.",
-                    "meta_preflight": {
-                        "stage": blocked.get("stage"),
-                        "code": blocked.get("code"),
-                        "action": blocked.get("action"),
-                        "reconnect_required": True,
-                    },
-                })
-                continue
-
-        if verified is not None:
-            post["token"] = verified["token"]
-            post["token_id"] = verified["token_id"]
-            page_token = verified["token"]
-        elif page_record is None and not page_token:
-            # No mapping and no persisted credential at all: cannot publish safely.
+        # Legacy queue records may predate discovery-backed mappings. Preserve
+        # their already-persisted page token for migration compatibility; new
+        # schedules always have a token_id and must pass current preflight.
+        # New queue records carry token_id and must pass current verified
+        # Page/token preflight. Legacy records only carry their persisted exact
+        # page token; preserve that compatibility for offline recovery and old
+        # queues instead of letting an unrelated cached Page record block them.
+        if post.get("token_id"):
+            verdict = preflight_pages([page_record], token_vault, page_manager) if page_record else {"ok": False, "blocked": {"code": "missing_page", "stage": "mapping", "action": "Sync Page before publishing."}}
+            blocked = verdict.get("blocked") or {}
+            verified = verdict["ready"][0] if verdict.get("ok") else None
+        else:
+            blocked = {}
+            verified = {"token": page_token, "token_id": post.get("token_id", "")} if page_token else None
+        if verified is None:
             post.update({
                 "status": "failed",
-                "retryable": False,
+                "retryable": True,
                 "retry_stage": "meta_preflight",
-                "error": "Meta preflight thất bại: không tìm thấy Page mapping đã xác minh.",
+                "error": blocked.get("action") or "Page credential mapping is not verified; Sync Page before publishing.",
+                "meta_preflight": {
+                    "stage": blocked.get("stage"),
+                    "code": blocked.get("code"),
+                    "action": blocked.get("action"),
+                    "reconnect_required": True,
+                },
             })
             continue
+        post["token"] = verified["token"]
+        post["token_id"] = verified["token_id"]
+        page_token = verified["token"]
 
         if not video_path or not video_path.exists():
             post.update({
@@ -298,16 +293,16 @@ def _process_scheduled_posts_once(
                 description=f"{title}\n\n{content}",
                 first_comment="",
             )
-            if not result.get("success"):
+            facebook_id = result.get("video_id") or result.get("reel_id")
+            if not result.get("success") or not facebook_id:
                 post.update({
                     "status": "failed",
-                    "retryable": True,
+                    "retryable": not (result.get("outcome_unknown") or (result.get("success") and not facebook_id)),
                     "retry_stage": "facebook_publish",
                     "error": result.get("error", "Lỗi Meta Graph API không xác định"),
                 })
                 continue
 
-            facebook_id = result.get("video_id") or result.get("reel_id")
             post.update({
                 "status": "published",
                 "post_fb_id": facebook_id,
@@ -336,12 +331,12 @@ def _process_scheduled_posts_once(
                     post["first_comment_queue_id"] = queued.get("queue_id")
 
             _record_posted_clip(clip_filename)
-        except Exception as exc:
+        except Exception:
             post.update({
                 "status": "failed",
-                "retryable": True,
-                "retry_stage": "facebook_publish",
-                "error": str(exc),
+                "retryable": False,
+                "retry_stage": "publish_outcome_unknown",
+                "error": "Publish started but outcome is unknown; reconcile on Facebook before retrying.",
             })
 
     if claimed_posts or recovered or queue_result.get("changed"):

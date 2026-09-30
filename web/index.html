@@ -1836,6 +1836,8 @@
             <div id="cs-result-body" style="font-size: 13px; color: #cbd5e1; line-height: 1.6; white-space: pre-wrap;"></div>
           </div>
 
+          <div style="margin-bottom:10px;"><label for="cs-status-filter">Lọc Content Package: </label><select id="cs-status-filter" class="form-control" style="display:inline-block;width:auto;" onchange="loadContentStudioQueue()"><option value="all">Tất cả</option><option value="failed">Lỗi / cần thử lại</option></select></div>
+          <div id="cs-action-msg" role="status" aria-live="polite" style="margin-bottom:10px;font-size:13px;min-height:1.4em;"></div>
           <div class="table-responsive" style="background: #111c33; border: 1px solid #23304d; border-radius: 10px;">
             <table class="table" style="margin-bottom: 0;">
               <thead>
@@ -4006,77 +4008,22 @@
 
 
   async function rebalanceTokenPageAllocation() {
-    const inputVal = parseInt(document.getElementById('pages-per-token-input').value) || 4;
-    if (!confirm(`Xác nhận: Tự động phân bổ lại toàn bộ Fanpage vào dàn Token trong Vault theo tỷ lệ tối đa ${inputVal} Page/Token (Tự động xoay vòng bù trừ để 100% Page đều có Token)?`)) {
-      return;
-    }
-
+    const allocationGroupId = document.getElementById('token-allocation-group')?.value || '';
+    if (!confirm('Assign only Pages with an active verified credential binding? Unmapped Pages will be listed without changing any assignments.')) return;
     try {
-      const [resT, resP] = await Promise.all([
-        fetch('/api/tokens'),
-        fetch('/api/pages')
-      ]);
-      const dataT = await resT.json();
-      const dataP = await resP.json();
-
-      const tokens = dataT.tokens || [];
-      const pages = dataP.pages || [];
-
-      if (tokens.length === 0) {
-        alert('Không có token nào trong Vault để phân bổ!');
+      const res = await fetch('/api/pages/batch_assign_token', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(allocationGroupId ? {token_group_id: allocationGroupId} : {auto_verified: true})
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        const blocked = (result.blocked || []).map(item => item.page_id || item).join(', ');
+        alert((result.error || 'Allocation blocked') + (blocked ? `\nPages needing a verified binding: ${blocked}` : ''));
         return;
       }
-      if (pages.length === 0) {
-        alert('Chưa có Fanpage nào để phân bổ!');
-        return;
-      }
-
-      // THUẬT TOÁN TỰ ĐỘNG CHIA THEO INPUT CỦA BOSS (BẤT KỲ SỐ LƯỢNG TOKEN & PAGE NÀO):
-      // Gán lần lượt từng token gánh tối đa inputVal page.
-      // Nếu dàn token còn dư hoặc thiếu, tự động xoay vòng (round-robin)
-      // Đảm bảo: 100/100 Page đều có Token, không có bất kỳ Page nào bị bỏ sót!
-      const assignments = [];
-      const numTokens = tokens.length;
-      pages.forEach((p, idx) => {
-        // Nếu số token * inputVal < số page (ví dụ boss chọn 3 page/token mà có 100 page / 31 token):
-        // Xoay vòng chia đều idx % numTokens
-        const tokenObj = (numTokens * inputVal < pages.length)
-          ? tokens[idx % numTokens]
-          : tokens[Math.floor(idx / inputVal) % numTokens];
-
-        assignments.push({
-          page_id: p.page_id,
-          token_id: tokenObj.id,
-          token_name: tokenObj.name
-        });
-      });
-
-      const allocationGroupId = document.getElementById('token-allocation-group')?.value || '';
-      const resAssign = await fetch('/api/pages/batch_assign_token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: allocationGroupId
-          ? JSON.stringify({ token_group_id: allocationGroupId, page_ids: targetPages.map(p => p.page_id || p.id) })
-          : JSON.stringify({ assignments: assignments })
-      });
-
-      const dataRes = await resAssign.json();
-      if (dataRes.success) {
-        const avg = (pages.length / tokens.length).toFixed(1);
-        alert(`✅ Đã phân bổ đều thành công 100%!
-- Tổng: ${pages.length} Fanpage
-- Dàn: ${tokens.length} Token
-- Tỷ lệ thực tế: ~${avg} Page/Token
-- Đảm bảo 100/100 Page đều được gán Token hoạt động!`);
-        loadTokensOnly();
-        if (typeof loadTokensAndPages === 'function') loadTokensAndPages();
-      } else {
-        const details = (dataRes.blocked || []).map(item => item.page_id || item).join(", ");
-        alert("Lỗi phân bổ: " + (dataRes.error || dataRes.action || "Mapping Page/Token chưa được xác minh.") + (details ? " Page cần Sync: " + details : ""));
-      }
-    } catch (e) {
-      alert('Lỗi kết nối máy chủ: ' + e.message);
-    }
+      showToast(`Assigned ${result.count} Pages using verified bindings.`);
+      await Promise.all([loadTokensOnly(), loadTokensAndPages()]);
+    } catch (err) { alert('Allocation request failed: ' + err.message); }
   }
 
   async function loadTokensOnly() {
@@ -5684,7 +5631,7 @@
       }
 
       postsOverdueIds.clear();
-      (st.overdue_posts || []).forEach(op => postsOverdueIds.add(op.id));
+      (st.overdue_posts || []).forEach(op => op.status === 'scheduled' && postsOverdueIds.add(op.id));
 
       if (bannerEl) {
         if (overdueCount > 0) {
@@ -5809,7 +5756,7 @@
         } else if (p.status === 'publishing') {
           statusBadge = '<span style="background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-arrow-repeat spin"></i> Đang đăng...</span>';
         } else {
-          const isOverdue = postsOverdueIds.has(p.id);
+          const isOverdue = postsOverdueIds.has(p.id) && p.status === 'scheduled';
           statusBadge = isOverdue
             ? `<span style="background: rgba(239,68,68,0.2); color: #fca5a5; border: 1px solid rgba(239,68,68,0.6); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-alarm-fill"></i> QUÁ HẠN · chưa đăng</span><div style="margin-top:4px;"><button onclick="runDuePostsNow()" style="background:#ef4444;color:#fff;border:none;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">Đăng ngay</button></div>`
             : '<span style="background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-clock-history"></i> Đang hẹn lịch</span>';
@@ -5938,6 +5885,7 @@
   function csSetBusy(button, busy, label) {
     if (!button) return;
     if (busy) {
+      if (button.disabled) return;
       button.dataset.csOriginalLabel = button.innerHTML;
       button.disabled = true;
       button.classList.add('is-loading');
@@ -5958,14 +5906,16 @@
       const res = await fetch('/api/content-studio/queue');
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Kh\u00f4ng t\u1ea3i \u0111\u01b0\u1ee3c h\u00e0ng \u0111\u1ee3i');
-      const items = data.items || [];
+      const allItems = data.items || [];
+      const failedOnly = document.getElementById('cs-status-filter')?.value === 'failed';
+      const items = failedOnly ? allItems.filter(item => ['failed','retryable'].includes(item.status)) : allItems;
       stats.innerHTML = `Queued: <strong>${data.queued}</strong> \u00b7 Ready: <strong>${data.ready}</strong> \u00b7 Failed: <strong>${data.failed}</strong>`;
       const c = data.circuit || {};
       circuit.textContent = c.open
         ? `Circuit breaker \u0110ANG M\u1ede \u2014 th\u1eed l\u1ea1i sau ${c.retry_after_seconds}s (l\u1ed7i quota).`
         : 'Circuit breaker \u0111\u00f3ng \u2014 LLM kh\u1ea3 d\u1ee5ng.';
       if (!items.length) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#64748b;">Ch\u01b0a c\u00f3 Content Package n\u00e0o.</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#64748b;">${failedOnly ? 'Không có mục lỗi cần thử lại.' : 'Chưa có Content Package nào.'}</td></tr>`;
         return;
       }
       tbody.innerHTML = items.slice().reverse().map(function(item) {
@@ -5973,21 +5923,25 @@
         const source = (item.result && item.result.source) || (item.status === 'failed' ? 'error' : '\u2014');
         const pending = item.status === 'queued' ? 'queued' : item.status;
         const cs = item.component_statuses || {};
+        const websiteReady = cs.website_link?.status === 'ready' && !!cs.website_link?.present;
+        const websiteError = cs.website_link?.error || item.website_error || '';
+        const fallbackReason = item.result?.fallback_reason || '';
         const mark = (key, label) => {
           const state = cs[key] || {};
           const ok = state.present || state.status === 'ready';
-          const text = ok ? 'C\u00f3' : (state.status === 'pending' ? '\u0110ang t\u1ea1o' : (state.status === 'retryable' ? 'L\u1ed7i / th\u1eed l\u1ea1i' : 'Ch\u01b0a c\u00f3'));
-          return `<span title="${csEscape(state.value || '')}" style="color:${ok ? '#4ade80' : (state.status === 'pending' ? '#fbbf24' : '#f87171')};">${label}: ${text}</span>`;
+          const text = ok ? 'C\u00f3' : (state.status === 'blocked_website' ? 'Chờ sửa lỗi Website' : (state.status === 'pending' ? '\u0110ang t\u1ea1o' : (state.status === 'failed' || state.status === 'retryable' ? 'L\u1ed7i / th\u1eed l\u1ea1i' : 'Ch\u01b0a c\u00f3')));
+          return `<span title="${csEscape(state.value || state.error || '')}" style="color:${ok ? '#4ade80' : (state.status === 'pending' ? '#fbbf24' : '#f87171')};">${label}: ${text}</span>`;
         };
         return `<tr>
           <td>${csEscape(item.clip_filename || '\u2014')}</td>
           <td>${csEscape(item.title || '\u2014')}</td>
           <td>${csEscape(mode)}</td>
-          <td>${csEscape(pending)}</td>
-          <td style="line-height:1.6;">${mark('hero_title','Ti\u00eau \u0111\u1ec1')}<br>${mark('article_html','B\u00e0i vi\u1ebft')}<br>${mark('first_comment','First Comment')}<br>${mark('website_link','Link web')}<br><small style="color:#94a3b8;">${csEscape(source)}</small></td>
+          <td>${csEscape(pending)}${item.error ? `<div style="color:#f87171;font-size:11px;white-space:normal;">${csEscape(item.error)}</div>` : ''}${websiteError && websiteError !== item.error ? `<div style="color:#f87171;font-size:11px;white-space:normal;">CMS: ${csEscape(websiteError)}</div>` : ''}</td>
+          <td style="line-height:1.6;">${mark('hero_title','Ti\u00eau \u0111\u1ec1')}<br>${mark('article_html','B\u00e0i vi\u1ebft')}<br>${mark('first_comment','First Comment')}<br>${mark('website_link','Link web')}<br><small style="color:#94a3b8;">${csEscape(source)}</small>${fallbackReason ? `<br><small style="color:#fbbf24;">LLM fallback: ${csEscape(fallbackReason)}</small>` : ''}</td>
           <td class="content-studio-actions">
+            ${['failed','retryable'].includes(item.status) ? `<button class="btn btn-sm btn-outline cs-retry-btn" onclick="csRetryPackage('${csEscape(item.id)}', this)">Thử lại mục lỗi</button>` : ''}
             <button class="btn btn-sm btn-outline cs-retry-btn" data-package-id="${csEscape(item.id)}" data-component="hero_title" onclick="csRetryComponent('${csEscape(item.id)}','hero_title', this)">T\u1ea1o l\u1ea1i ti\u00eau \u0111\u1ec1</button>
-            <button class="btn btn-sm btn-outline cs-retry-btn" data-package-id="${csEscape(item.id)}" data-component="first_comment" onclick="csRetryComponent('${csEscape(item.id)}','first_comment', this)">T\u1ea1o l\u1ea1i comment</button>
+            <button class="btn btn-sm btn-outline cs-retry-btn" data-package-id="${csEscape(item.id)}" data-component="first_comment" onclick="csRetryComponent('${csEscape(item.id)}','first_comment', this)" ${websiteReady ? '' : 'disabled title="Cần bài CMS có URL trước khi tạo comment"'}>T\u1ea1o l\u1ea1i comment</button>
           </td>
         </tr>`;
       }).join('');
@@ -6002,8 +5956,9 @@
       if (!data.success) throw new Error(data.error || 'T\u1ea1o n\u1ed9i dung th\u1ea5t b\u1ea1i');
       const pkg = data.package || {};
       document.getElementById('cs-result').style.display = 'block';
-      document.getElementById('cs-result-body').textContent = `Ngu\u1ed3n: ${pkg.source}\n\nHERO: ${pkg.hero_title}\n\nCAPTION: ${pkg.caption}\n\nCOMMENT: ${pkg.first_comment}`;
-      msg.style.color = '#4ade80'; msg.textContent = `Xong (ngu\u1ed3n: ${pkg.source}).`;
+      document.getElementById('cs-result-body').textContent = `Ngu\u1ed3n: ${pkg.source}${pkg.fallback_reason ? '\nLLM fallback: ' + pkg.fallback_reason : ''}\n\nHERO: ${pkg.hero_title}\n\nCAPTION: ${pkg.caption}\n\nCOMMENT: ${pkg.first_comment || 'Chưa có — cần tạo bài CMS và xác minh URL trước.'}`;
+      msg.style.color = pkg.first_comment ? '#4ade80' : '#fbbf24';
+      msg.textContent = pkg.first_comment ? `Xong (ngu\u1ed3n: ${pkg.source}).` : 'Đã tạo bản nháp. First Comment cần URL bài CMS đã xác minh; dùng hàng đợi để tạo bài Website.';
     } catch (e) { msg.style.color = '#f87171'; msg.textContent = 'L\u1ed7i: ' + e.message; }
   };
   window.enqueueContentPackage = async function() {
@@ -6029,13 +5984,30 @@
   };
   window.csRetryComponent = async function(packageId, component, button) {
     const btn = button || document.querySelector(`button[data-package-id="${CSS.escape(String(packageId))}"][data-component="${CSS.escape(String(component))}"]`);
+    if (btn?.disabled) return;
     const label = component === 'hero_title' ? '\u0110ang t\u1ea1o l\u1ea1i ti\u00eau \u0111\u1ec1...' : '\u0110ang t\u1ea1o l\u1ea1i comment...';
-    csSetBusy(btn, true, label); const stats = document.getElementById('cs-queue-stats'); if (stats) stats.textContent = label + ' Vui l\u00f2ng ch\u1edd...';
+    const feedback = document.getElementById('cs-action-msg');
+    csSetBusy(btn, true, label); if (feedback) { feedback.style.color = '#fbbf24'; feedback.textContent = label + ' Vui lòng chờ...'; }
     try {
       const res = await fetch('/api/content-studio/retry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: packageId, component: component }) });
       const data = await res.json(); if (!data.success) throw new Error(data.error || 'Retry th\u1ea5t b\u1ea1i');
-      if (stats) stats.textContent = '\u0110\u00e3 t\u1ea1o xong ' + (component === 'hero_title' ? 'ti\u00eau \u0111\u1ec1.' : 'First Comment.'); await window.loadContentStudioQueue();
-    } catch (e) { if (stats) stats.textContent = 'L\u1ed7i retry: ' + e.message; } finally { csSetBusy(btn, false); }
+      if (feedback) { feedback.style.color = '#4ade80'; feedback.textContent = 'Đã tạo xong ' + (component === 'hero_title' ? 'tiêu đề.' : 'First Comment.'); }
+      await window.loadContentStudioQueue();
+    } catch (e) { if (feedback) { feedback.style.color = '#f87171'; feedback.textContent = 'Lỗi tạo lại: ' + e.message; } } finally { csSetBusy(btn, false); }
+  };
+  window.csRetryPackage = async function(packageId, button) {
+    if (button?.disabled) return;
+    const feedback = document.getElementById('cs-action-msg');
+    csSetBusy(button, true, 'Đang đưa vào hàng đợi...');
+    if (feedback) { feedback.style.color = '#fbbf24'; feedback.textContent = 'Đang đưa mục lỗi vào hàng đợi...'; }
+    try {
+      const res = await fetch('/api/content-studio/retry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: packageId }) });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Không thể thử lại');
+      if (feedback) { feedback.style.color = '#4ade80'; feedback.textContent = 'Đã đưa vào hàng đợi; theo dõi trạng thái tại đây.'; }
+      await window.loadContentStudioQueue();
+    } catch (e) { if (feedback) { feedback.style.color = '#f87171'; feedback.textContent = 'Lỗi thử lại: ' + e.message; } }
+    finally { csSetBusy(button, false); }
   };
   window.processContentStudioQueue = async function(button) {
     csSetBusy(button, true, '\u0110ang x\u1eed l\u00fd...');
@@ -6816,5 +6788,23 @@
   </div>
 </div>
 
+  <!-- Direct Meta publish modal -->
+  <div id="modal-publish-reel" class="app-modal-overlay" style="display:none;">
+    <div class="app-modal-box" style="max-width:680px;">
+      <div class="app-modal-header"><div><h4 id="pub-clip-title">Clip Highlight</h4><span id="pub-clip-filename"></span></div><button type="button" onclick="closePublishModal()">X</button></div>
+      <div class="app-modal-body">
+        <label>Page</label><select id="pub-select-single-page" class="form-control" onchange="onPubGroupChanged()"><option value="">Select Page</option></select>
+        <label>Page group</label><select id="pub-select-group" class="form-control" onchange="onPubGroupChanged()"><option value="">Select group</option></select>
+        <div id="pub-pages-target-summary"></div>
+        <label>Caption</label><textarea id="pub-caption" class="form-control" rows="4"></textarea>
+        <label>First comment</label><textarea id="pub-first-comment" class="form-control" rows="3"></textarea>
+        <label><input type="radio" name="pub_mode" value="now" checked onchange="toggleScheduleOptions()"> Publish now</label>
+        <label><input type="radio" name="pub_mode" value="schedule" onchange="toggleScheduleOptions()"> Schedule</label>
+        <div id="pub-schedule-box" style="display:none;"><label>Time</label><input id="pub-schedule-datetime" type="datetime-local" class="form-control"><label>Stagger minutes</label><input id="pub-schedule-stagger" type="number" class="form-control" value="15" min="0"></div>
+        <div id="pub-status-banner" role="status" aria-live="polite" style="display:none;"></div>
+      </div>
+      <div class="app-modal-footer"><button type="button" onclick="closePublishModal()">Cancel</button><button id="btn-execute-publish" class="btn btn-primary" type="button" onclick="executePublishReel()">Publish now</button></div>
+    </div>
+  </div>
 </body>
 </html>

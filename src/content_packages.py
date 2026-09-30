@@ -214,6 +214,40 @@ def get_package(package_id):
     return next((item for item in list_packages() if item.get("id") == package_id), None)
 
 
+def _clip_keys(value):
+    """Match clips across absolute/relative paths and legacy basename records."""
+    raw = str(value or "").strip()
+    if not raw:
+        return set()
+    path = Path(raw)
+    return {raw.casefold(), path.name.casefold()}
+
+
+def attach_existing_package(*, clip_filename, post_ids=None):
+    """Attach a finished library package without repeating CMS or LLM work."""
+    wanted = [str(value) for value in (post_ids or []) if str(value).strip()]
+    keys = _clip_keys(clip_filename)
+    if not wanted or not keys:
+        return None
+    with _LOCK:
+        items = _read(QUEUE_FILE, [])
+        item = next(
+            (entry for entry in reversed(items)
+             if entry.get("status") == "ready" and _clip_keys(entry.get("clip_filename")) & keys
+             and entry.get("article_url") and entry.get("website_status") == "ready"
+             and str((entry.get("result") or {}).get("first_comment") or "").find(entry["article_url"]) >= 0),
+            None,
+        )
+        if not item:
+            return None
+        item["post_ids"] = list(dict.fromkeys(list(item.get("post_ids") or []) + wanted))
+        item["updated_at"] = _now()
+        _write(QUEUE_FILE, items)
+        snapshot = dict(item)
+    _apply_to_posts(snapshot)
+    return snapshot
+
+
 def component_statuses(item):
     """Return explicit presence/status data for the Content Studio UI."""
     item = item or {}
@@ -231,11 +265,18 @@ def component_statuses(item):
         else:
             output[name] = {"status": "missing", "present": False}
     article_url = str(item.get("article_url") or "").strip()
+    website_status = str(item.get("website_status") or ("ready" if article_url else "not_configured"))
     output["website_link"] = {
-        "status": str(item.get("website_status") or ("ready" if article_url else "not_configured")),
+        "status": website_status,
         "present": bool(article_url),
         "value": article_url,
+        "error": sanitize_error(item.get("website_error")) if website_status == "failed" else "",
     }
+    if not article_url and item.get("create_website_article"):
+        output["first_comment"] = {
+            "status": "blocked_website" if website_status == "failed" else "pending",
+            "present": False,
+        }
     return output
 
 
@@ -246,8 +287,10 @@ def resolve_article_url(item):
     a slow or failing CMS can no longer drop an accepted Facebook schedule.
     """
     existing = str(item.get("article_url") or "").strip()
+    if existing:
+        return existing, "ready", ""
     if not item.get("create_website_article"):
-        return existing, "ready" if existing else "not_configured", ""
+        return "", "not_configured", ""
     try:
         from src.publisher.website_publisher import publish_clip_to_website_cms
 
@@ -279,7 +322,7 @@ def _apply_to_posts(item):
         if post.get("id") not in wanted:
             continue
         post["content_package_id"] = item["id"]
-        post["content_package_status"] = "ready"
+        post["content_package_status"] = item.get("status", "ready")
         post["content_package_source"] = result.get("source")
         post["content"] = result.get("caption") or post.get("content", "")
         if result.get("hero_title"):
@@ -298,6 +341,29 @@ def _apply_to_posts(item):
     save_posts_file(posts_file, posts)
 
 
+def _apply_failure_to_posts(item):
+    if not item.get("post_ids"):
+        return
+    try:
+        from web.posts_store import load_posts_file, save_posts_file
+    except ImportError:
+        from posts_store import load_posts_file, save_posts_file
+    posts_file = DATA_ROOT / "posts.json"
+    posts = load_posts_file(posts_file)
+    for post in posts:
+        if post.get("id") not in item["post_ids"]:
+            continue
+        post["content_package_status"] = item["status"]
+        if item.get("article_url"):
+            post["article_url"] = item["article_url"]
+        post["website_status"] = item.get("website_status") or "failed"
+        post["website_error"] = item.get("website_error") or item.get("error", "")
+        if not post.get("first_comment"):
+            post["first_comment_status"] = "generation_failed"
+            post["first_comment_error"] = item.get("error", "")
+    save_posts_file(posts_file, posts)
+
+
 
 def retry_package_component(package_id, component, mode=None):
     """Regenerate a selected field and persist it to the queue and linked posts."""
@@ -309,13 +375,15 @@ def retry_package_component(package_id, component, mode=None):
         if not item:
             return None
         snapshot = dict(item)
-    if component == "first_comment" and (not snapshot.get("create_website_article") or snapshot.get("website_status") != "ready" or not snapshot.get("article_url")):
+    if component == "first_comment" and (snapshot.get("website_status") != "ready" or not snapshot.get("article_url")):
         raise ValueError("First Comment requires a newly published CMS article with original video embed")
     result = generate_package(
         snapshot.get("title", ""), snapshot.get("summary", ""), snapshot.get("video_url", ""),
         mode=mode or snapshot.get("mode", "auto"), component=component,
         article_url=snapshot.get("article_url", ""),
     )
+    if component == "first_comment" and snapshot["article_url"] not in str(result.get(component) or ""):
+        result[component] = fallback_package(snapshot.get("title", ""), snapshot.get("summary", ""), snapshot["article_url"])[component]
     with _LOCK:
         items = _read(QUEUE_FILE, [])
         item = next((entry for entry in items if entry.get("id") == package_id), None)
@@ -324,10 +392,28 @@ def retry_package_component(package_id, component, mode=None):
         merged = item.get("result") if isinstance(item.get("result"), dict) else {}
         merged[component] = result.get(component)
         merged["source"] = result.get("source", "unknown")
-        item.update({"result": merged, "status": "ready", "error": "", "updated_at": _now()})
+        # A title/comment-only retry cannot clear an unrelated CMS failure.
+        website_failed = item.get("website_status") == "failed"
+        item.update({"result": merged, "status": "failed" if website_failed else "ready",
+                     "error": item.get("error", "") if website_failed else "", "updated_at": _now()})
         _write(QUEUE_FILE, items)
-    _apply_to_posts(item)
+    if item["status"] == "ready":
+        _apply_to_posts(item)
     return {"component": component, "package": merged, "item": item}
+
+
+def retry_package(package_id):
+    """Put a failed/retryable package back in the worker queue."""
+    with _LOCK:
+        items = _read(QUEUE_FILE, [])
+        item = next((entry for entry in items if entry.get("id") == package_id), None)
+        if not item:
+            return None
+        if item.get("status") not in ("failed", "retryable"):
+            return dict(item)
+        item.update({"status": "queued", "error": "", "updated_at": _now()})
+        _write(QUEUE_FILE, items)
+        return dict(item)
 
 
 def process_content_packages_once():
@@ -341,6 +427,40 @@ def process_content_packages_once():
         item["attempts"] = int(item.get("attempts") or 0) + 1
         _write(QUEUE_FILE, items)
     try:
+        # A schedule may enqueue a basename already present in the Content Studio
+        # library as an absolute path. Reuse a verified finished package rather
+        # than publishing a duplicate CMS article or leaving the post pending.
+        prior = next((entry for entry in reversed(items)
+                      if entry.get("id") != item.get("id") and entry.get("status") == "ready"
+                      and _clip_keys(entry.get("clip_filename")) & _clip_keys(item.get("clip_filename"))
+                      and entry.get("article_url") and entry.get("website_status") == "ready"
+                      and ("first_comment" not in (item.get("components") or ["first_comment"])
+                           or str((entry.get("result") or {}).get("first_comment") or "").find(entry["article_url"]) >= 0)), None)
+        if prior:
+            item.update({"article_url": prior["article_url"], "website_status": "ready",
+                         "website_error": "", "embed_status": prior.get("embed_status") or "ready",
+                         "result": dict(prior.get("result") or {}), "status": "ready",
+                         "error": "", "completed_at": _now()})
+            _apply_to_posts(item)
+        else:
+            _process_new_content_package(item)
+    except Exception as exc:
+        item.update({"status": "retryable" if isinstance(exc, QuotaError) else "failed", "error": sanitize_error(exc), "completed_at": _now()})
+        try:
+            _apply_failure_to_posts(item)
+        except Exception as post_exc:
+            item["error"] = sanitize_error(f"{item['error']}; post sync: {post_exc}")
+    with _LOCK:
+        latest = _read(QUEUE_FILE, [])
+        for index, existing in enumerate(latest):
+            if existing.get("id") == item.get("id"):
+                latest[index] = item
+                break
+        _write(QUEUE_FILE, latest)
+    return {"processed": 1, "item": item, "items": latest}
+
+
+def _process_new_content_package(item):
         article_url, website_status, website_error = resolve_article_url(item)
         item["article_url"] = article_url
         item["website_status"] = website_status
@@ -349,7 +469,7 @@ def process_content_packages_once():
         # Generate the comment after the CMS URL is known so the persisted
         # first comment contains the exact website link shown in Post Management.
         if "first_comment" in (item.get("components") or ["first_comment"]) and (website_status != "ready" or not article_url):
-            raise RuntimeError("First Comment requires a newly published CMS article with original video embed")
+            raise RuntimeError(website_error or "First Comment requires a newly published CMS article with original video embed")
         result = generate_package(
             item["title"], item.get("summary", ""), item.get("video_url", ""),
             item.get("mode", "auto"), article_url=article_url,
@@ -364,16 +484,6 @@ def process_content_packages_once():
         item.update({"status": "retryable" if retryable else "ready", "result": result, "error": "" if not retryable else "LLM quota exhausted; sẽ tự retry khi quota khả dụng.", "completed_at": _now()})
         if not retryable:
             _apply_to_posts(item)
-    except Exception as exc:
-        item.update({"status": "retryable" if isinstance(exc, QuotaError) else "failed", "error": sanitize_error(exc), "completed_at": _now()})
-    with _LOCK:
-        latest = _read(QUEUE_FILE, [])
-        for index, existing in enumerate(latest):
-            if existing.get("id") == item.get("id"):
-                latest[index] = item
-                break
-        _write(QUEUE_FILE, latest)
-    return {"processed": 1, "item": item, "items": latest}
 
 
 def _worker_loop():

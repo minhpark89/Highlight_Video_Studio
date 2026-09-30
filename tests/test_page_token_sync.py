@@ -644,6 +644,18 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(resp.get_json()["count"], 1)
         self.assertEqual(self.pages.list_pages()[0]["token_id"], "tok_1")
 
+    def test_group_allocation_ignores_stale_binding_and_fails_closed(self):
+        token = {"id": "tok_1", "name": "T1", "token": "fresh-token", "status": "ACTIVE"}
+        self.vault._save([token])
+        self.pages.save_pages([{
+            "page_id": "PAGE_A", "page_name": "A", "token_id": "tok_1",
+            "token_bindings": {"tok_1": {"verified_page_id": "PAGE_A", "status": "VERIFIED", "page_token": "old-page-token", "credential_fingerprint": "wrong"}},
+        }])
+        self.appmod.save_token_groups([{"id": "pool_1", "name": "Pool", "token_ids": ["tok_1"], "page_ids": ["PAGE_A"]}])
+        resp = self.client.post("/api/pages/batch_assign_token", json={"token_group_id": "pool_1", "page_ids": ["PAGE_A"]})
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.get_json()["blocked"][0]["page_id"], "PAGE_A")
+
     def test_group_allocation_explains_unverified_page_mapping(self):
         token = {"id": "tok_1", "name": "T1", "token": "EAAB_one", "status": "ACTIVE"}
         self.vault._save([token])

@@ -67,6 +67,40 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             "status": "ACTIVE",
         }
 
+    def test_meta_reel_start_upload_finish_flow_is_mocked_and_records_object_id(self):
+        from src.publisher.meta_reel_poster import MetaReelPoster
+        with tempfile.TemporaryDirectory() as folder:
+            video = Path(folder) / "clip.mp4"
+            video.write_bytes(b"fixture")
+            responses = [
+                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"video_id": "video-1", "upload_url": "https://upload.test/video-1"}),
+                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {}),
+                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"success": True, "video_id": "video-1", "permalink_url": "https://facebook.test/reel/video-1"}),
+            ]
+            with mock.patch("src.publisher.meta_reel_poster.requests.post", side_effect=responses) as post:
+                result = MetaReelPoster().publish_reel("page-1", "page-token", video)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["video_id"], "video-1")
+        self.assertEqual(post.call_count, 3)
+        self.assertEqual(post.call_args_list[0].args[0], "https://graph.facebook.com/v22.0/page-1/video_reels")
+        self.assertIn("upload.test", post.call_args_list[1].args[0])
+        self.assertEqual(post.call_args_list[2].args[0], "https://graph.facebook.com/v22.0/page-1/video_reels")
+
+    def test_meta_reel_finish_without_object_id_is_unknown(self):
+        from src.publisher.meta_reel_poster import MetaReelPoster
+        with tempfile.TemporaryDirectory() as folder:
+            video = Path(folder) / "clip.mp4"
+            video.write_bytes(b"fixture")
+            responses = [
+                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"video_id": "video-1", "upload_url": "https://upload.test/video-1"}),
+                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {}),
+                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"success": True}),
+            ]
+            with mock.patch("src.publisher.meta_reel_poster.requests.post", side_effect=responses):
+                result = MetaReelPoster().publish_reel("page-1", "page-token", video)
+        self.assertFalse(result["success"])
+        self.assertTrue(result["outcome_unknown"])
+
     def test_invalid_schedule_time_is_rejected_without_immediate_publish(self):
         from web import app as web_app
 
@@ -545,6 +579,33 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
         self.assertEqual(persisted["status"], "published")
         self.assertIn("claim_recovery", json.dumps(persisted))
 
+    def test_ambiguous_publish_response_never_retries_or_marks_published(self):
+        from src.publisher import first_comment_queue
+        from web import scheduled_publisher as worker
+
+        folder, root, output, posts_file = self._fixture({
+            "id": "post-ambiguous", "status": "scheduled", "scheduled_time": "2026-01-01 00:00:00",
+            "page_id": "page-1", "token": "fixture-token", "media_file": "clip.mp4", "auto_first_comment": False,
+        })
+        poster = mock.Mock()
+        poster.publish_reel.return_value = {"success": False, "outcome_unknown": True, "error": "unknown outcome"}
+        try:
+            with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
+                worker, "OUTPUT_DIR", output
+            ), mock.patch.object(worker, "POSTED_CLIPS_FILE", root / "posted.json"), mock.patch.object(
+                first_comment_queue, "QUEUE_FILE", root / "comments.json"
+            ), mock.patch("src.publisher.meta_preflight.preflight_pages", return_value={
+                "ok": True, "ready": [{"token": "verified-page-token", "token_id": "tok_verified"}]
+            }), mock.patch("src.publisher.page_manager.PageManager.list_pages", return_value=[{"page_id": "page-1"}]):
+                worker.process_scheduled_posts_once(poster=poster, now=datetime(2026, 1, 1, 1, 0, 0))
+                saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+                worker.process_scheduled_posts_once(poster=poster, now=datetime(2026, 1, 1, 2, 0, 0))
+        finally:
+            folder.cleanup()
+        self.assertEqual(saved["status"], "failed")
+        self.assertFalse(saved["retryable"])
+        poster.publish_reel.assert_called_once()
+
     def test_fresh_publishing_claim_is_not_stolen(self):
         """A live in-flight claim inside the stale window must not be reclaimed twice."""
         from web import scheduled_publisher as worker
@@ -745,6 +806,19 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
         self.assertIn("QUÁ HẠN", html)
         self.assertIn("startPostsAutoRefresh", html)
         self.assertIn("setInterval", html)
+
+    def test_publishing_rows_are_not_marked_actionable_overdue(self):
+        root = Path(__file__).resolve().parent.parent
+        html = (root / "web" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("postsOverdueIds.has(p.id) && p.status === 'scheduled'", html)
+
+    def test_publish_modal_dom_contract_exists_in_both_mirrors(self):
+        root = Path(__file__).resolve().parent.parent
+        for name in ("web/index.html", "web/templates/index.html"):
+            html = (root / name).read_text(encoding="utf-8")
+            for dom_id in ("modal-publish-reel", "pub-clip-title", "pub-clip-filename", "pub-select-single-page", "pub-select-group", "pub-caption", "pub-first-comment", "pub-schedule-datetime", "pub-schedule-stagger", "pub-status-banner", "btn-execute-publish"):
+                self.assertIn(f'id="{dom_id}"', html)
+            self.assertIn('onclick="executePublishReel()"', html)
 
     def test_start_worker_thread_is_idempotent(self):
         from web import scheduled_publisher as worker

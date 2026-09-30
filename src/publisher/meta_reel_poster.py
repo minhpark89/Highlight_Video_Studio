@@ -24,6 +24,7 @@ class MetaReelPoster:
 
         file_size = video_path.stat().st_size
         track_target = token_id or page_token
+        finish_started = False
 
         # Bước 1: Khởi tạo phiên upload Reel (Initialize)
         init_url = f"{self.base_url}/{page_id}/video_reels"
@@ -34,7 +35,13 @@ class MetaReelPoster:
         try:
             r_init = requests.post(init_url, data=init_payload, timeout=25)
             self._track_headers(track_target, r_init)
-            init_data = r_init.json()
+            try:
+                init_data = r_init.json()
+            except ValueError:
+                return {"success": False, "error": f"Meta init non-JSON response (HTTP {r_init.status_code})"}
+            if not r_init.ok:
+                err_msg = init_data.get("error", {}).get("message", str(init_data))
+                return {"success": False, "error": f"Meta init rejected (HTTP {r_init.status_code}): {err_msg}"}
             if "video_id" not in init_data:
                 err_msg = init_data.get("error", {}).get("message", str(init_data))
                 return {"success": False, "error": f"Lỗi khởi tạo upload: {err_msg}"}
@@ -92,34 +99,43 @@ class MetaReelPoster:
             else:
                 finish_payload["video_state"] = "PUBLISHED"
 
+            finish_started = True
             r_finish = requests.post(finish_url, data=finish_payload, timeout=35)
             self._track_headers(track_target, r_finish)
-            finish_data = r_finish.json()
-
-            if not finish_data.get("success", False) and "video_id" not in finish_data:
+            try:
+                finish_data = r_finish.json()
+            except ValueError:
+                return {"success": False, "outcome_unknown": True, "error": f"Meta finish non-JSON response (HTTP {r_finish.status_code}); reconcile before retry"}
+            if not r_finish.ok:
                 err_msg = finish_data.get("error", {}).get("message", str(finish_data))
-                return {"success": False, "error": f"Lỗi xuất bản/lên lịch Reel: {err_msg}"}
+                return {"success": False, "outcome_unknown": True, "error": f"Meta finish rejected (HTTP {r_finish.status_code}); reconcile before retry: {err_msg}"}
+            # A success response without an object id is not authoritative.
+            if not finish_data.get("video_id") and not finish_data.get("reel_id"):
+                err_msg = finish_data.get("error", {}).get("message", str(finish_data))
+                return {"success": False, "outcome_unknown": True, "error": f"Meta finish returned no object id; outcome is unknown: {err_msg}"}
 
             # Bước 4: Tự động bắn First Comment nếu đăng ngay
             comment_result = None
             if not is_scheduled and first_comment and first_comment.strip():
-                time.sleep(3)
-                comment_result = self.post_first_comment(video_id, page_token, first_comment.strip(), token_id=track_target)
+                try:
+                    time.sleep(3)
+                    comment_result = self.post_first_comment(video_id, page_token, first_comment.strip(), token_id=track_target)
+                except Exception:
+                    comment_result = {"success": False, "error": "First comment failed after Reel publish; do not republish the Reel"}
             elif is_scheduled and first_comment and first_comment.strip():
-                from src.publisher.first_comment_queue import enqueue_first_comment
-                # Meta does not accept comments before a scheduled Reel becomes
-                # public. Persist it and retry shortly after publish time.
-                comment_result = enqueue_first_comment(
-                    video_id,
-                    page_token,
-                    first_comment.strip(),
-                    int(finish_payload["scheduled_publish_time"]) + 30,
-                    token_id=track_target,
-                )
+                try:
+                    from src.publisher.first_comment_queue import enqueue_first_comment
+                    comment_result = enqueue_first_comment(
+                        video_id, page_token, first_comment.strip(),
+                        int(finish_payload["scheduled_publish_time"]) + 30,
+                        token_id=track_target,
+                    )
+                except Exception:
+                    comment_result = {"success": False, "error": "First comment queue failed after Reel finish; do not republish the Reel"}
 
             return {
                 "success": True,
-                "video_id": video_id,
+                "video_id": finish_data.get("video_id") or finish_data.get("reel_id") or video_id,
                 "fb_url": finish_data.get("permalink_url") or f"https://www.facebook.com/reel/{video_id}",
                 "status": "SCHEDULED" if is_scheduled else "PUBLISHED",
                 "scheduled_publish_time": finish_payload.get("scheduled_publish_time"),
@@ -127,6 +143,8 @@ class MetaReelPoster:
             }
 
         except Exception as e:
+            if finish_started:
+                return {"success": False, "outcome_unknown": True, "error": "Meta finish request failed; outcome unknown, reconcile before retry"}
             return {"success": False, "error": f"Ngoại lệ khi đăng/lên lịch Reel: {str(e)}"}
 
     def post_first_comment(self, object_id, page_token, comment_text, token_id=None):

@@ -1955,9 +1955,23 @@ def api_publish_reel():
             })
             continue
 
-        if not p_token:
-            results.append({"page_id": pid, "page_name": p_info.get("page_name"), "success": False, "error": "Chưa có Token hợp lệ"})
+        # Immediate publish must use the same exact Page/token preflight as the
+        # scheduler; never trust a stale cached page_token.
+        immediate_preflight = preflight_pages([p_info], token_vault, page_manager)
+        if not immediate_preflight.get("ok"):
+            blocked = immediate_preflight.get("blocked") or {}
+            results.append({
+                "page_id": pid,
+                "page_name": p_info.get("page_name"),
+                "success": False,
+                "error": blocked.get("action") or "Meta preflight failed",
+                "code": blocked.get("code"),
+                "stage": blocked.get("stage"),
+                "reconnect_required": bool(blocked.get("reconnect_required", True)),
+            })
             continue
+        verified = immediate_preflight["ready"][0]
+        p_token = verified["token"]
 
         res = reel_poster.publish_reel(
             page_id=pid,
@@ -1966,10 +1980,11 @@ def api_publish_reel():
             description=full_description,
             first_comment=first_comment,
             schedule_time=curr_sched,
-            token_id=verified.get("token_id") if verified else p_info.get("token_id"),
+            token_id=verified["token_id"],
         )
 
-        if res.get("success"):
+        facebook_id = res.get("video_id") or res.get("reel_id")
+        if res.get("success") and facebook_id:
             success_count += 1
             p_info["total_posted"] = p_info.get("total_posted", 0) + 1
             pages_updated = True
@@ -1986,7 +2001,6 @@ def api_publish_reel():
             if not schedule_time:
                 # Immediate publishes must appear in Post Management just like
                 # worker-published scheduled posts, including a clickable Reel URL.
-                facebook_id = res.get("video_id") or res.get("reel_id")
                 immediate_posts = load_posts()
                 immediate_posts.insert(0, {
                     "id": f"post_{int(time.time())}_{uuid.uuid4().hex[:6]}",
@@ -2011,7 +2025,7 @@ def api_publish_reel():
                     "status": "published",
                     "posted_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "token_id": verified.get("token_id") if verified else p_info.get("token_id", ""),
+                    "token_id": verified["token_id"],
                 })
                 save_posts(immediate_posts)
         else:
@@ -2019,7 +2033,8 @@ def api_publish_reel():
                 "page_id": pid,
                 "page_name": p_info.get("page_name"),
                 "success": False,
-                "error": res.get("error")
+                "error": res.get("error") or "Meta publish returned no object id; outcome is unknown and must be reconciled before retry.",
+                "outcome_unknown": bool(res.get("outcome_unknown") or (res.get("success") and not facebook_id)),
             })
 
     if pages_updated:
@@ -2194,6 +2209,11 @@ def api_scheduler_status():
                 "status": post.get("status"),
                 "scheduled_time": post.get("scheduled_time"),
                 "late_seconds": late_seconds,
+                "actionable": post.get("status") == "scheduled",
+                "blocked_reason": (
+                    "publish outcome unknown; reconcile before retry"
+                    if post.get("status") == "publishing" else ""
+                ),
             })
     status["overdue_count"] = len(overdue)
     status["overdue_posts"] = overdue[:50]
@@ -2825,33 +2845,39 @@ def api_batch_assign_token():
         vault_map = {str(t.get("id")): t for t in token_vault.list_tokens(mask=False)}
         token_ids = [str(tid) for tid in token_group.get("token_ids", [])] if token_group else list(vault_map)
         blocked = []
-        assigned = 0
-        for idx, page in enumerate(candidates):
+        planned = []
+        loads = {tid: 0 for tid in token_ids}
+        for page in candidates:
             pid = str(page.get("page_id"))
             choices = []
             for tid in token_ids:
                 binding = (page.get("token_bindings") or {}).get(tid)
-                if binding and str(binding.get("verified_page_id") or "") == pid:
-                    choices.append((tid, binding))
+                credential = vault_map.get(tid)
+                if not binding or str(binding.get("verified_page_id") or "") != pid:
+                    continue
+                if not credential or credential.get("status") != "ACTIVE":
+                    continue
+                if (binding.get("status") != "VERIFIED" or not binding.get("page_token") or
+                        binding.get("credential_fingerprint") != page_manager.credential_fingerprint(credential.get("token"))):
+                    continue
+                choices.append((tid, binding, credential))
             if not choices:
                 blocked.append({"page_id": pid, "code": "missing_mapping"})
                 continue
-            tid, binding = min(choices, key=lambda choice: (sum(
-                1 for other in candidates if str(other.get("token_id")) == choice[0]
-            ), token_ids.index(choice[0])))
-            tok = vault_map.get(tid)
-            if not tok:
-                blocked.append({"page_id": pid, "token_id": tid, "code": "missing_token"})
-                continue
-            page["token_id"] = tid
-            page["token_name"] = tok.get("name", "System User")
-            page["page_token"] = binding.get("page_token", "")
-            page["mapping_status"] = "VERIFIED"
-            assigned += 1
+            tid, binding, credential = min(choices, key=lambda choice: (loads[choice[0]], token_ids.index(choice[0])))
+            planned.append((page, tid, binding, credential))
+            loads[tid] += 1
         if blocked:
             return jsonify({"success": False, "stage": "mapping", "code": "missing_mapping",
-                            "error": "Some selected Pages have no verified Token mapping in this group.",
-                            "blocked": blocked, "count": assigned}), 409
+                            "error": "Some selected Pages have no active verified Token mapping in this group. Sync only the blocked Pages with a credential that manages them.",
+                            "blocked": blocked, "count": 0}), 409
+        for page, tid, binding, credential in planned:
+            page["token_id"] = tid
+            page["token_name"] = credential.get("name", "System User")
+            page["page_token"] = binding["page_token"]
+            page["mapping_status"] = "VERIFIED"
+            page["mapping_verified_at"] = binding.get("verified_at", "")
+        assigned = len(planned)
         page_manager.save_pages(pages)
         return jsonify({"success": True, "count": assigned, "message": f"Assigned {assigned} Pages to verified group Tokens."})
 
@@ -3098,7 +3124,7 @@ def api_publish_website_article():
 from src.content_packages import (list_packages, get_package, process_content_packages_once,
                                  generate_package, fallback_package, circuit_status,
                                  start_content_package_worker, enqueue_content_package, sanitize_error,
-                                 retry_package_component, component_statuses)
+                                 retry_package_component, retry_package, component_statuses)
 
 # ---------------------------------------------------------------------------
 # Content Studio: background Content Package queue for rendered clips.
@@ -3251,8 +3277,13 @@ def api_content_studio_retry():
             if not result:
                 return jsonify({"success": False, "error": "Không tìm thấy Content Package"}), 404
             return jsonify({"success": True, **result})
-        result = generate_package(item["title"], item.get("summary", ""), item.get("video_url", ""),
-                                  mode=str(payload.get("mode") or item.get("mode") or "auto"))
+        queued = retry_package(package_id)
+        if not queued:
+            return jsonify({"success": False, "error": "Không tìm thấy Content Package"}), 404
+        if queued.get("status") != "queued":
+            return jsonify({"success": False, "error": "Chỉ có thể thử lại mục lỗi hoặc cần retry", "item": queued}), 409
+        start_content_package_worker()
+        return jsonify({"success": True, "queued": True, "item": queued})
     except Exception as exc:
         return jsonify({"success": False, "error": sanitize_error(exc)}), 502
     return jsonify({"success": True, "component": component or "all", "package": result})
