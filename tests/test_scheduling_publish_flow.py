@@ -174,7 +174,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         self.assertEqual(response.get_json()["code"], "invalid_video_path")
         publish.assert_not_called()
 
-    def test_batch_rejects_foreign_folder_before_scheduling(self):
+    def test_batch_stages_explicit_foreign_folder_without_basename_substitution(self):
         from web import app as web_app
 
         web_app.app.config["TESTING"] = True
@@ -188,6 +188,36 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             (output / "clip.mp4").write_bytes(b"unrelated")
             group = {"id": "group-1", "name": "Group", "page_ids": ["page-1"],
                      "folder_binding": str(foreign), "schedule_config": {"times": ["23:59"]}}
+            posts_file = root / "posts.json"
+            with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
+                web_app, "BASE_DIR", root
+            ), mock.patch.object(web_app, "POSTS_FILE", posts_file), mock.patch.object(
+                web_app.page_manager, "list_groups", return_value=[group]
+            ), mock.patch.object(web_app.page_manager, "list_pages", return_value=[self._verified_page()]), mock.patch.object(
+                web_app.token_vault, "get_token_by_id", return_value=self._credential_entry()
+            ):
+                response = web_app.app.test_client().post("/api/distribute/batch", json={
+                    "group_id": "group-1", "posts_per_page": 1, "clip_filenames": ["clip.mp4"],
+                })
+            self.assertEqual(response.status_code, 200, response.get_json())
+            post = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+            self.assertEqual(post["source_video_path"], str((foreign / "clip.mp4").resolve()))
+            self.assertEqual(post["source_sha256"], __import__("hashlib").sha256(b"foreign").hexdigest())
+            self.assertNotEqual(post["media_file"], "clip.mp4")
+            self.assertEqual((output / post["media_file"]).read_bytes(), b"foreign")
+            self.assertEqual((output / "clip.mp4").read_bytes(), b"unrelated")
+
+    def test_batch_rejects_traversal_before_staging_or_saving(self):
+        from web import app as web_app
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output, selected = root / "output", root / "selected"
+            output.mkdir()
+            selected.mkdir()
+            (root / "clip.mp4").write_bytes(b"outside")
+            group = {"id": "group-1", "page_ids": ["page-1"], "folder_binding": str(selected)}
             with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
                 web_app, "BASE_DIR", root
             ), mock.patch.object(web_app.page_manager, "list_groups", return_value=[group]), mock.patch.object(
@@ -196,11 +226,39 @@ class SchedulingPublishFlowTests(unittest.TestCase):
                 web_app, "save_posts"
             ) as save:
                 response = web_app.app.test_client().post("/api/distribute/batch", json={
-                    "group_id": "group-1", "posts_per_page": 1,
+                    "group_id": "group-1", "posts_per_page": 1, "clip_filenames": ["../clip.mp4"],
                 })
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.get_json()["code"], "foreign_output_folder")
-        save.assert_not_called()
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.get_json()["code"], "invalid_video_path")
+            self.assertEqual(list(output.iterdir()), [])
+            save.assert_not_called()
+
+    def test_batch_source_ledger_blocks_repeat_after_staging(self):
+        from web import app as web_app
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output, selected = root / "output", root / "selected"
+            output.mkdir()
+            selected.mkdir()
+            clip = selected / "clip.mp4"
+            clip.write_bytes(b"video")
+            (root / "posted_clips.json").write_text(json.dumps([str(clip.resolve())]), encoding="utf-8")
+            group = {"id": "group-1", "page_ids": ["page-1"], "folder_binding": str(selected)}
+            with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
+                web_app, "BASE_DIR", root
+            ), mock.patch.object(web_app.page_manager, "list_groups", return_value=[group]), mock.patch.object(
+                web_app.page_manager, "list_pages", return_value=[self._verified_page()]
+            ), mock.patch.object(web_app.token_vault, "get_token_by_id", return_value=self._credential_entry()), mock.patch.object(
+                web_app, "save_posts"
+            ) as save:
+                response = web_app.app.test_client().post("/api/distribute/batch", json={
+                    "group_id": "group-1", "posts_per_page": 1, "clip_filenames": ["clip.mp4"],
+                })
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(list(output.iterdir()), [])
+            save.assert_not_called()
 
     def test_schedule_payload_persists_comment_website_and_never_calls_meta(self):
         from web import app as web_app

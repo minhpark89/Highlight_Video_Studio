@@ -2401,12 +2401,15 @@ def api_retry_post_website(post_id):
 @app.route("/api/distribute/batch", methods=["POST"])
 def api_distribute_batch():
     from src.content_packages import scheduled_video_path
+    from src.publisher.schedule_media import selected_video, source_identity, stage_video
     import re
     from datetime import datetime, timedelta
     data = request.json or {}
     group_id = data.get("group_id")
     token_group_id = str(data.get("token_group_id") or "").strip()
     clip_filenames = data.get("clip_filenames", [])
+    if not isinstance(clip_filenames, list) or any(not isinstance(fn, str) for fn in clip_filenames):
+        return jsonify({"success": False, "code": "invalid_video_path", "error": "Clip selections must be a list of filenames"}), 400
     posts_per_page = int(data.get("posts_per_page", 1))
     stagger_minutes = int(data.get("stagger_minutes", 15))
     auto_first_comment = data.get("auto_first_comment", True)
@@ -2478,46 +2481,81 @@ def api_distribute_batch():
     group_times = sched_cfg.get("times") or ["11:30", "19:30"]
     group_stagger = sched_cfg.get("stagger_minutes") or stagger_minutes
 
-    folder_path = Path(group.get("folder_path") or group.get("folder_binding") or str(OUTPUT_DIR))
-    if not folder_path.exists():
+    folder_path = Path(group.get("folder_path") or group.get("folder_binding") or str(OUTPUT_DIR)).expanduser()
+    if not folder_path.is_dir():
         return jsonify({"success": False, "code": "missing_output_folder",
                         "error": "Configured schedule clip folder does not exist"}), 400
-    # The worker resolves scheduled filenames under OUTPUT_DIR, never a foreign folder.
-    if not folder_path.resolve().is_relative_to(OUTPUT_DIR.resolve()):
-        return jsonify({"success": False, "code": "foreign_output_folder",
-                        "error": "Schedule clips must be inside this installation's output directory"}), 400
+    folder_path = folder_path.resolve()
+    canonical_output = OUTPUT_DIR.resolve()
+    if not canonical_output.is_dir():
+        return jsonify({"success": False, "code": "missing_output_folder", "error": "Canonical output folder is missing"}), 400
 
     posted_file = BASE_DIR / "posted_clips.json"
     posted_set = set()
     if posted_file.exists():
         try:
-            posted_set = set(json.loads(posted_file.read_text(encoding="utf-8")))
+            records = json.loads(posted_file.read_text(encoding="utf-8"))
+            for record in records if isinstance(records, list) else []:
+                if isinstance(record, str):
+                    posted_set.add(record)
+                elif isinstance(record, dict):
+                    posted_set.update(str(record.get(key)) for key in ("source_video_path", "media_file", "clip_filename") if record.get(key))
         except Exception:
             posted_set = set()
 
-    queued_clips = {p.get("media_file") or p.get("clip_filename") for p in posts if p.get("status") in ["scheduled", "publishing"]}
+    handled_posts = [p for p in posts if p.get("status") in ("scheduled", "publishing", "processing") or
+                     (p.get("status") == "published" and (p.get("post_fb_id") or p.get("reel_id")))]
+    queued_clips = {str(p.get(key)) for p in handled_posts for key in ("media_file", "source_video_path") if p.get(key)}
 
     available_clips = []
     if clip_filenames:
         for fn in clip_filenames:
             try:
-                candidate = scheduled_video_path(OUTPUT_DIR, folder_path / fn)
+                candidate = selected_video(folder_path, fn)
             except (ValueError, FileNotFoundError, OSError) as exc:
                 return jsonify({"success": False, "code": "invalid_video_path", "error": str(exc)}), 400
-            relative = str(candidate.relative_to(OUTPUT_DIR.resolve()))
-            if relative not in posted_set and relative not in queued_clips:
-                available_clips.append(relative)
+            available_clips.append(candidate)
     else:
         for p in sorted(folder_path.glob("*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
             try:
-                relative = str(scheduled_video_path(OUTPUT_DIR, p).relative_to(OUTPUT_DIR.resolve()))
+                available_clips.append(selected_video(folder_path, p))
             except (ValueError, FileNotFoundError, OSError):
                 continue
-            if relative not in posted_set and relative not in queued_clips:
-                available_clips.append(relative)
+
+    # Compare source identities, never bare basenames from unrelated folders.
+    seen_sources = set()
+    filtered = []
+    for candidate in available_clips:
+        identity = source_identity(candidate)
+        canonical_name = candidate.name if folder_path == canonical_output else None
+        if identity in seen_sources or identity in posted_set or identity in queued_clips:
+            continue
+        if canonical_name and (canonical_name in posted_set or canonical_name in queued_clips):
+            continue
+        seen_sources.add(identity)
+        filtered.append(candidate)
+    available_clips = filtered
 
     if not available_clips:
         return jsonify({"error": "Không còn video clip mới nào chưa đăng/chưa hẹn để phân bổ! Hãy render thêm hoặc kiểm tra thư mục nguồn."}), 400
+
+    # Stage before writing queue rows: a failed source must not leave a partial schedule.
+    staged_clips = []
+    try:
+        for source_clip in available_clips[:min(len(available_clips), posts_per_page * len(page_ids))]:
+            if folder_path == canonical_output:
+                clip_fn = str(scheduled_video_path(OUTPUT_DIR, source_clip).relative_to(canonical_output))
+                source_sha = ""
+                source_path = source_identity(source_clip)
+            else:
+                clip_fn, source_sha, source_path = stage_video(source_clip, OUTPUT_DIR)
+            if clip_fn not in posted_set and clip_fn not in queued_clips:
+                staged_clips.append((source_clip, clip_fn, source_sha, source_path))
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        return jsonify({"success": False, "code": "invalid_video_path", "error": str(exc)}), 400
+    available_clips = staged_clips
+    if not available_clips:
+        return jsonify({"success": False, "code": "no_new_clips", "error": "No unused clips in configured folder"}), 400
 
     now_ts = datetime.now()
     scheduled_count = 0
@@ -2542,7 +2580,7 @@ def api_distribute_batch():
             if clip_idx >= len(available_clips):
                 break
 
-            clip_fn = available_clips[clip_idx]
+            source_clip, clip_fn, source_sha, source_path = available_clips[clip_idx]
             clip_idx += 1
 
             p_info = page_map.get(pid, {})
@@ -2567,6 +2605,8 @@ def api_distribute_batch():
                 "group_name": group.get("name", "Nhóm Fanpage"),
                 "type": "reel",
                 "media_file": clip_fn,
+                "source_video_path": source_path,
+                "source_sha256": source_sha,
                 "article_url": configured_website_url,
                 "website_status": "ready" if configured_website_url else ("pending_generation" if auto_first_comment else "not_configured"),
                 "website_error": "",

@@ -3,6 +3,7 @@ import sys
 import json
 import re
 import html
+import hashlib
 try:
     import cv2
     HAS_CV2 = True
@@ -154,6 +155,66 @@ def _image_response_values(payload) -> list:
     walk(payload)
     return list(dict.fromkeys(value for value in values if value))
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verified_foreign_source(clip_filename: str, data_root: Path) -> Path | None:
+    """Resolve a selected foreign clip or a staged clip using recorded byte provenance.
+
+    A filename alone is never evidence that a foreign job owns a staged clip.
+    """
+    selected = Path(str(clip_filename or "")).expanduser()
+    staged = selected if selected.is_absolute() else data_root / "output" / selected
+    try:
+        if staged.is_symlink():
+            return None
+        staged = staged.resolve(strict=True)
+        if staged.is_symlink() or not staged.is_file() or staged.suffix.lower() != ".mp4":
+            return None
+        local_output = (data_root / "output").resolve()
+        if staged.parent != local_output:
+            return staged if staged.parent.name.lower() == "output" else None
+
+        # The scheduler records the original path and the digest of the staged bytes.
+        # Verify both, plus the source-identity key encoded in the staging filename.
+        posts_file = data_root / "posts.json"
+        if not posts_file.is_file():
+            return None
+        posts = json.loads(posts_file.read_text(encoding="utf-8"))
+        if not isinstance(posts, list):
+            return None
+        for post in posts:
+            if not isinstance(post, dict):
+                continue
+            media = Path(str(post.get("media_file") or ""))
+            media = media if media.is_absolute() else local_output / media
+            if media.resolve(strict=False) != staged:
+                continue
+            sha = str(post.get("source_sha256") or "").lower()
+            source = Path(str(post.get("source_video_path") or "")).expanduser()
+            if not re.fullmatch(r"[a-f0-9]{64}", sha) or not source.is_absolute():
+                continue
+            if source.is_symlink() or not source.is_file() or source.parent.name.lower() != "output":
+                continue
+            source = source.resolve(strict=True)
+            if source.parent == local_output:
+                continue
+            identity = os.path.normcase(str(source))
+            key = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+            if staged.name != f"source-{key}-{sha}{source.suffix.lower()}":
+                continue
+            if _file_sha256(staged) == sha and _file_sha256(source) == sha:
+                return source
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    return None
+
+
 def get_clip_metadata(clip_filename: str) -> dict:
     """
     Tìm thông tin video gốc từ jobs.json hoặc crawled_videos.json.
@@ -162,6 +223,12 @@ def get_clip_metadata(clip_filename: str) -> dict:
     data_root = _runtime_data_root()
     jobs_file = data_root / "jobs.json"
     crawled_file = data_root / "crawled_videos.json"
+    foreign_source = _verified_foreign_source(clip_filename, data_root)
+    if foreign_source is not None:
+        # Only a job ledger next to the *verified* source output folder is eligible.
+        # Never search arbitrary foreign installations by matching a basename.
+        jobs_file = foreign_source.parent.parent / "jobs.json"
+        crawled_file = foreign_source.parent.parent / "crawled_videos.json"
 
     meta = {
         "clip_filename": clip_filename,
@@ -181,7 +248,9 @@ def get_clip_metadata(clip_filename: str) -> dict:
 
     # 1. Tìm trong jobs.json
     matched_job = None
-    requested = Path(str(clip_filename or "")).expanduser()
+    requested = foreign_source or Path(str(clip_filename or "")).expanduser()
+    if not requested.is_absolute() and requested.parent == Path("."):
+        requested = data_root / "output" / requested
     requested_resolved = str(requested.resolve(strict=False)).lower()
     requested_name = requested.name.lower()
 
@@ -190,48 +259,56 @@ def get_clip_metadata(clip_filename: str) -> dict:
         if not candidate:
             return False
         path = Path(candidate).expanduser()
-        return (str(path.resolve(strict=False)).lower() == requested_resolved
-                or path.name.lower() == requested_name)
+        if path.is_absolute():
+            return (requested.is_file()
+                    and path.parent.resolve(strict=False) == (jobs_file.parent / "output").resolve(strict=False)
+                    and str(path.resolve(strict=False)).lower() == requested_resolved)
+        # A bare job clip name is meaningful only inside its own output directory.
+        return (requested.is_file()
+                and requested.parent.resolve(strict=False) == (jobs_file.parent / "output").resolve(strict=False)
+                and path.name.lower() == requested_name and path.name == candidate)
 
     if jobs_file.exists():
         try:
             with open(jobs_file, "r", encoding="utf-8", errors="ignore") as f:
                 jobs = json.load(f)
-                for j in jobs:
+                matches = []
+                for j in jobs if isinstance(jobs, list) else []:
+                    if not isinstance(j, dict):
+                        continue
                     for c in j.get("clips", []):
-                        if _clip_matches(c.get("filename")):
-                            matched_job = j
-                            meta["job_id"] = j.get("id") or ""
-                            meta["clip_index"] = c.get("clip_index") or c.get("index") or ""
-                            meta["youtube_url"] = j.get("youtube_url") or ""
-                            meta["clip_start"] = c.get("start", c.get("start_time"))
-                            meta["clip_end"] = c.get("end", c.get("end_time"))
-                            meta["clip_title"] = c.get("title") or ""
-                            meta["source_video_path"] = j.get("video_path") or ""
-                            vt = (j.get("video_title") or "").strip()
-                            if vt and not re.search(r'^(video highlight|job_\d+|clip_\d+)', vt, re.IGNORECASE):
-                                meta["video_title"] = vt
+                        if isinstance(c, dict) and _clip_matches(c.get("filename")):
+                            matches.append((j, c))
                             break
-                    if matched_job:
-                        break
+                if len(matches) == 1:
+                    matched_job, c = matches[0]
+                    meta["job_id"] = matched_job.get("id") or ""
+                    meta["clip_index"] = c.get("clip_index") or c.get("index") or ""
+                    meta["youtube_url"] = matched_job.get("youtube_url") or ""
+                    meta["clip_start"] = c.get("start", c.get("start_time"))
+                    meta["clip_end"] = c.get("end", c.get("end_time"))
+                    meta["clip_title"] = c.get("title") or ""
+                    meta["source_video_path"] = matched_job.get("video_path") or ""
+                    vt = (matched_job.get("video_title") or "").strip()
+                    if vt and not re.search(r'^(video highlight|job_\d+|clip_\d+)', vt, re.IGNORECASE):
+                        meta["video_title"] = vt
+                elif len(matches) > 1:
+                    logger.warning("Ambiguous clip metadata for %s in %s", requested, jobs_file)
         except Exception:
             pass
 
     # 2. Tìm youtube_id
     y_url = meta.get("youtube_url", "")
-    if "v=" in y_url:
-        meta["youtube_id"] = y_url.split("v=")[1].split("&")[0]
-    elif "youtu.be/" in y_url:
-        meta["youtube_id"] = y_url.split("youtu.be/")[1].split("?")[0]
+    meta["youtube_id"] = extract_youtube_video_id(y_url)
 
     # Kiểm tra file video gốc dài trong downloads/
     if meta.get("job_id"):
-        long_path = data_root / "downloads" / f"{meta['job_id']}.mp4"
+        long_path = jobs_file.parent / "downloads" / f"{meta['job_id']}.mp4"
         if long_path.exists():
             meta["long_video_path"] = str(long_path)
     source_path = Path(str(meta.get("source_video_path") or ""))
     if not source_path.is_absolute():
-        source_path = data_root / source_path
+        source_path = jobs_file.parent / source_path
     if source_path.is_file() and source_path.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm"):
         meta["source_video_path"] = str(source_path)
     elif meta.get("long_video_path"):
