@@ -3219,7 +3219,7 @@ def api_content_studio_batch():
         path = Path(raw)
         return {raw.lower(), path.name.lower()}
 
-    posted_file = BASE_DIR / "posted_clips.json"
+    posted_file = POSTS_FILE.parent / "posted_clips.json"
     posted_records = []
     if posted_file.exists():
         try:

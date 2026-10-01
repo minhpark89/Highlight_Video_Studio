@@ -446,7 +446,8 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             queue_file.write_text(json.dumps([{"id": "p1", "clip_filename": str(clip_queued), "status": "queued"}]), encoding="utf-8")
             client = web_app.app.test_client()
             with mock.patch.object(web_app, "BASE_DIR", root), mock.patch.object(
-                content_packages, "QUEUE_FILE", queue_file
+                web_app, "POSTS_FILE", root / "posts.json"
+            ), mock.patch.object(content_packages, "QUEUE_FILE", queue_file
             ), mock.patch.object(web_app, "get_clip_metadata", return_value={"video_title": "New"}):
                 response = client.post("/api/content-studio/batch", json={"folder": str(root), "mode": "no_llm"})
             payload = response.get_json()

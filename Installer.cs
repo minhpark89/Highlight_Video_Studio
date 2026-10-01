@@ -73,6 +73,12 @@ internal sealed class InstallerForm : Form
     {
         try
         {
+            // An explicitly selected production directory must not be stopped or overwritten.
+            string fullTarget = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar);
+            string production = Path.GetFullPath(@"D:\Highlight_Video_Studio").TrimEnd(Path.DirectorySeparatorChar);
+            if (fullTarget.Equals(production, StringComparison.OrdinalIgnoreCase) ||
+                fullTarget.StartsWith(production + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Choose an isolated test install directory outside the production Highlight install.");
             Directory.CreateDirectory(target);
             UpdateUi("Stopping an earlier test instance…", 0);
             StopRunningApplication(target);
