@@ -14,7 +14,7 @@ from pathlib import Path
 import requests
 
 from multi_pc.data_root import ProcessLease, canonical_data_root
-from src.llm_response import json_from_chat_response
+from src.llm_response import chat_stream_incomplete, json_from_chat_response
 from src.text_llm_diagnostics import chat_endpoint, chat_failure
 
 DATA_ROOT = canonical_data_root()
@@ -127,32 +127,59 @@ def _llm_package(title, summary, video_url=""):
     if not model or not cfg.get("api_key"):
         raise RuntimeError(chat_failure(None, has_key=bool(cfg.get("api_key")), has_model=bool(model)))
     prompt = (
-        "Create a content package for a rendered highlight. Return JSON only with keys "
-        "hero_title, article_html, first_comment, caption, hashtags. Article HTML must be a useful 350+ word story.\n"
+        "Create a content package for a rendered highlight. Return one JSON object ONLY (no reasoning, "
+        "markdown or prose) with string keys hero_title, article_html, first_comment, caption, "
+        "and an array of strings hashtags. Article HTML must be a useful 350+ word story, "
+        "but do not invent events or facts not supported by the inputs. If there is no article URL, "
+        "set first_comment to an empty string rather than inventing a link.\n"
         f"Title: {title}\nSummary: {summary}\nSource: {video_url}"
     )
     headers = {"Content-Type": "application/json"}
     if cfg.get("api_key"):
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
-    response = requests.post(
-        chat_endpoint(endpoint),
-        headers=headers,
-        json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.45},
-        timeout=45,
-    )
-    if response.status_code in QUOTA_CODES:
-        raise QuotaError(f"LLM quota HTTP {response.status_code}")
-    if response.status_code != 200:
-        raise RuntimeError(chat_failure(response.status_code, has_key=True, has_model=True))
-    data = json_from_chat_response(response)
-    if not isinstance(data, dict):
-        raise RuntimeError("LLM returned a non-object content package")
-    required = ("hero_title", "article_html", "first_comment", "caption")
-    if not all(str(data.get(key) or "").strip() for key in required):
-        raise RuntimeError("LLM returned an incomplete content package")
-    data["source"] = "llm"
-    record_llm_success()
-    return data
+    # A 200 can contain commentary, an empty reasoning-only reply, or incomplete
+    # JSON. Retry that *one* response failure with a more explicit instruction;
+    # never replay network failures, quota errors or non-200 provider responses.
+    messages = [{"role": "user", "content": prompt}]
+    for attempt in range(2):
+        response = requests.post(
+            chat_endpoint(endpoint), headers=headers,
+            json={"model": model, "messages": messages, "temperature": 0.45 if attempt == 0 else 0.2},
+            timeout=45,
+        )
+        if response.status_code in QUOTA_CODES:
+            raise QuotaError(f"LLM quota HTTP {response.status_code}")
+        if response.status_code != 200:
+            raise RuntimeError(chat_failure(response.status_code, has_key=True, has_model=True))
+        if chat_stream_incomplete(response):
+            raise RuntimeError("Text LLM HTTP 200 stream ended without completion; check provider/model route")
+        try:
+            data = json_from_chat_response(response)
+            if not isinstance(data, dict):
+                raise ValueError("LLM returned a non-object content package")
+            if not all(isinstance(data.get(key), str) and data[key].strip()
+                       for key in ("hero_title", "article_html", "caption")):
+                raise ValueError("LLM returned an incomplete content package")
+            if not isinstance(data.get("first_comment"), str):
+                raise ValueError("LLM returned an incomplete content package")
+            if not isinstance(data.get("hashtags"), list) or not all(
+                isinstance(tag, str) for tag in data["hashtags"]
+            ):
+                raise ValueError("LLM returned an incomplete content package")
+        except ValueError:
+            if attempt:
+                raise
+            # Do not echo malformed provider content, which may contain private data.
+            messages = [*messages, {"role": "user", "content": (
+                "Your previous response could not be used. Return exactly one complete JSON object "
+                "with hero_title, article_html, first_comment, caption and hashtags. "
+                "No thinking, explanation, fences or extra text. first_comment may be an empty string; "
+                "hashtags must be an array of strings."
+            )}]
+            continue
+        data["source"] = "llm"
+        record_llm_success()
+        return data
 
 
 class QuotaError(RuntimeError):
@@ -165,11 +192,15 @@ def generate_package(title, summary="", video_url="", mode="auto", article_url="
     if selected_mode == "no_llm":
         result = fallback
     elif circuit_status().get("open"):
+        if selected_mode == "llm":
+            raise RuntimeError("LLM quota circuit open; try again after cooldown")
         result = {**fallback, "source": "no_llm_circuit_open", "circuit": circuit_status()}
     else:
         try:
             result = _llm_package(title, summary, video_url)
         except QuotaError as exc:
+            if selected_mode == "llm":
+                raise RuntimeError(sanitize_error(exc)) from None
             state = record_quota_failure(exc)
             result = {**fallback, "source": "no_llm_quota_fallback", "circuit": {**state, "open": True}}
         except Exception as exc:

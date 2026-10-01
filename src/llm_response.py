@@ -170,3 +170,37 @@ def json_from_text(text: str):
 
 def json_from_chat_response(response):
     return json_from_text(chat_text_from_response(response))
+
+
+def chat_stream_incomplete(response) -> bool:
+    """Detect a 200 SSE body that never completed a chat choice.
+
+    Only inspect protocol metadata; never return or log provider body text.
+    A completed SSE response has a non-null choice finish_reason, or a [DONE]
+    marker. Empty or prematurely cut streams must not be retried as if they
+    were a complete but badly formatted model answer.
+    """
+    raw = str(getattr(response, "text", "") or "")
+    if not re.search(r"(?:^|\n)\s*data:", raw):
+        return False
+    if len(raw) > _MAX_TEXT:
+        return True
+    saw_choice = False
+    for line in raw.splitlines():
+        if not line.lstrip().startswith("data:"):
+            continue
+        value = line.lstrip()[5:].strip()
+        if value == "[DONE]":
+            return False
+        try:
+            event = json.loads(value)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        for choice in event.get("choices") or []:
+            if isinstance(choice, dict):
+                saw_choice = True
+                if choice.get("finish_reason"):
+                    return False
+    return saw_choice

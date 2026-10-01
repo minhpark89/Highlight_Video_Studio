@@ -525,7 +525,8 @@ Exact required visual elements matching viral clickbait standard:
             Path(out_file).unlink(missing_ok=True)
             return ""
         except Exception as exc:
-            logger.warning("Cannot save generated image response: %s", exc)
+            Path(out_file).unlink(missing_ok=True)
+            logger.warning("Cannot save generated image response (%s); use source-frame fallback", type(exc).__name__)
             return ""
 
     image_payload = {
@@ -540,21 +541,31 @@ Exact required visual elements matching viral clickbait standard:
     }
     exact_url = generation_url.rstrip("/") if generation_url else f"{api_base.rstrip('/')}/images/generations"
     if not exact_url.lower().split("?", 1)[0].endswith("/v1/images/generations"):
-        logger.warning("Image generation URL must end with /v1/images/generations: %s", exact_url)
+        logger.warning("Image generation URL must end with /v1/images/generations; use source-frame fallback")
         return ""
-    attempts = [(exact_url, image_payload)]
-    for url, payload in attempts:
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=120)
-            if resp.status_code != 200:
-                logger.warning("Image provider %s returned HTTP %s", url, resp.status_code)
-                continue
-            for image_value in _image_response_values(resp.json()):
-                saved = save_image_value(image_value)
-                if saved:
-                    return saved
-        except Exception as exc:
-            logger.warning("Image provider request failed at %s: %s", url, exc)
+    try:
+        resp = requests.post(exact_url, headers=headers, json=image_payload, timeout=120)
+    except requests.RequestException as exc:
+        # Request exceptions can include the full authenticated URL or headers.
+        logger.warning("Image provider transport failed (%s); use source-frame fallback", type(exc).__name__)
+        return ""
+
+    if resp.status_code != 200:
+        # A gateway 502/5xx is not a client 4xx. Do not replay ambiguous image
+        # generation: the upstream may have charged/completed it already.
+        category = "upstream/gateway" if 500 <= resp.status_code <= 599 else "client/config" if 400 <= resp.status_code <= 499 else "unexpected"
+        logger.warning("Image provider %s HTTP %s; use source-frame fallback", category, resp.status_code)
+        return ""
+    try:
+        values = _image_response_values(resp.json())
+    except (ValueError, TypeError):
+        logger.warning("Image provider HTTP 200 returned invalid JSON; use source-frame fallback")
+        return ""
+    for image_value in values:
+        saved = save_image_value(image_value)
+        if saved:
+            return saved
+    logger.warning("Image provider HTTP 200 returned no usable landscape image; use source-frame fallback")
 
     return ""
 

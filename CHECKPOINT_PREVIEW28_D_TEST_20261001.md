@@ -1,0 +1,24 @@
+# Highlight Video Studio Preview28 D-drive checkpoint — 2026-10-01 GMT+7
+
+## Canonical build and runtime
+- Source checkout `F:\openclaw\.openclaw\workspace\worktrees\highlight-preview28-build-20261001`; source commit `2883c3c240230b4f4016a8acbd9db12639d7aac4`. This is the base for subsequent fixes, not the dirty source of Preview27.
+- Local-only installer `release\Highlight_Desktop_Test_Setup_v1.0.19-preview.28.exe`, SHA256 `0d9ee34c17f0af78f0a52ae370ddf4dd46e67a7e2dca54f02130e6b89ca74843`, sibling `.sha256`. The builder verified embedded payload source hashes/identity and exact committed empty posts fixture. No tag/push/GitHub release or production deployment has occurred.
+- Installed separately at `D:\HighlightDesktopTest-preview28-isolated`, `build_identity.json` says `1.0.19-preview.28`, commit `2883c3c`. Backend was running from this root as PID 18344 at `http://127.0.0.1:56574/`, `/api/system/info` healthy, mapping health 100 verified locally. URL was opened on the PC; visible browser tab not independently verified. Check PID/build on every future run.
+- Copied only approved settings, Page mappings and token vault from D Preview27, hashes matched; **no** posts, content package backlog, ledger or old schedules copied. `posts.json` on Preview28 verified exactly `[]`, data/content_packages absent immediately after startup. Preview27 backend on port 56573 stopped; Preview26 backend port 56572 stopped; both data roots remain intact, never overwrite them or restart an old queue casually.
+
+## Changes and evidence
+- Parser in `src/llm_response.py` handles reasoning prelude with stray braces, fenced JSON, SSE and nested response forms with bounded input/candidate count. Offline regression reproduced old `LLM response không chứa JSON hợp lệ` and passes fixed parser; real provider-generated content in Preview28 is **not yet verified**.
+- Direct/group scheduling attaches a matching ready Content Studio package when available. New schedule-bound packages are moved ahead of unscheduled library backlog and worker starts after post persistence; HTTP scheduling does not wait on CMS/LLM. A currently running package cannot be preempted. A due post still follows Meta preflight; earlier Preview26 change allowed Meta publish without waiting indefinitely for package, so link/comment is not guaranteed ready if scheduled too close to due time.
+- Combined targeted source tests passed 102, Python compileall and diff-check passed. Release builder ran standard grouped tests and embedded payload verification. These are **offline** proofs only, not a live CMS/comment/Meta pass.
+- Previous Preview27 source already allows configured foreign output folder with safe atomic staging and digest, and verified foreign `jobs.json` YouTube provenance. No user folder configuration was changed in this Preview28 test root.
+- Build checkout still has dirty `build_release.ps1` temporary committed-fixture guard, `posts.json` test-touched, `data/content_packages.json`, `data/run/`, and `run/`. Never commit/copy this mutable runtime state into a payload. Inspect builder guard before next build; stage `git show HEAD:posts.json` fixture.
+
+## Unresolved real Meta outcomes — do not retry
+- Preview26 Zachary post `post_1790831480_b84b3d`, candidate `122116586535470859`, upload video `1399297491819857`, `processing`, six bounded GET attempts, no confirmed permalink/Reel ID or posted ledger.
+- Preview27 Zachary post `post_1790834192_1baa07`, candidate `122116599255470859`, upload video `1088887117207220`, `processing`, six bounded GET attempts, no confirmed permalink/Reel ID or posted ledger. Preview27 also had 1,883 Content Packages (over 1,800 queued); the queue was deliberately not copied into Preview28.
+- Meta's finish `post_id` and 'processing' message are not proof of a published Reel. Do not re-send either video or another test Reel under the earlier bounded permission while remote outcome is unresolved. Independently GET exact Page/object read-only, then verify permalink and ledger before claiming success. Do not declare deploy-ready until real Preview28 content, CMS article/First Comment, and one safe Meta post outcome pass on the correct build.
+
+## Safe next steps
+1. Confirm Preview28 runtime identity and empty queue. Exercise Content Studio on an eligible clip, inspect output for real LLM vs fallback and verify CMS URL/embed; avoid bulk-generating from an entire foreign folder.
+2. For scheduling, use **one Page and one clip**; verify eligible ready package or observe prioritized preparation finish before due time. Do not interpret local schedule acknowledgment as Meta publication.
+3. Reconcile the two older Zachary candidates through read-only Meta access; if either remains uncertain, stop all new Meta POST. Return an exact blocker rather than a success claim or retry.

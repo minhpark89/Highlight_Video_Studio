@@ -3,7 +3,7 @@ import json
 import unittest
 from unittest import mock
 
-from src.llm_response import chat_text_from_response, json_from_chat_response, json_from_text
+from src.llm_response import chat_stream_incomplete, chat_text_from_response, json_from_chat_response, json_from_text
 
 
 class FakeResponse:
@@ -41,6 +41,23 @@ class ResponseParserTests(unittest.TestCase):
         stream = 'data: invalid\ndata: ' + json.dumps({"choices": [{"delta": {"content": json.dumps(PACKAGE)}}]})
         self.assertEqual(chat_text_from_response(FakeResponse(stream)), json.dumps(PACKAGE))
 
+    def test_incomplete_stream_is_not_retried_or_counted_as_llm(self):
+        from src import content_packages as cp
+        stream = 'data: ' + json.dumps({'choices': [{'delta': {'content': 'partial answer'}}]})
+        self.assertTrue(chat_stream_incomplete(FakeResponse(stream)))
+        self.assertFalse(chat_stream_incomplete(FakeResponse(stream + '\ndata: [DONE]')))
+        cfg = {"configured_base": "http://example.test/v1", "api_key": "fixture-private", "model": "fixture"}
+        with mock.patch('src.content_builder.get_llm_candidates', return_value=cfg), mock.patch(
+            'src.content_builder._get_task_model', return_value='fixture'
+        ), mock.patch.object(cp, 'circuit_status', return_value={"open": False}), mock.patch.object(
+            cp.requests, 'post', return_value=FakeResponse(stream)
+        ) as post:
+            with self.assertRaisesRegex(RuntimeError, 'stream ended without completion'):
+                cp.generate_package('Fixture', mode='llm')
+            self.assertEqual(post.call_count, 1)
+            self.assertEqual(cp.generate_package('Fixture', mode='auto')['source'], 'no_llm_error_fallback')
+            self.assertEqual(post.call_count, 2)
+
     def test_plain_body_and_wrapped_envelope(self):
         self.assertEqual(json_from_chat_response(FakeResponse('```json\n' + json.dumps(PACKAGE) + '\n```')), PACKAGE)
         self.assertEqual(json_from_chat_response(FakeResponse('', {"response": {"choices": [{"message": {"content": json.dumps(PACKAGE)}}]}})), PACKAGE)
@@ -65,6 +82,60 @@ class ResponseParserTests(unittest.TestCase):
             self.assertEqual(result['fallback_reason'], 'LLM response không chứa JSON hợp lệ')
             with self.assertRaisesRegex(RuntimeError, 'JSON hợp lệ'):
                 cp.generate_package('Fixture', mode='llm')
+
+    def test_content_package_one_adjusted_retry_then_llm_success(self):
+        from src import content_packages as cp
+        cfg = {"configured_base": "http://example.test/v1", "api_key": "fixture-private", "model": "fixture"}
+        calls = []
+        def post(url, **kwargs):
+            calls.append(kwargs['json'])
+            return FakeResponse('reasoning only') if len(calls) == 1 else FakeResponse(json.dumps({
+                "choices": [{"message": {"content": json.dumps({**PACKAGE, "first_comment": ""})}}]
+            }))
+        with mock.patch('src.content_builder.get_llm_candidates', return_value=cfg), mock.patch(
+            'src.content_builder._get_task_model', return_value='fixture'
+        ), mock.patch.object(cp, 'circuit_status', return_value={"open": False}), mock.patch.object(
+            cp.requests, 'post', side_effect=post
+        ), mock.patch.object(cp, 'record_llm_success') as success:
+            result = cp.generate_package('Fixture', mode='llm')
+        self.assertEqual(result['source'], 'llm')
+        self.assertEqual(result['first_comment'], '')
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls[1]['messages']), 2)
+        success.assert_called_once()
+
+    def test_http_and_quota_are_not_retried_or_misreported_as_llm(self):
+        from src import content_packages as cp
+        cfg = {"configured_base": "http://example.test/v1", "api_key": "fixture-private", "model": "fixture"}
+        with mock.patch('src.content_builder.get_llm_candidates', return_value=cfg), mock.patch(
+            'src.content_builder._get_task_model', return_value='fixture'
+        ), mock.patch.object(cp, 'circuit_status', return_value={"open": False}), mock.patch.object(
+            cp, 'record_quota_failure', return_value={'open': True}
+        ) as record, mock.patch.object(cp.requests, 'post') as post:
+            post.return_value = FakeResponse('')
+            post.return_value.status_code = 429
+            with self.assertRaisesRegex(RuntimeError, 'quota HTTP 429'):
+                cp.generate_package('Fixture', mode='llm')
+            record.assert_not_called()
+            self.assertEqual(post.call_count, 1)
+            auto = cp.generate_package('Fixture', mode='auto')
+            self.assertEqual(auto['source'], 'no_llm_quota_fallback')
+            self.assertEqual(post.call_count, 2)
+
+    def test_invalid_twice_auto_marks_fallback_and_explicit_llm_fails(self):
+        from src import content_packages as cp
+        cfg = {"configured_base": "http://example.test/v1", "api_key": "fixture-private", "model": "fixture"}
+        with mock.patch('src.content_builder.get_llm_candidates', return_value=cfg), mock.patch(
+            'src.content_builder._get_task_model', return_value='fixture'
+        ), mock.patch.object(cp, 'circuit_status', return_value={"open": False}), mock.patch.object(
+            cp.requests, 'post', return_value=FakeResponse('reasoning only')
+        ) as post:
+            result = cp.generate_package('Fixture', mode='auto')
+            self.assertEqual(result['source'], 'no_llm_error_fallback')
+            self.assertEqual(post.call_count, 2)
+            with self.assertRaisesRegex(RuntimeError, 'JSON hợp lệ'):
+                cp.generate_package('Fixture', mode='llm')
+            self.assertEqual(post.call_count, 4)
 
 
 if __name__ == '__main__':
