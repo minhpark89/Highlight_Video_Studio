@@ -4888,7 +4888,7 @@
         banner.style.color = '#4ade80';
         const sCount = data.success_count || 1;
         const actionStr = (mode === 'schedule') ? 'Lên lịch thành công' : 'Đã xuất bản trực tiếp';
-        const failed = (data.results || []).filter(r => !r.success);
+        const failed = (data.results || []).filter(r => !r.success && !r.processing);
         const failureText = failed.length
           ? ` <span style="color:#fca5a5;">${failed.length} lỗi: ${failed.map(r => `${escapeHtml(r.page_name || r.page_id || 'Page')} — ${escapeHtml(r.error || 'Không rõ lỗi')}`).join(' | ')}</span>`
           : '';
@@ -4905,10 +4905,15 @@
           toggleScheduleOptions();
         }, 3000);
       } else {
-        banner.style.background = 'rgba(239, 68, 68, 0.2)';
-        banner.style.border = '1px solid #ef4444';
-        banner.style.color = '#f87171';
+        const metaProcessing = (data.results || []).some(r => r.processing);
+        banner.style.background = metaProcessing ? 'rgba(245,158,11,0.2)' : 'rgba(239, 68, 68, 0.2)';
+        banner.style.border = metaProcessing ? '1px solid #b45309' : '1px solid #ef4444';
+        banner.style.color = metaProcessing ? '#fbbf24' : '#f87171';
+        if (metaProcessing) {
+          banner.textContent = 'Meta processing: awaiting independent verification. Do not retry or publish again.';
+        } else {
         banner.innerHTML = `<strong><i class="bi bi-exclamation-triangle-fill"></i> Lỗi:</strong> ${data.error || 'Không thể đăng Reel lên Facebook'}`;
+        }
         btn.disabled = false;
         toggleScheduleOptions();
       }
@@ -5751,6 +5756,8 @@
               ` : ''}
             </div>
           `;
+        } else if (p.status === 'processing') {
+          statusBadge = `<span style="background:rgba(245,158,11,0.15);color:#fbbf24;border:1px solid #b45309;padding:3px 8px;border-radius:6px;font-size:11px;" title="${escapeHtml(p.error || '')}">Meta processing · awaiting verification · do not retry</span>`;
         } else if (p.status === 'failed') {
           statusBadge = `<span style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;" title="${escapeHtml(p.error || p.website_error || '')}"><i class="bi bi-x-circle"></i> Lỗi · Có thể thử lại</span>`;
         } else if (p.status === 'publishing') {
