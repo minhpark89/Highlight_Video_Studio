@@ -439,6 +439,7 @@ def _apply_to_posts(item):
     posts = load_posts_file(posts_file)
     result = item.get("result") or {}
     wanted = set(item["post_ids"])
+    comments_to_queue = []
     for post in posts:
         if post.get("id") not in wanted:
             continue
@@ -456,13 +457,39 @@ def _apply_to_posts(item):
         post["website_status"] = item.get("website_status", post.get("website_status"))
         post["website_error"] = item.get("website_error", "")
         if result.get("first_comment"):
+            previous_comment_status = post.get("first_comment_status")
             post["first_comment"] = result["first_comment"]
             # A package may finish after Facebook published without a comment.
             # Do not suggest that an already-published post still has a pending
             # comment dispatch or trigger an implicit second publishing attempt.
-            post["first_comment_status"] = "ready_after_publish" if post.get("status") in ("published", "processing") else "ready"
+            if previous_comment_status not in ("posted", "pending"):
+                post["first_comment_status"] = "ready_after_publish" if post.get("status") in ("published", "processing") else "ready"
             post["first_comment_error"] = ""
+            if (post.get("status") == "published" and post.get("post_fb_id")
+                    and previous_comment_status not in ("posted", "pending")
+                    and post.get("token") and post.get("article_url")
+                    and str(post["article_url"]) in post["first_comment"]):
+                comments_to_queue.append({
+                    "post_id": post.get("id"), "object_id": post.get("post_fb_id"),
+                    "token": post.get("token"), "token_id": post.get("token_id"),
+                    "comment": post["first_comment"],
+                })
     save_posts_file(posts_file, posts)
+    if comments_to_queue:
+        try:
+            from src.publisher.first_comment_queue import enqueue_first_comment
+            now = int(__import__("time").time())
+            for entry in comments_to_queue:
+                queued = enqueue_first_comment(
+                    entry["object_id"], entry["token"], entry["comment"], now + 5,
+                    token_id=entry["token_id"], post_id=entry["post_id"],
+                )
+                for post in posts:
+                    if post.get("id") == entry["post_id"] and queued.get("success"):
+                        post["first_comment_status"] = "pending"
+            save_posts_file(posts_file, posts)
+        except Exception:
+            pass
 
 
 def _apply_failure_to_posts(item):

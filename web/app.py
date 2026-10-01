@@ -2594,6 +2594,34 @@ def api_distribute_batch():
     if not available_clips:
         return jsonify({"error": "Không còn video clip mới nào chưa đăng/chưa hẹn để phân bổ! Hãy render thêm hoặc kiểm tra thư mục nguồn."}), 400
 
+    # Prefer clips whose Content Studio package already has a verified CMS URL
+    # and a First Comment containing that exact URL. This keeps scheduled Pages
+    # from reaching Facebook before the website/comment assets are ready.
+    try:
+        from src.content_packages import list_packages
+        package_rows = list_packages()
+        def package_priority(path):
+            def matches_path(package):
+                raw = str(package.get("clip_filename") or "").strip()
+                if not raw:
+                    return False
+                package_path = Path(raw)
+                if folder_path == canonical_output:
+                    return package_path.name == Path(path).name
+                return package_path.is_absolute() and package_path.resolve() == Path(path).resolve()
+            matches = [p for p in package_rows if matches_path(p)]
+            for package in matches:
+                result = package.get("result") or {}
+                url = str(package.get("article_url") or "").strip()
+                comment = str(result.get("first_comment") or "")
+                if (package.get("status") == "ready" and package.get("website_status") == "ready"
+                        and url and url in comment):
+                    return 0
+            return 1
+        available_clips.sort(key=package_priority)
+    except Exception:
+        pass
+
     # Stage before writing queue rows: a failed source must not leave a partial schedule.
     staged_clips = []
     try:
