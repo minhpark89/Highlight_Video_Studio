@@ -1,21 +1,24 @@
 param(
     [string]$Version = "1.0.19",
-    [string]$PreviewRevision = "preview.15",
+    [string]$PreviewRevision = "",
     [string]$BuildChannel = "desktop-test",
     [switch]$SkipTests,
     [string]$ToolSource = "D:\Highlight_Video_Studio\bin",
+    [string]$RuntimeSource = "",
     [string]$IconSource = "D:\Highlight_Video_Studio\app.ico",
     [string]$WhisperModelSource = "$env:USERPROFILE\.cache\huggingface\hub\models--Systran--faster-whisper-small"
 )
 
 $ErrorActionPreference = "Stop"
 if ($BuildChannel -ne "desktop-test") { throw "Phase 1.5 permits only BUILD_CHANNEL=desktop-test" }
-if ($Version -ne "1.0.19") { throw "Phase 1.5 test artifact must remain APP_VERSION=1.0.19" }
+if ($Version -notin @("1.0.19", "1.1.0")) { throw "Unsupported desktop-test APP_VERSION: $Version" }
+if ($Version -eq "1.0.19" -and -not $PreviewRevision) { throw "Legacy v1.0.19 builds require PreviewRevision" }
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $buildRoot = Join-Path $root "build\desktop-test-v$Version"
 $stage = Join-Path $buildRoot ("stage-" + [Guid]::NewGuid().ToString("N"))
 $release = Join-Path $root "release"
+$releaseLabel = if ($PreviewRevision) { "$Version-$PreviewRevision" } else { $Version }
 $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $pythonZip = Join-Path $buildRoot "python-3.11.7-embed-amd64.zip"
 $payload = Join-Path $buildRoot ("Highlight_Desktop_Test_Package_v$Version-" + [Guid]::NewGuid().ToString("N") + ".zip")
@@ -48,6 +51,14 @@ if (Test-Path -LiteralPath (Join-Path $lockedRuntime "requirements.lock.txt")) {
     Copy-Item -LiteralPath $lockedRuntime -Destination $stageRuntime -Recurse -Force
     Write-Host "Reusing locked embedded runtime: $lockedRuntime"
 }
+elseif ($RuntimeSource) {
+    $sourceRuntime = (Resolve-Path -LiteralPath $RuntimeSource).Path
+    $expectedRequirements = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root "requirements.txt")).Hash.ToLowerInvariant()
+    $lockText = Get-Content -LiteralPath (Join-Path $sourceRuntime "requirements.lock.txt") -Raw
+    if (-not $lockText.Contains("requirements=$expectedRequirements")) { throw "RuntimeSource lock does not match requirements.txt" }
+    Copy-Item -LiteralPath $sourceRuntime -Destination $stageRuntime -Recurse -Force
+    Write-Host "Using verified embedded runtime: $sourceRuntime"
+}
 
 $sourceDirs = @("core", "src", "web", "research", "multi_pc")
 foreach ($name in $sourceDirs) {
@@ -64,7 +75,7 @@ Copy-Item -LiteralPath $IconSource -Destination (Join-Path $stage "app.ico") -Fo
 
 $buildIdentity = @{
     app_version = $Version
-    prerelease_build = "$Version-$PreviewRevision"
+    prerelease_build = $releaseLabel
     build_channel = $BuildChannel
     product_name = "Highlight Desktop Test"
     bind_host = "127.0.0.1"
@@ -103,12 +114,15 @@ else {
     Copy-Item -LiteralPath $runtimeDir -Destination $lockedRuntime -Recurse -Force
 }
 
-if (-not (Test-Path -LiteralPath $WhisperModelSource)) { throw "Whisper model cache missing: $WhisperModelSource" }
+if (-not (Test-Path -LiteralPath $WhisperModelSource)) { throw "Whisper model source missing: $WhisperModelSource" }
 $whisperTarget = Join-Path $stage "models\faster-whisper-small"
 New-Item -ItemType Directory -Force -Path $whisperTarget | Out-Null
-$snapshot = Get-ChildItem (Join-Path $WhisperModelSource "snapshots") -Directory | Select-Object -First 1
-if (-not $snapshot) { throw "Whisper model cache has no snapshot" }
-foreach ($modelFile in Get-ChildItem $snapshot.FullName -File) {
+$modelSourceDir = if (Test-Path -LiteralPath (Join-Path $WhisperModelSource "model.bin")) { $WhisperModelSource } else {
+    $snapshot = Get-ChildItem (Join-Path $WhisperModelSource "snapshots") -Directory | Select-Object -First 1
+    if (-not $snapshot) { throw "Whisper model cache has no snapshot" }
+    $snapshot.FullName
+}
+foreach ($modelFile in Get-ChildItem -LiteralPath $modelSourceDir -File) {
     $modelTarget = if ($modelFile.Target) { $modelFile.Target[0] } else { $modelFile.FullName }
     Copy-Item -LiteralPath $modelTarget -Destination (Join-Path $whisperTarget $modelFile.Name) -Force
     if ((Get-Item -LiteralPath (Join-Path $whisperTarget $modelFile.Name)).Length -ne (Get-Item -LiteralPath $modelTarget).Length) { throw "Whisper model copy incomplete: $($modelFile.Name)" }
@@ -171,13 +185,13 @@ Write-Host "Packaging guard: staged tree clean (no runtime state, no machine ide
 tar -a -c -f $payload -C $stage .
 if ($LASTEXITCODE -ne 0) { throw "Payload zip failed (tar $LASTEXITCODE)" }
 if (-not (Test-Path -LiteralPath $payload)) { throw "Payload zip missing: $payload" }
-$setupName = "Highlight_Desktop_Test_Setup_v$Version-$PreviewRevision.exe"
+$setupName = "Highlight_Desktop_Test_Setup_v$releaseLabel.exe"
 $setup = Join-Path $release $setupName
 & $csc /nologo /target:winexe /optimize+ ("/out:" + $setup) ("/win32icon:" + (Join-Path $stage "app.ico")) /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll /reference:Microsoft.CSharp.dll ("/resource:" + $payload + ",HighlightDesktopTest.Payload") (Join-Path $root "Installer.cs")
 if ($LASTEXITCODE -ne 0) { throw "Installer compile failed" }
 
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
-$hashFile = Join-Path $release "Highlight_Desktop_Test_Setup_v$Version-$PreviewRevision.sha256"
+$hashFile = Join-Path $release "Highlight_Desktop_Test_Setup_v$releaseLabel.sha256"
 Set-Content -LiteralPath $hashFile -Encoding ASCII -Value "$hash  $setupName"
 try { Remove-Item -LiteralPath $payload -Force -ErrorAction Stop } catch { Write-Warning "Could not remove temporary payload: $payload" }
 try { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction Stop } catch { Write-Warning "Could not remove temporary stage: $stage" }
