@@ -37,6 +37,26 @@ class SchedulerReleaseFixTests(unittest.TestCase):
             self.assertEqual(comments[0]["comment_text"], "Read https://example.test/article")
             self.assertEqual(post["first_comment_status"], "pending")
 
+    def test_finished_website_package_resumes_failed_schedule(self):
+        from src import content_packages
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            post_file = root / "posts.json"
+            post_file.write_text(json.dumps([{
+                "id": "post-1", "status": "failed", "retry_stage": "website_content",
+                "website_status": "failed", "first_comment_status": "generation_failed",
+            }]), encoding="utf-8")
+            item = {
+                "id": "package-1", "post_ids": ["post-1"], "status": "ready",
+                "article_url": "https://example.test/article", "website_status": "ready",
+                "result": {"caption": "Caption", "first_comment": "Read https://example.test/article"},
+            }
+            with mock.patch.object(content_packages, "DATA_ROOT", root):
+                content_packages._apply_to_posts(item)
+            post = json.loads(post_file.read_text(encoding="utf-8"))[0]
+            self.assertEqual(post["status"], "scheduled")
+            self.assertEqual(post["first_comment_status"], "ready")
+
     def test_dead_local_lease_is_reclaimed_but_live_owner_is_preserved(self):
         from multi_pc.data_root import ProcessLease
         with tempfile.TemporaryDirectory() as folder:
