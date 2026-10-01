@@ -36,6 +36,22 @@ class ImageSourceTests(unittest.TestCase):
         self.assertNotIn("<script>", result["article_html"])
         self.assertNotIn("viewers are replaying", plain.lower())
 
+    def test_article_401_at_v1_chat_completions_uses_grounded_long_fallback(self):
+        import re
+        from src.publisher import website_publisher as publisher
+
+        with mock.patch.object(publisher, "get_llm_config", return_value={
+            "api_base": "http://example.test:20128/v1/", "model": "fixture-model"
+        }), mock.patch.object(publisher, "requests") as requests_mock:
+            requests_mock.post.return_value.status_code = 401
+            _, body = publisher.generate_deep_article_content(
+                "Fixture title", "", [], youtube_id="abcdefghijk"
+            )
+            self.assertEqual(requests_mock.post.call_args.args[0], "http://example.test:20128/v1/chat/completions")
+        plain = re.sub(r"<[^>]*>", " ", body)
+        self.assertGreaterEqual(len(re.findall(r"\b[A-Za-z]+\b", plain)), 290)
+        self.assertIn("How to examine the original sequence", body)
+
     def test_frame_mode_uses_original_video_not_short_clip(self):
         from src.publisher import website_publisher as publisher
 
