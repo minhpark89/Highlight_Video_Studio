@@ -115,6 +115,30 @@ POSTS_FILE = DATA_ROOT / "posts.json"
 CRAWLED_VIDEOS_FILE = DATA_ROOT / "crawled_videos.json"
 
 
+def prioritize_scheduled_packages(package_ids):
+    """Move newly scheduled work ahead of unscheduled library backlog.
+
+    The content worker claims the first queued row under this same lock. An
+    already-running CMS/LLM call cannot be interrupted, but subsequent claims
+    process scheduled rows first without blocking the schedule HTTP response.
+    """
+    from src import content_packages as packages
+
+    wanted = set(package_ids)
+    if not wanted:
+        return
+    with packages._LOCK:
+        items = packages._read(packages.QUEUE_FILE, [])
+        changed = False
+        for item in items:
+            if item.get("id") in wanted and item.get("status") == "queued":
+                item["schedule_priority"] = True
+                changed = True
+        if changed:
+            items.sort(key=lambda item: 0 if item.get("schedule_priority") and item.get("status") == "queued" else 1)
+            packages._write(packages.QUEUE_FILE, items)
+
+
 def prepare_website_article_for_schedule(
     clip_filename,
     title,
@@ -1846,6 +1870,7 @@ def api_publish_reel():
     # The website article is generated asynchronously from the content queue; the
     # schedule call must not block on CMS or LLM latency.
     scheduled_posts = load_posts() if schedule_time else []
+    scheduled_package_ids = set()
     website_fields = block_website_fields
 
     # Tinh toan thoi gian hen gio co stagger cho tung page
@@ -1930,6 +1955,9 @@ def api_publish_reel():
             success_count += 1
             if bool(data.get("auto_first_comment", False)):
                 from src.content_packages import attach_existing_package, enqueue_content_package
+                # The attach helper persists to the posts ledger; save the new
+                # row first so a reused ready package can update it immediately.
+                save_posts(scheduled_posts)
                 meta = get_clip_metadata(clip_filename) or {}
                 package = attach_existing_package(
                     clip_filename=clip_filename, post_ids=[post_entry["id"]],
@@ -1950,7 +1978,8 @@ def api_publish_reel():
                 post_entry["content_package_status"] = package["status"]
                 if package["status"] == "ready":
                     apply_ready_package_to_post(post_entry, package)
-            start_content_package_worker()
+                else:
+                    scheduled_package_ids.add(package["id"])
             results.append({
                 "page_id": pid,
                 "page_name": p_info.get("page_name"),
@@ -2084,6 +2113,9 @@ def api_publish_reel():
         page_manager.save_pages(pages)
     if schedule_time and success_count:
         save_posts(scheduled_posts)
+        prioritize_scheduled_packages(scheduled_package_ids)
+        if scheduled_package_ids:
+            start_content_package_worker()
 
     return jsonify({
         "success": success_count > 0,
@@ -2630,6 +2662,7 @@ def api_distribute_batch():
     # the LLM or the CMS.
     if scheduled_count:
         from src.content_packages import attach_existing_package, enqueue_content_package
+        scheduled_package_ids = set()
         for post_entry in posts[-scheduled_count:]:
             meta = get_clip_metadata(post_entry["media_file"]) or {}
             package = attach_existing_package(
@@ -2651,8 +2684,12 @@ def api_distribute_batch():
             post_entry["content_package_status"] = package["status"]
             if package["status"] == "ready":
                 apply_ready_package_to_post(post_entry, package)
+            else:
+                scheduled_package_ids.add(package["id"])
         save_posts(posts)
-        start_content_package_worker()
+        prioritize_scheduled_packages(scheduled_package_ids)
+        if scheduled_package_ids:
+            start_content_package_worker()
     return jsonify({
         "success": True,
         "scheduled_count": scheduled_count,

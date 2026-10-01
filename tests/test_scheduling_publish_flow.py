@@ -7,6 +7,113 @@ from unittest import mock
 
 
 class SchedulingPublishFlowTests(unittest.TestCase):
+    def test_schedule_click_enqueues_priority_and_starts_worker_after_persist(self):
+        from web import app as web_app
+        from src import content_packages as cp
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "output"
+            output.mkdir()
+            (output / "clip.mp4").write_bytes(b"video")
+            posts_file = root / "posts.json"
+            queue = root / "content_packages.json"
+            queue.write_text(json.dumps([{
+                "id": "old-library-work", "clip_filename": "other.mp4", "status": "queued",
+            }]), encoding="utf-8")
+
+            def check_worker_start():
+                entries = json.loads(posts_file.read_text(encoding="utf-8"))
+                items = json.loads(queue.read_text(encoding="utf-8"))
+                self.assertEqual(entries[0]["content_package_id"], items[0]["id"])
+                self.assertTrue(items[0]["schedule_priority"])
+                self.assertEqual(items[1]["id"], "old-library-work")
+
+            with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
+                web_app, "POSTS_FILE", posts_file
+            ), mock.patch.object(cp, "QUEUE_FILE", queue), mock.patch.object(
+                web_app.page_manager, "list_pages", return_value=[self._verified_page()]
+            ), mock.patch.object(web_app.page_manager, "list_groups", return_value=[]), mock.patch.object(
+                web_app.token_vault, "get_token_by_id", return_value=self._credential_entry()
+            ), mock.patch.object(web_app, "get_clip_metadata", return_value={}), mock.patch.object(
+                web_app, "start_content_package_worker", side_effect=check_worker_start
+            ) as start, mock.patch.object(web_app.reel_poster, "publish_reel") as publish:
+                response = web_app.app.test_client().post("/api/publish/reel", json={
+                    "page_id": "page-1", "filename": "clip.mp4", "title": "Fixture",
+                    "auto_first_comment": True, "schedule_time": "2099-01-02T03:04",
+                })
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.get_json()["success"])
+            start.assert_called_once()
+            publish.assert_not_called()
+
+    def test_scheduled_package_prioritized_without_processing_in_http(self):
+        from web import app as web_app
+        from src import content_packages as cp
+
+        with tempfile.TemporaryDirectory() as folder:
+            queue = Path(folder) / "content_packages.json"
+            queue.write_text(json.dumps([
+                {"id": "library", "status": "queued"},
+                {"id": "already-running", "status": "running"},
+                {"id": "scheduled", "status": "queued"},
+            ]), encoding="utf-8")
+            with mock.patch.object(cp, "QUEUE_FILE", queue), mock.patch.object(
+                cp, "process_content_packages_once", side_effect=AssertionError("HTTP must not process")
+            ):
+                web_app.prioritize_scheduled_packages({"scheduled"})
+            items = json.loads(queue.read_text(encoding="utf-8"))
+            self.assertEqual([item["id"] for item in items], ["scheduled", "library", "already-running"])
+            self.assertTrue(items[0]["schedule_priority"])
+
+    def test_direct_schedule_reuses_ready_studio_package_without_new_worker(self):
+        from web import app as web_app
+        from src import content_packages as cp
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "output"
+            output.mkdir()
+            (output / "clip.mp4").write_bytes(b"video")
+            posts_file = root / "posts.json"
+            queue = root / "content_packages.json"
+            queue.write_text(json.dumps([{
+                "id": "studio-ready", "clip_filename": str(output / "clip.mp4"),
+                "status": "ready", "article_url": "https://example.test/article",
+                "website_status": "ready", "result": {
+                    "caption": "Prepared caption", "hero_title": "Prepared title",
+                    "first_comment": "Read https://example.test/article", "source": "fixture",
+                },
+            }]), encoding="utf-8")
+            with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
+                web_app, "POSTS_FILE", posts_file
+            ), mock.patch.object(cp, "DATA_ROOT", root), mock.patch.object(
+                cp, "QUEUE_FILE", queue
+            ), mock.patch.object(web_app.page_manager, "list_pages", return_value=[self._verified_page()]), mock.patch.object(
+                web_app.page_manager, "list_groups", return_value=[]
+            ), mock.patch.object(web_app.token_vault, "get_token_by_id", return_value=self._credential_entry()), mock.patch.object(
+                web_app, "get_clip_metadata", return_value={}
+            ), mock.patch.object(web_app, "start_content_package_worker") as start, mock.patch.object(
+                web_app.reel_poster, "publish_reel"
+            ) as publish:
+                response = web_app.app.test_client().post("/api/publish/reel", json={
+                    "page_id": "page-1", "filename": "clip.mp4", "title": "Original title",
+                    "auto_first_comment": True, "schedule_time": "2099-01-02T03:04",
+                })
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.get_json()["success"])
+            saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+            self.assertEqual(saved["content_package_id"], "studio-ready")
+            self.assertEqual(saved["content_package_status"], "ready")
+            self.assertEqual(saved["article_url"], "https://example.test/article")
+            self.assertEqual(saved["first_comment"], "Read https://example.test/article")
+            self.assertEqual(saved["content"], "Prepared caption")
+            self.assertEqual(len(json.loads(queue.read_text(encoding="utf-8"))), 1)
+            start.assert_not_called()
+            publish.assert_not_called()
+
     def test_meta_page_task_aliases_accept_publish_capability_but_readonly_tasks_fail(self):
         from src.publisher.meta_preflight import resolve_page_token
 

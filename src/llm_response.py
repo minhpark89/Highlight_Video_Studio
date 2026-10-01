@@ -11,31 +11,44 @@ import json
 import re
 from typing import Any
 
+_MAX_TEXT = 1_000_000
+_MAX_STARTS = 64
+
 
 def _json_candidates(text: str):
     text = str(text or "").strip()
-    if not text:
+    if not text or len(text) > _MAX_TEXT:
         return
-    # Markdown fences and optional reasoning wrappers are common with Claude.
-    cleaned = re.sub(r"^\s*```(?:json)?\s*", "", text, flags=re.I)
-    cleaned = re.sub(r"\s*```\s*$", "", cleaned).strip()
-    for candidate in (cleaned, text):
+    # A reasoning prelude can contain incidental braces. Prefer the answer in
+    # a JSON fence, then scan the visible reply after complete think blocks.
+    visible = re.sub(r"<think\b[^>]*>.*?</think\s*>", "", text, flags=re.I | re.S)
+    fences = re.findall(r"```(?:json)?[ \t]*\r?\n(.*?)```", visible, flags=re.I | re.S)
+    decoder = json.JSONDecoder(strict=False)
+    for candidate in (*fences, visible):
+        candidate = candidate.strip()
+        if not candidate:
+            continue
+        if candidate.startswith("```"):
+            candidate = re.sub(r"^```(?:json)?\s*|\s*```$", "", candidate, flags=re.I).strip()
         try:
-            value = json.loads(candidate, strict=False)
+            value = decoder.decode(candidate)
             if isinstance(value, (dict, list)):
                 yield value
-        except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+        except ValueError:
             pass
-    # Extract the outermost object/array without requiring greedy malformed text.
-    for opener, closer in (("{", "}"), ("[", "]")):
-        start = cleaned.find(opener)
-        end = cleaned.rfind(closer)
-        if start >= 0 and end > start:
+        # raw_decode finds one balanced JSON value despite trailing prose or
+        # another fenced block; greedy first/last brace slicing cannot.
+        starts = (match.start() for match in re.finditer(r"[\[{]", candidate))
+        for index, start in enumerate(starts):
+            if index >= _MAX_STARTS:
+                break
             try:
-                value = json.loads(cleaned[start:end + 1], strict=False)
+                value, _ = decoder.raw_decode(candidate, start)
                 if isinstance(value, (dict, list)):
                     yield value
-            except (TypeError, ValueError, json.JSONDecodeError):
+                    break
+            except ValueError:
                 pass
 
 
@@ -44,12 +57,22 @@ def _content_from_chunk(chunk: Any) -> str:
         return ""
     # Some compatible gateways put the streamed text directly in the event
     # rather than under choices[].
-    for direct_key in ("content", "text", "delta"):
+    for direct_key in ("content", "output_text", "text", "delta"):
         direct = chunk.get(direct_key)
         if isinstance(direct, str):
             return direct
         if isinstance(direct, dict) and isinstance(direct.get("content"), str):
             return direct["content"]
+        if isinstance(direct, dict) and isinstance(direct.get("text"), str):
+            return direct["text"]
+        if isinstance(direct, dict) and direct_key == "content":
+            return json.dumps(direct, ensure_ascii=False)
+        if isinstance(direct, list) and direct_key == "content":
+            return "".join(_content_from_chunk(item) for item in direct if isinstance(item, dict))
+    # OpenAI Responses-style envelopes carry output_text inside output items.
+    output = chunk.get("output")
+    if isinstance(output, list):
+        return "".join(_content_from_chunk(item) for item in output if isinstance(item, dict))
     choices = chunk.get("choices") or []
     if not choices or not isinstance(choices[0], dict):
         return ""
@@ -65,6 +88,8 @@ def _content_from_chunk(chunk: Any) -> str:
             else:
                 parts.append(str(item))
         return "".join(parts)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
     return str(value or "")
 
 
@@ -87,6 +112,10 @@ def chat_text_from_response(response) -> str:
                 text = _content_from_chunk(nested)
                 if text:
                     return text.strip()
+            elif isinstance(nested, list):
+                text = "".join(_content_from_chunk(item) for item in nested if isinstance(item, dict)).strip()
+                if text:
+                    return text
             elif isinstance(nested, str) and nested.strip():
                 return nested.strip()
     elif isinstance(payload, list):
@@ -99,7 +128,9 @@ def chat_text_from_response(response) -> str:
     # markdown fences and prose-wrapped JSON intact for json_from_text instead
     # of accidentally discarding the JSON line while scanning SSE chunks.
     raw_text = str(raw)
-    if "data:" not in raw_text:
+    if len(raw_text) > _MAX_TEXT:
+        return ""
+    if not re.search(r"(?:^|\n)\s*data:", raw_text):
         return raw_text.strip()
     # A few proxies return multiple SSE events without newlines. Split at the
     # event marker too, while retaining plain-text responses unchanged.
@@ -115,10 +146,9 @@ def chat_text_from_response(response) -> str:
             continue
         try:
             chunk = json.loads(line, strict=False)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            # Preserve plain text providers too.
-            if not chunks and line:
-                chunks.append(line)
+        except ValueError:
+            # Ignore SSE metadata/malformed events; never prepend them to a
+            # valid stream of content chunks.
             continue
         text = _content_from_chunk(chunk)
         if text:
