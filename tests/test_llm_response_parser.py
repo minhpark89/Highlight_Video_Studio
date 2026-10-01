@@ -3,7 +3,7 @@ import json
 import unittest
 from unittest import mock
 
-from src.llm_response import chat_stream_incomplete, chat_text_from_response, json_from_chat_response, json_from_text
+from src.llm_response import chat_model_unavailable, chat_stream_incomplete, chat_text_from_response, json_from_chat_response, json_from_text
 
 
 class FakeResponse:
@@ -68,6 +68,26 @@ class ResponseParserTests(unittest.TestCase):
         for text in ('', 'No valid JSON {broken}', 'x' * 1_000_001):
             with self.subTest(text_length=len(text)), self.assertRaisesRegex(ValueError, 'JSON hợp lệ'):
                 json_from_text(text)
+
+    def test_retired_model_notice_is_not_a_json_failure_or_retried(self):
+        from src import content_packages as cp
+        notice = 'Gemini 3.1 is no longer available. Please switch to a supported model in the latest version.'
+        response = FakeResponse(json.dumps({'choices': [{'message': {'content': notice}, 'finish_reason': 'stop'}]}))
+        self.assertTrue(chat_model_unavailable(response))
+        self.assertFalse(chat_model_unavailable(FakeResponse(json.dumps({'choices': [{'message': {'content': json.dumps(PACKAGE)}}]}))))
+        cfg = {'configured_base': 'http://example.test/v1', 'api_key': 'fixture-private', 'model': 'fixture'}
+        with mock.patch('src.content_builder.get_llm_candidates', return_value=cfg), mock.patch(
+            'src.content_builder._get_task_model', return_value='fixture'
+        ), mock.patch.object(cp, 'circuit_status', return_value={'open': False}), mock.patch.object(
+            cp.requests, 'post', return_value=response
+        ) as post:
+            with self.assertRaisesRegex(RuntimeError, 'model is no longer available'):
+                cp.generate_package('Fixture', mode='llm')
+            self.assertEqual(post.call_count, 1)
+            result = cp.generate_package('Fixture', mode='auto')
+            self.assertEqual(result['source'], 'no_llm_error_fallback')
+            self.assertIn('model is no longer available', result['fallback_reason'])
+            self.assertEqual(post.call_count, 2)
 
     def test_content_package_auto_fallback_and_explicit_llm_error(self):
         from src import content_packages as cp

@@ -14,7 +14,7 @@ from pathlib import Path
 import requests
 
 from multi_pc.data_root import ProcessLease, canonical_data_root
-from src.llm_response import chat_stream_incomplete, json_from_chat_response
+from src.llm_response import chat_model_unavailable, chat_stream_incomplete, json_from_chat_response
 from src.text_llm_diagnostics import chat_endpoint, chat_failure
 
 DATA_ROOT = canonical_data_root()
@@ -154,6 +154,8 @@ def _llm_package(title, summary, video_url=""):
             raise RuntimeError(chat_failure(response.status_code, has_key=True, has_model=True))
         if chat_stream_incomplete(response):
             raise RuntimeError("Text LLM HTTP 200 stream ended without completion; check provider/model route")
+        if chat_model_unavailable(response):
+            raise RuntimeError("Text LLM model is no longer available on the configured route; select an available text model")
         try:
             data = json_from_chat_response(response)
             if not isinstance(data, dict):

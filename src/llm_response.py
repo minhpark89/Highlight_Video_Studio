@@ -172,6 +172,21 @@ def json_from_chat_response(response):
     return json_from_text(chat_text_from_response(response))
 
 
+def chat_model_unavailable(response) -> bool:
+    """Recognize a retired-model notice masquerading as a successful chat reply.
+
+    Inspect assistant text only; never include provider text or model identifiers
+    in diagnostic errors. This is not a malformed JSON answer worth retrying.
+    """
+    text = chat_text_from_response(response)
+    if len(text) > 512:
+        return False
+    return bool(re.match(
+        r"^\s*(?:gemini|model)\b.{0,120}\b(?:is\s+)?no\s+longer\s+available\b",
+        text, flags=re.I | re.S,
+    ))
+
+
 def chat_stream_incomplete(response) -> bool:
     """Detect a 200 SSE body that never completed a chat choice.
 
