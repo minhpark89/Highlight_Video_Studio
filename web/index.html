@@ -1836,7 +1836,7 @@
             <div id="cs-result-body" style="font-size: 13px; color: #cbd5e1; line-height: 1.6; white-space: pre-wrap;"></div>
           </div>
 
-          <div style="margin-bottom:10px;"><label for="cs-status-filter">Lọc Content Package: </label><select id="cs-status-filter" class="form-control" style="display:inline-block;width:auto;" onchange="loadContentStudioQueue()"><option value="all">Tất cả</option><option value="failed">Lỗi / cần thử lại</option></select> <button class="btn btn-sm btn-outline" onclick="csSelectFailedPackages()">Chọn tất cả bài lỗi</button> <button class="btn btn-sm btn-outline" onclick="csRetrySelectedPackages(this)">Tạo lại bằng LLM</button></div>
+          <div style="margin-bottom:10px;"><label for="cs-status-filter">Lọc Content Package: </label><select id="cs-status-filter" class="form-control" style="display:inline-block;width:auto;" onchange="loadContentStudioQueue()"><option value="all">Tất cả</option><option value="failed">Cần xử lý (CMS / nội dung)</option></select> <button class="btn btn-sm btn-outline" onclick="csSelectFailedPackages()">Chọn tất cả mục cần xử lý</button> <button class="btn btn-sm btn-outline" onclick="csRetrySelectedPackages(this)">Thử lại mục đã chọn</button></div>
           <div id="cs-action-msg" role="status" aria-live="polite" style="margin-bottom:10px;font-size:13px;min-height:1.4em;"></div>
           <div class="table-responsive" style="background: #111c33; border: 1px solid #23304d; border-radius: 10px;">
             <table class="table" style="margin-bottom: 0;">
@@ -5915,14 +5915,14 @@
       if (!data.success) throw new Error(data.error || 'Kh\u00f4ng t\u1ea3i \u0111\u01b0\u1ee3c h\u00e0ng \u0111\u1ee3i');
       const allItems = data.items || [];
       const failedOnly = document.getElementById('cs-status-filter')?.value === 'failed';
-      const items = failedOnly ? allItems.filter(item => ['failed','retryable'].includes(item.status)) : allItems;
-      stats.innerHTML = `Queued: <strong>${data.queued}</strong> \u00b7 Ready: <strong>${data.ready}</strong> \u00b7 Failed: <strong>${data.failed}</strong>`;
+      const items = failedOnly ? allItems.filter(item => item.needs_attention) : allItems;
+      stats.innerHTML = `Queued: <strong>${data.queued}</strong> \u00b7 Ready: <strong>${data.ready}</strong> \u00b7 Needs attention: <strong>${data.needs_attention}</strong> · Failed: <strong>${data.failed}</strong>`;
       const c = data.circuit || {};
       circuit.textContent = c.open
         ? `Circuit breaker \u0110ANG M\u1ede \u2014 th\u1eed l\u1ea1i sau ${c.retry_after_seconds}s (l\u1ed7i quota).`
         : 'Circuit breaker \u0111\u00f3ng \u2014 LLM kh\u1ea3 d\u1ee5ng.';
       if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#64748b;">${failedOnly ? 'Không có mục lỗi cần thử lại.' : 'Chưa có Content Package nào.'}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#64748b;">${failedOnly ? 'No packages need attention.' : 'Chưa có Content Package nào.'}</td></tr>`;
         return;
       }
       tbody.innerHTML = items.slice().reverse().map(function(item) {
@@ -5946,8 +5946,8 @@
           <td>${csEscape(pending)}${item.error ? `<div style="color:#f87171;font-size:11px;white-space:normal;">${csEscape(item.error)}</div>` : ''}${websiteError && websiteError !== item.error ? `<div style="color:#f87171;font-size:11px;white-space:normal;">CMS: ${csEscape(websiteError)}</div>` : ''}</td>
           <td style="line-height:1.6;">${mark('hero_title','Ti\u00eau \u0111\u1ec1')}<br>${mark('article_html','B\u00e0i vi\u1ebft')}<br>${mark('first_comment','First Comment')}<br>${mark('website_link','Link web')}<br><small style="color:#94a3b8;">${csEscape(source)}</small>${fallbackReason ? `<br><small style="color:#fbbf24;">LLM fallback: ${csEscape(fallbackReason)}</small>` : ''}</td>
           <td class="content-studio-actions">
-            ${['failed','retryable'].includes(item.status) ? `<input type="checkbox" class="cs-failed-select" value="${csEscape(item.id)}" aria-label="Chọn bài lỗi ${csEscape(item.title || item.id)}">` : ''}
-            ${['failed','retryable'].includes(item.status) ? `<button class="btn btn-sm btn-outline cs-retry-btn" onclick="csRetryPackage('${csEscape(item.id)}', this)">Thử lại mục lỗi</button>` : ''}
+            ${item.needs_attention ? `<input type="checkbox" class="cs-failed-select" value="${csEscape(item.id)}" aria-label="Chọn bài lỗi ${csEscape(item.title || item.id)}">` : ''}
+            ${item.needs_attention ? `<button class="btn btn-sm btn-outline cs-retry-btn" onclick="csRetryPackage('${csEscape(item.id)}', this)">Thử lại CMS / nội dung</button>` : ''}
             <button class="btn btn-sm btn-outline cs-retry-btn" data-package-id="${csEscape(item.id)}" data-component="hero_title" onclick="csRetryComponent('${csEscape(item.id)}','hero_title', this)">T\u1ea1o l\u1ea1i ti\u00eau \u0111\u1ec1</button>
             <button class="btn btn-sm btn-outline cs-retry-btn" data-package-id="${csEscape(item.id)}" data-component="first_comment" onclick="csRetryComponent('${csEscape(item.id)}','first_comment', this)" ${websiteReady ? '' : 'disabled title="Cần bài CMS có URL trước khi tạo comment"'}>T\u1ea1o l\u1ea1i comment</button>
           </td>
@@ -6011,19 +6011,19 @@
     const ids = [...document.querySelectorAll('.cs-failed-select:checked')].map(box => box.value);
     const feedback = document.getElementById('cs-action-msg');
     if (!ids.length) { feedback.textContent = 'Chưa chọn bài lỗi.'; return; }
-    csSetBusy(button, true, 'Đang tạo lại bằng LLM...');
+    csSetBusy(button, true, 'Queueing selected packages...');
     let done = 0, errors = [];
     try {
       for (const id of ids) {
         try {
-          const response = await fetch('/api/content-studio/retry', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id, mode:'llm'})});
+          const response = await fetch('/api/content-studio/retry', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id})});
           const result = await response.json();
           if (!response.ok || !result.success) throw new Error(result.error || 'Không thể xếp hàng');
           done++;
         } catch (err) { errors.push(id + ': ' + err.message); }
       }
       feedback.style.color = errors.length ? '#fbbf24' : '#4ade80';
-      feedback.textContent = `Đã xếp hàng ${done}/${ids.length} bài để tạo lại bằng LLM.` + (errors.length ? ' Lỗi: ' + errors.join('; ') : '');
+      feedback.textContent = `Đã xếp hàng ${done}/${ids.length} packages queued for retry.` + (errors.length ? ' Lỗi: ' + errors.join('; ') : '');
       await window.loadContentStudioQueue();
     } finally { csSetBusy(button, false); }
   };

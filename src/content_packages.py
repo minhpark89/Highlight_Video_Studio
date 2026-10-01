@@ -310,6 +310,24 @@ def _reusable(entry, *, needs_article, article_url=""):
                        url in str((entry.get("result") or {}).get("first_comment") or ""))
 
 
+def package_needs_attention(item):
+    """A ready caption does not hide a failed CMS or a missing required comment."""
+    if item.get("status") in ("failed", "retryable"):
+        return True
+    if item.get("status") in ("queued", "running"):
+        return False
+    if item.get("website_status") == "failed":
+        return True
+    if item.get("create_website_article") and not item.get("article_url"):
+        return True
+    result = item.get("result") or {}
+    url = str(item.get("article_url") or "").strip()
+    if url and "first_comment" in (item.get("components") or ["first_comment"]):
+        if url not in str(result.get("first_comment") or ""):
+            return True
+    return str(result.get("source") or "") in ("no_llm_error_fallback", "no_llm_quota_fallback")
+
+
 def attach_existing_package(*, clip_filename, post_ids=None, source_job_id="", source_clip_id="", needs_article=True, article_url=""):
     """Attach a finished library package without repeating CMS or LLM work."""
     wanted = [str(value) for value in (post_ids or []) if str(value).strip()]
@@ -325,7 +343,24 @@ def attach_existing_package(*, clip_filename, post_ids=None, source_job_id="", s
             None,
         )
         if not item:
+            item = next((entry for entry in reversed(items)
+                         if _same_clip(entry, clip_filename, source_job_id, source_clip_id)
+                         and entry.get("status") in ("ready", "failed", "retryable")
+                         and (entry.get("result") or {}).get("caption")
+                         and (not article_url or not entry.get("article_url") or entry.get("article_url") == article_url)), None)
+        if not item:
             return None
+        if not _reusable(item, needs_article=needs_article, article_url=article_url):
+            if article_url and not item.get("article_url"):
+                item["article_url"] = article_url
+            item["create_website_article"] = bool(needs_article and not item.get("article_url"))
+            # A failed CMS call may have created an article before its response
+            # was lost. Preserve that failure for an explicit, informed retry.
+            if item.get("website_status") != "failed":
+                item["status"] = "queued"
+                item["website_status"] = "pending_generation" if item["create_website_article"] else "ready"
+                item["website_error"] = ""
+                item["error"] = ""
         item["post_ids"] = list(dict.fromkeys(list(item.get("post_ids") or []) + wanted))
         item["updated_at"] = _now()
         _write(QUEUE_FILE, items)
@@ -499,12 +534,16 @@ def retry_package(package_id, mode=None):
         item = next((entry for entry in items if entry.get("id") == package_id), None)
         if not item:
             return None
-        if item.get("status") not in ("failed", "retryable"):
+        if not package_needs_attention(item):
             return dict(item)
         if mode is not None:
             if mode not in ("auto", "llm", "no_llm"):
                 raise ValueError("Invalid content generation mode")
             item["mode"] = mode
+            if mode == "llm" and str((item.get("result") or {}).get("source") or "").startswith("no_llm"):
+                item["regenerate_text"] = True
+        if str((item.get("result") or {}).get("source") or "") in ("no_llm_error_fallback", "no_llm_quota_fallback"):
+            item["regenerate_text"] = True
         item.update({"status": "queued", "error": "", "updated_at": _now()})
         _write(QUEUE_FILE, items)
         return dict(item)
@@ -562,13 +601,19 @@ def _process_new_content_package(item):
         item["embed_status"] = "ready" if website_status == "ready" and article_url else "failed"
         # Generate the comment after the CMS URL is known so the persisted
         # first comment contains the exact website link shown in Post Management.
-        if "first_comment" in (item.get("components") or ["first_comment"]) and (website_status != "ready" or not article_url):
+        requires_comment = ("first_comment" in (item.get("components") or ["first_comment"])
+                            and bool(item.get("create_website_article") or article_url))
+        if requires_comment and (website_status != "ready" or not article_url):
             raise RuntimeError(website_error or "First Comment requires a newly published CMS article with original video embed")
-        result = generate_package(
-            item["title"], item.get("summary", ""), item.get("video_url", ""),
-            item.get("mode", "auto"), article_url=article_url,
-        )
-        if "first_comment" in (item.get("components") or ["first_comment"]):
+        # Keep already generated article/caption when only the CMS link or
+        # comment needs repair. This also avoids spending another LLM call.
+        result = dict(item.get("result") or {})
+        if item.get("regenerate_text") or not result.get("caption") or not result.get("article_html"):
+            result = generate_package(
+                item["title"], item.get("summary", ""), item.get("video_url", ""),
+                item.get("mode", "auto"), article_url=article_url,
+            )
+        if requires_comment:
             comment = str(result.get("first_comment") or "").strip()
             if not comment or article_url not in comment:
                 result["first_comment"] = fallback_package(item["title"], item.get("summary", ""), article_url)["first_comment"]
@@ -576,6 +621,8 @@ def _process_new_content_package(item):
                 raise RuntimeError("First Comment không chứa đúng URL bài CMS mới")
         retryable = str(result.get("source") or "").startswith("no_llm_quota_fallback")
         item.update({"status": "retryable" if retryable else "ready", "result": result, "error": "" if not retryable else "LLM quota exhausted; sẽ tự retry khi quota khả dụng.", "completed_at": _now()})
+        if not retryable:
+            item.pop("regenerate_text", None)
         if not retryable:
             _apply_to_posts(item)
 

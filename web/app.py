@@ -1976,9 +1976,9 @@ def api_publish_reel():
                 )
                 post_entry["content_package_id"] = package["id"]
                 post_entry["content_package_status"] = package["status"]
-                if package["status"] == "ready":
+                if (package.get("result") or {}).get("caption"):
                     apply_ready_package_to_post(post_entry, package)
-                else:
+                if package["status"] == "queued":
                     scheduled_package_ids.add(package["id"])
             results.append({
                 "page_id": pid,
@@ -2341,10 +2341,10 @@ def api_get_posts():
             post["local_video_available"] = (OUTPUT_DIR / Path(media_file).name).is_file()
         post["article_url"] = str(post.get("article_url") or post.get("website_url") or "").strip()
         package = post.get("content_package") if isinstance(post.get("content_package"), dict) else {}
-        item_embed = post.get("embed_status") or package.get("embed_status") or ""
+        item_embed = post.get("website_embed_status") or post.get("embed_status") or package.get("embed_status") or ""
         youtube_id = post.get("youtube_id") or package.get("youtube_id") or ""
         video_url = post.get("video_url") or package.get("video_url") or ""
-        post["website_embed_status"] = item_embed or ("ready" if (youtube_id or video_url) else ("pending_generation" if post.get("website_status") in ("pending_generation", "generating") else "unknown"))
+        post["website_embed_status"] = item_embed or ("ready" if (youtube_id or video_url) and post.get("website_status") == "ready" else ("pending_generation" if post.get("website_status") in ("pending_generation", "generating") else "unknown"))
         post["youtube_id"] = youtube_id
         facebook_id = post.get("post_fb_id") or post.get("reel_id")
         if facebook_id and not post.get("fb_url"):
@@ -2682,9 +2682,9 @@ def api_distribute_batch():
             )
             post_entry["content_package_id"] = package["id"]
             post_entry["content_package_status"] = package["status"]
-            if package["status"] == "ready":
+            if (package.get("result") or {}).get("caption"):
                 apply_ready_package_to_post(post_entry, package)
-            else:
+            if package["status"] == "queued":
                 scheduled_package_ids.add(package["id"])
         save_posts(posts)
         prioritize_scheduled_packages(scheduled_package_ids)
@@ -3267,7 +3267,8 @@ def api_publish_website_article():
 from src.content_packages import (list_packages, get_package, process_content_packages_once,
                                  generate_package, fallback_package, circuit_status,
                                  start_content_package_worker, enqueue_content_package, sanitize_error,
-                                 retry_package_component, retry_package, component_statuses)
+                                 retry_package_component, retry_package, component_statuses,
+                                 package_needs_attention)
 
 
 def apply_ready_package_to_post(post, package):
@@ -3278,6 +3279,7 @@ def apply_ready_package_to_post(post, package):
     post["title"] = result.get("hero_title") or post.get("title", "")
     post["article_url"] = package.get("article_url") or post.get("article_url", "")
     post["website_status"] = package.get("website_status", post.get("website_status"))
+    post["website_error"] = package.get("website_error", "")
     post["website_embed_status"] = package.get("embed_status") or "unknown"
     post["first_comment"] = result.get("first_comment") or post.get("first_comment", "")
     if post["first_comment"]:
@@ -3292,12 +3294,14 @@ def api_content_studio_queue():
     items = list_packages()
     for item in items:
         item["component_statuses"] = component_statuses(item)
+        item["needs_attention"] = package_needs_attention(item)
     return jsonify({
         "success": True,
         "queued": sum(1 for i in items if i.get("status") == "queued"),
         "ready": sum(1 for i in items if i.get("status") == "ready"),
         "failed": sum(1 for i in items if i.get("status") == "failed"),
         "retryable": sum(1 for i in items if i.get("status") == "retryable"),
+        "needs_attention": sum(1 for i in items if package_needs_attention(i)),
         "items": items,
         "circuit": circuit_status(),
     })

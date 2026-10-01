@@ -46,6 +46,12 @@ def enqueue_first_comment(object_id, page_token, comment_text, due_at, token_id=
     }
     with _LOCK:
         items = _load_unlocked()
+        if post_id:
+            existing = next((entry for entry in items if entry.get("post_id") == str(post_id)
+                             and entry.get("status") in ("pending", "posted")), None)
+            if existing:
+                return {"success": True, "pending": existing.get("status") == "pending",
+                        "queue_id": existing["id"], "due_at": existing.get("due_at")}
         items.append(item)
         _save_unlocked(items)
     return {"success": True, "pending": True, "queue_id": item["id"], "due_at": item["due_at"]}

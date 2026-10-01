@@ -4,6 +4,7 @@ import json
 import re
 import html
 import hashlib
+from urllib.parse import urlparse
 try:
     import cv2
     HAS_CV2 = True
@@ -961,20 +962,34 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
         if not video_stream_url:
             raise WebsiteServiceError("Không có YouTube ID và upload video không trả public URL")
 
-    # 3. Tạo ảnh HOOK AI bằng LLM & Trích xuất ảnh minh họa
-    hero_img, body_imgs = extract_and_upload_article_assets(clip_filename, video_title)
-
-    # 4. Sinh bài viết chi tiết, có ảnh Hook ngay đầu bài và Video Player Full ở CUỐI bài
-    seo_title, body_html = generate_deep_article_content(
-        video_title, hero_img, body_imgs, video_stream_url=video_stream_url, youtube_id=youtube_id
-    )
-
-    # 5. Tạo slug duy nhất và sạch sẽ (không chứa chữ clip-2 hay job_)
+    # 3. Tạo slug ổn định cho cùng một clip qua các lần khởi động.
     clean_slug = re.sub(r'[^a-zA-Z0-9]+', '-', video_title.lower()).strip('-')[:50]
     clean_slug = re.sub(r'^(clip-\d+|job-\d+)-?', '', clean_slug).strip('-')
     if not clean_slug or len(clean_slug) < 5:
         clean_slug = "shocking-encounter-uncut-breakdown"
-    slug = f"{clean_slug}-{abs(hash(clip_filename)) % 100000}"
+    clip_key = Path(str(clip_filename)).name.casefold()
+    slug = f"{clean_slug}-{hashlib.sha256(clip_key.encode('utf-8')).hexdigest()[:12]}"
+
+    # A lost CMS response is ambiguous. Before POST, look up the stable URL;
+    # if it already holds this video's embed, use it instead of making a copy.
+    expected_url = f"{base_url}/blog/{slug}"
+    try:
+        existing = requests.get(expected_url, timeout=15)
+    except requests.RequestException as exc:
+        raise WebsiteServiceError(f"CMS article lookup failed; retry only after checking the existing article: {type(exc).__name__}") from exc
+    if existing.status_code == 200 and urlparse(existing.url).path.rstrip("/") == urlparse(expected_url).path.rstrip("/"):
+        marker = (f"youtube-nocookie.com/embed/{youtube_id}" if youtube_id else video_stream_url)
+        if not marker or marker not in existing.text:
+            raise WebsiteServiceError("CMS slug already exists with a different or missing video embed")
+        return expected_url, ""
+    if existing.status_code != 404 and (existing.status_code != 200 or urlparse(existing.url).path.rstrip("/") != urlparse(base_url).path.rstrip("/")):
+        raise WebsiteServiceError(f"CMS article lookup HTTP {existing.status_code}; publication paused to avoid duplicates")
+
+    # 4. Tạo ảnh và bài viết sau khi biết chắc slug chưa được đăng.
+    hero_img, body_imgs = extract_and_upload_article_assets(clip_filename, video_title)
+    seo_title, body_html = generate_deep_article_content(
+        video_title, hero_img, body_imgs, video_stream_url=video_stream_url, youtube_id=youtube_id
+    )
 
     # 6. Publish lên CMS qua WebsiteArticleService kèm Hero Image (Hook Thumbnail)
     svc = WebsiteArticleService(str(cfg_file))

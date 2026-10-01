@@ -164,10 +164,12 @@ def _process_scheduled_posts_once(
     posts_by_id = {post.get("id"): post for post in posts}
     reconciled = 0
     for post in posts:
-        if post.get("status") != "processing" or not post.get("meta_post_id"):
+        if post.get("status") != "processing" or not (post.get("meta_upload_video_id") or post.get("meta_post_id")):
             continue
         attempts = int(post.get("meta_reconcile_attempts") or 0)
-        if attempts >= 6 or now_ts < float(post.get("meta_next_check_at") or 0):
+        if attempts >= 6 and post.get("meta_reconcile_version") == 2:
+            continue
+        if now_ts < float(post.get("meta_next_check_at") or 0) and post.get("meta_reconcile_version") == 2:
             continue
         # New records require the same exact Page/token mapping as publishing.
         page = next((p for p in page_manager.list_pages() if str(p.get("page_id")) == str(post.get("page_id"))), None)
@@ -177,10 +179,19 @@ def _process_scheduled_posts_once(
             continue
         credential = verdict["ready"][0]
         from src.publisher.meta_reel_poster import MetaReelPoster as _MetaReelPoster
-        check = _MetaReelPoster(token_vault=token_vault).check_processing_reel(
-            post["meta_post_id"], credential["token"], credential["token_id"]
-        )
-        post["meta_reconcile_attempts"] = attempts + 1
+        # Meta finish can return a post_id that rejects video-status fields.
+        # The upload video_id is the actual Reel object and is read first.
+        poster_for_check = _MetaReelPoster(token_vault=token_vault)
+        check = {"verified": False}
+        for candidate in dict.fromkeys((post.get("meta_upload_video_id"), post.get("meta_post_id"))):
+            if candidate:
+                check = poster_for_check.check_processing_reel(
+                    candidate, credential["token"], credential["token_id"]
+                )
+                if check.get("verified"):
+                    break
+        post["meta_reconcile_attempts"] = (attempts + 1) if post.get("meta_reconcile_version") == 2 else 1
+        post["meta_reconcile_version"] = 2
         post["meta_next_check_at"] = now_ts + 60
         reconciled += 1
         if check.get("verified"):
@@ -192,6 +203,16 @@ def _process_scheduled_posts_once(
                 post.update({"status": "published", "published_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"), "error": ""})
             except Exception as exc:
                 post["ledger_error"] = sanitize_error(exc)
+            if post.get("first_comment") and post.get("first_comment_status") not in ("posted", "pending"):
+                try:
+                    queued = enqueue_first_comment(
+                        check["video_id"], credential["token"], post["first_comment"],
+                        int(now_ts) + 30, token_id=credential["token_id"], post_id=post.get("id"),
+                    )
+                    post["first_comment_status"] = "pending" if queued.get("success") else "queue_failed"
+                except Exception as exc:
+                    post["first_comment_status"] = "queue_failed"
+                    post["first_comment_error"] = sanitize_error(exc)
     for outcome in queue_result.get("outcomes", []):
         post = posts_by_id.get(outcome.get("post_id"))
         if not post:

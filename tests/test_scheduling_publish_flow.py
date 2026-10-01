@@ -232,7 +232,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         response = mock.Mock(ok=True, headers={}, json=lambda: {"id": "123", "status": {"video_status": "processing"}, "permalink_url": "https://facebook.test/reel/123"})
         with mock.patch("src.publisher.meta_reel_poster.requests.get", return_value=response) as get, mock.patch("src.publisher.meta_reel_poster.requests.post") as post:
             self.assertFalse(poster.check_processing_reel("123", "fixture-token")["verified"])
-            response.json = lambda: {"id": "123", "status": {"video_status": "ready"}, "permalink_url": "https://facebook.test/reel/123"}
+            response.json = lambda: {"id": "123", "status": {"video_status": "ready", "publishing_phase": {"publish_status": "published"}}, "permalink_url": "/reel/123/"}
             self.assertTrue(poster.check_processing_reel("123", "fixture-token")["verified"])
             post.assert_not_called()
             self.assertEqual(get.call_count, 2)
@@ -793,8 +793,8 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
             ), mock.patch("src.publisher.meta_preflight.preflight_pages", return_value={
                 "ok": True, "ready": [{"token": "verified-token", "token_id": "tok-1"}]
             }), mock.patch("src.publisher.page_manager.PageManager.list_pages", return_value=[{"page_id": "page-1"}]), mock.patch.object(
-                MetaReelPoster, "check_processing_reel", side_effect=[{"verified": False},
-                    {"verified": True, "video_id": "123", "fb_url": "https://facebook.test/reel/123"}]
+                MetaReelPoster, "check_processing_reel", side_effect=[{"verified": False}, {"verified": False},
+                    {"verified": True, "video_id": "upload-1", "fb_url": "https://www.facebook.com/reel/upload-1/"}]
             ) as check:
                 worker.process_scheduled_posts_once(poster=poster, now=datetime(2026, 1, 1, 1, 0, 0))
                 pending = json.loads(posts_file.read_text(encoding="utf-8"))[0]
@@ -808,7 +808,8 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
                 confirmed = json.loads(posts_file.read_text(encoding="utf-8"))[0]
                 self.assertEqual(confirmed["status"], "published")
                 self.assertEqual(json.loads((root / "posted.json").read_text()), ["clip.mp4"])
-                self.assertEqual(check.call_count, 2)
+                self.assertEqual(check.call_count, 3)
+                self.assertEqual(confirmed["post_fb_id"], "upload-1")
                 poster.publish_reel.assert_called_once()
                 poster.post_first_comment.assert_not_called()
         finally:

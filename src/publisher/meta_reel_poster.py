@@ -34,8 +34,14 @@ class MetaReelPoster:
             state = str(status.get("video_status") or "").lower() if isinstance(status, dict) else ""
             # An explicit ready/published state and a real permalink are needed;
             # a bare id, processing state or error is not evidence of a live Reel.
-            if str(data.get("id")) == str(candidate_id) and state in ("ready", "published") and str(data.get("permalink_url") or "").startswith("https://"):
-                return {"verified": True, "video_id": str(candidate_id), "fb_url": data["permalink_url"]}
+            publishing = status.get("publishing_phase") or {} if isinstance(status, dict) else {}
+            published = str(publishing.get("publish_status") or "").lower() == "published"
+            permalink = str(data.get("permalink_url") or "").strip()
+            if permalink.startswith("/reel/"):
+                permalink = "https://www.facebook.com" + permalink
+            if (str(data.get("id")) == str(candidate_id) and state in ("ready", "published")
+                    and published and permalink.startswith("https://www.facebook.com/reel/")):
+                return {"verified": True, "video_id": str(candidate_id), "fb_url": permalink}
         except (requests.RequestException, ValueError, TypeError):
             pass
         return {"verified": False}
