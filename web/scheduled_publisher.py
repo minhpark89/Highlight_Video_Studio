@@ -371,6 +371,18 @@ def _process_scheduled_posts_once(
             })
             continue
 
+        if post.get("auto_first_comment"):
+            url = str(post.get("article_url") or "").strip()
+            comment = str(post.get("first_comment") or "").strip()
+            if not (url and post.get("website_status") == "ready" and url in comment):
+                post["status"] = "failed" if post.get("website_status") == "failed" else "scheduled"
+                post["retryable"] = post["status"] == "failed"
+                post["retry_stage"] = "website_content"
+                post["schedule_error"] = "Đang chờ bài Website và First Comment chứa link; chưa gửi Reel lên Meta."
+                post.pop("claimed_at", None)
+                continue
+            post.pop("schedule_error", None)
+
         # Website creation belongs to schedule confirmation. Due-time publishing
         # only consumes persisted article_url/first_comment and must never create
         # a duplicate CMS article. A prior CMS failure does not cancel Facebook.

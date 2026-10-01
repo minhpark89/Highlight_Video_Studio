@@ -558,7 +558,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         website_publish.assert_not_called()
         comment_generate.assert_not_called()
 
-    def test_worker_publishes_facebook_after_saved_website_failure(self):
+    def test_worker_waits_for_website_after_saved_website_failure(self):
         from src.publisher import first_comment_queue
         from web import scheduled_publisher as worker
 
@@ -592,8 +592,9 @@ class SchedulingPublishFlowTests(unittest.TestCase):
                     website_publisher=mock.Mock(side_effect=AssertionError("must not retry automatically")),
                 )
         post = result["posts"][0]
-        self.assertEqual(post["status"], "published")
-        self.assertEqual(post["post_fb_id"], "video-website-failed")
+        self.assertEqual(post["status"], "failed")
+        self.assertEqual(post["retry_stage"], "website_content")
+        self.assertFalse(post.get("post_fb_id"))
         self.assertEqual(post["website_status"], "failed")
 
     def test_comment_failure_is_explicit_and_retryable(self):
@@ -845,7 +846,7 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
         self.assertIn("ledger unavailable", saved["ledger_error"])
         poster.publish_reel.assert_called_once()
 
-    def test_worker_does_not_hold_due_post_while_content_package_is_running(self):
+    def test_worker_waits_for_content_package_before_meta_publish(self):
         from src.publisher import first_comment_queue
         from web import scheduled_publisher as worker
 
@@ -870,9 +871,9 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
         finally:
             folder.cleanup()
         self.assertEqual(result["claimed"], 1)
-        self.assertEqual(saved["status"], "published")
+        self.assertEqual(saved["status"], "scheduled")
         self.assertEqual(saved["content_package_status"], "running")
-        poster.publish_reel.assert_called_once()
+        poster.publish_reel.assert_not_called()
         poster.post_first_comment.assert_not_called()
 
     def test_due_post_missing_video_fails_before_meta_and_never_retries(self):
