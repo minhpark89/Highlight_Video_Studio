@@ -1329,13 +1329,13 @@ def api_generate_content():
     if not title:
         return jsonify({"error": "Title is required"}), 400
         
-    res = generate_viral_content(
-        title=title,
-        summary=summary,
-        hook=hook,
-        video_url=video_url,
-        comment_model=comment_model,
-    )
+    try:
+        res = generate_viral_content(
+            title=title, summary=summary, hook=hook,
+            video_url=video_url, comment_model=comment_model,
+        )
+    except Exception as exc:
+        return jsonify({"success": False, "error": sanitize_error(exc) if isinstance(exc, (RuntimeError, ValueError)) else type(exc).__name__}), 502
     return jsonify({"success": True, "data": res})
 
 @app.route("/api/content/thumbnail", methods=["POST"])
@@ -1927,8 +1927,13 @@ def api_publish_reel():
             scheduled_posts.append(post_entry)
             success_count += 1
             if bool(data.get("auto_first_comment", False)):
-                from src.content_packages import enqueue_content_package
-                package = enqueue_content_package(
+                from src.content_packages import attach_existing_package, enqueue_content_package
+                meta = get_clip_metadata(clip_filename) or {}
+                package = attach_existing_package(
+                    clip_filename=clip_filename, post_ids=[post_entry["id"]],
+                    source_job_id=meta.get("job_id", ""), source_clip_id=meta.get("clip_index", ""),
+                    needs_article=True, article_url=post_entry.get("article_url", ""),
+                ) or enqueue_content_package(
                     clip_filename=clip_filename,
                     title=title,
                     summary=caption,
@@ -1937,9 +1942,12 @@ def api_publish_reel():
                     article_url=post_entry.get("article_url", ""),
                     video_url=str(post_entry.get("video_url") or post_entry.get("youtube_url") or ""),
                     create_website_article=not post_entry.get("article_url"),
+                    source_job_id=meta.get("job_id", ""), source_clip_id=meta.get("clip_index", ""),
                 )
                 post_entry["content_package_id"] = package["id"]
-                post_entry["content_package_status"] = "queued"
+                post_entry["content_package_status"] = package["status"]
+                if package["status"] == "ready":
+                    apply_ready_package_to_post(post_entry, package)
             start_content_package_worker()
             results.append({
                 "page_id": pid,
@@ -2564,9 +2572,14 @@ def api_distribute_batch():
     # Content packages run in the background queue; schedule creation never waits on
     # the LLM or the CMS.
     if scheduled_count:
-        from src.content_packages import enqueue_content_package
+        from src.content_packages import attach_existing_package, enqueue_content_package
         for post_entry in posts[-scheduled_count:]:
-            package = enqueue_content_package(
+            meta = get_clip_metadata(post_entry["media_file"]) or {}
+            package = attach_existing_package(
+                clip_filename=post_entry["media_file"], post_ids=[post_entry["id"]],
+                source_job_id=meta.get("job_id", ""), source_clip_id=meta.get("clip_index", ""),
+                needs_article=bool(auto_first_comment), article_url=post_entry.get("article_url", ""),
+            ) or enqueue_content_package(
                 clip_filename=post_entry["media_file"],
                 title=post_entry["title"],
                 summary=str(post_entry.get("content") or ""),
@@ -2575,9 +2588,12 @@ def api_distribute_batch():
                 article_url=post_entry.get("article_url", ""),
                 video_url=str(post_entry.get("video_url") or post_entry.get("youtube_url") or ""),
                 create_website_article=bool(auto_first_comment) and not post_entry.get("article_url"),
+                source_job_id=meta.get("job_id", ""), source_clip_id=meta.get("clip_index", ""),
             )
             post_entry["content_package_id"] = package["id"]
-            post_entry["content_package_status"] = "queued"
+            post_entry["content_package_status"] = package["status"]
+            if package["status"] == "ready":
+                apply_ready_package_to_post(post_entry, package)
         save_posts(posts)
         start_content_package_worker()
     return jsonify({
@@ -3158,6 +3174,20 @@ from src.content_packages import (list_packages, get_package, process_content_pa
                                  generate_package, fallback_package, circuit_status,
                                  start_content_package_worker, enqueue_content_package, sanitize_error,
                                  retry_package_component, retry_package, component_statuses)
+
+
+def apply_ready_package_to_post(post, package):
+    """Keep in-memory scheduled entries consistent with a reused persisted package."""
+    result = package.get("result") or {}
+    post["content_package_source"] = result.get("source")
+    post["content"] = result.get("caption") or post.get("content", "")
+    post["title"] = result.get("hero_title") or post.get("title", "")
+    post["article_url"] = package.get("article_url") or post.get("article_url", "")
+    post["website_status"] = package.get("website_status", post.get("website_status"))
+    post["website_embed_status"] = package.get("embed_status") or "unknown"
+    post["first_comment"] = result.get("first_comment") or post.get("first_comment", "")
+    if post["first_comment"]:
+        post["first_comment_status"] = "ready"
 
 # ---------------------------------------------------------------------------
 # Content Studio: background Content Package queue for rendered clips.

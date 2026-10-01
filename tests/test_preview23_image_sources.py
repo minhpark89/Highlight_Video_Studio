@@ -41,7 +41,7 @@ class ImageSourceTests(unittest.TestCase):
         from src.publisher import website_publisher as publisher
 
         with mock.patch.object(publisher, "get_llm_config", return_value={
-            "api_base": "http://example.test:20128/v1/", "model": "fixture-model"
+            "api_base": "http://example.test:20128/v1/", "model": "fixture-model", "api_key": "fixture-key"
         }), mock.patch.object(publisher, "requests") as requests_mock:
             requests_mock.post.return_value.status_code = 401
             _, body = publisher.generate_deep_article_content(

@@ -96,7 +96,14 @@ def generate_viral_content(
     Sử dụng LLM 9router viết bài đăng Facebook cực hay, tiêu đề viral,
     và đặc biệt FIRST COMMENT dạng gây tò mò tột độ (Curiosity Gap).
     """
-    llm = test_and_pick_active_llm(comment_model or _get_task_model("first_comment"))
+    from src.text_llm_diagnostics import chat_endpoint, chat_failure
+    cfg = get_llm_candidates()
+    model = comment_model or _get_task_model("first_comment") or cfg["model"]
+    base = cfg["configured_base"]
+    if not base:
+        raise RuntimeError("Text LLM api_base missing: configure llm.api_base for the text route")
+    if not model or not cfg["api_key"]:
+        raise RuntimeError(chat_failure(None, has_key=bool(cfg["api_key"]), has_model=bool(model)))
     prompt = f"""Bạn là một chuyên gia sáng tạo nội dung viral mạng xã hội (Facebook Reels, TikTok, YouTube Shorts), am hiểu tâm lý tò mò tương tự phong cách Longform Studio.
 
 Nhiệm vụ: Dựa vào tiêu đề và nội dung video sau:
@@ -123,31 +130,18 @@ Thông tin video:
   "hashtags": ["#viral", "#shorts", "#xuhuong"]
 }}
 """
-    headers = {
-        "Authorization": f"Bearer {llm['api_key']}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": llm["model"],
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.45
-    }
-
+    headers = {"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"}
+    payload = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.45}
     try:
-        r = requests.post(f"{llm['api_base']}/chat/completions", json=payload, headers=headers, timeout=30)
-        if r.status_code == 200:
-            return json_from_chat_response(r)
-    except Exception as e:
-        print(f"[Content Generator Error]: {e}")
-
-    # Fallback template chuyên nghiệp
-    clean_title = title.strip()
-    return {
-        "viral_title": f"🚨 SỰ THẬT KHIẾN TẤT CẢ PHẢI SỐC: {clean_title.upper()}",
-        "facebook_post": f"🔥 Tình huống căng thẳng ngoài sức tưởng tượng!\n\n💥 Chỉ một quyết định trong vài giây đã làm thay đổi toàn bộ sự việc. Ai có mặt tại hiện trường cũng không tin vào mắt mình.\n\n👇 Xem trọn vẹn diễn biến để hiểu rõ ngọn ngành câu chuyện!\n\n#viral #xuhuong #kichtinh #hot #shorts #trending",
-        "first_comment": "👀 Mọi người để ý kỹ chi tiết lúc đối tượng vừa quay mặt lại ở nửa sau video... Hành động đó chứng minh điều gì? Ai nhận ra điểm bất thường chưa?",
-        "hashtags": ["#viral", "#xuhuong", "#trending", "#kichtinh"]
-    }
+        response = requests.post(chat_endpoint(base), json=payload, headers=headers, timeout=30)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Text LLM transport failed: {type(exc).__name__}") from None
+    if response.status_code != 200:
+        raise RuntimeError(chat_failure(response.status_code, has_key=True, has_model=True))
+    result = json_from_chat_response(response)
+    if not isinstance(result, dict) or not all(result.get(field) for field in ("viral_title", "facebook_post", "first_comment")):
+        raise RuntimeError("Text LLM returned incomplete viral content")
+    return result
 
 def render_stylish_thumbnail(video_path: str, output_path: str, banner_text: str = "", timestamp_sec: float = 2.5):
     """

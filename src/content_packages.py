@@ -15,6 +15,7 @@ import requests
 
 from multi_pc.data_root import ProcessLease, canonical_data_root
 from src.llm_response import json_from_chat_response
+from src.text_llm_diagnostics import chat_endpoint, chat_failure
 
 DATA_ROOT = canonical_data_root()
 QUEUE_FILE = DATA_ROOT / "data" / "content_packages.json"
@@ -22,7 +23,7 @@ CIRCUIT_FILE = DATA_ROOT / "data" / "llm_circuit.json"
 _LOCK = threading.RLock()
 _WORKER_THREAD = None
 _WORKER_LOCK = threading.Lock()
-_SECRET_RE = re.compile(r"(access_token|page_token|token|api_key|secret|password|authorization)[=:\s]+[^\s&\"',]+", re.I)
+_SECRET_RE = re.compile(r"(access_token|page_token|token|api_key|secret|password|authorization)\s*[=:]\s*[^\s&\"',]+", re.I)
 QUOTA_CODES = {402, 429}
 
 
@@ -119,10 +120,12 @@ def _llm_package(title, summary, video_url=""):
     from src.content_builder import get_llm_candidates, _get_task_model
 
     cfg = get_llm_candidates()
-    endpoint = str(cfg.get("configured_base") or ((cfg.get("endpoints") or [""])[0]) or "").rstrip("/")
+    endpoint = str(cfg.get("configured_base") or "").strip()
     model = _get_task_model("content_package") or cfg.get("model")
-    if not endpoint or not model:
-        raise RuntimeError("LLM content package is not configured")
+    if not endpoint:
+        raise RuntimeError("Text LLM api_base missing: configure llm.api_base for the text route")
+    if not model or not cfg.get("api_key"):
+        raise RuntimeError(chat_failure(None, has_key=bool(cfg.get("api_key")), has_model=bool(model)))
     prompt = (
         "Create a content package for a rendered highlight. Return JSON only with keys "
         "hero_title, article_html, first_comment, caption, hashtags. Article HTML must be a useful 350+ word story.\n"
@@ -132,14 +135,15 @@ def _llm_package(title, summary, video_url=""):
     if cfg.get("api_key"):
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
     response = requests.post(
-        f"{endpoint}/chat/completions",
+        chat_endpoint(endpoint),
         headers=headers,
         json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.45},
         timeout=45,
     )
     if response.status_code in QUOTA_CODES:
         raise QuotaError(f"LLM quota HTTP {response.status_code}")
-    response.raise_for_status()
+    if response.status_code != 200:
+        raise RuntimeError(chat_failure(response.status_code, has_key=True, has_model=True))
     data = json_from_chat_response(response)
     if not isinstance(data, dict):
         raise RuntimeError("LLM returned a non-object content package")
@@ -169,9 +173,10 @@ def generate_package(title, summary="", video_url="", mode="auto", article_url="
             state = record_quota_failure(exc)
             result = {**fallback, "source": "no_llm_quota_fallback", "circuit": {**state, "open": True}}
         except Exception as exc:
+            reason = sanitize_error(exc) if isinstance(exc, (RuntimeError, ValueError)) else type(exc).__name__
             if selected_mode == "llm":
-                raise RuntimeError(sanitize_error(exc)) from exc
-            result = {**fallback, "source": "no_llm_error_fallback", "fallback_reason": sanitize_error(exc)}
+                raise RuntimeError(reason) from None
+            result = {**fallback, "source": "no_llm_error_fallback", "fallback_reason": reason}
     if component:
         if component not in fallback:
             raise ValueError("Unknown content component")
@@ -180,12 +185,14 @@ def generate_package(title, summary="", video_url="", mode="auto", article_url="
 
 
 def enqueue_content_package(*, clip_filename, title, summary="", video_url="", mode="auto", post_ids=None,
-                            components=None, article_url="", create_website_article=False):
+                            components=None, article_url="", create_website_article=False, source_job_id="", source_clip_id=""):
     with _LOCK:
         items = _read(QUEUE_FILE, [])
         item = {
             "id": f"content_{int(time.time())}_{uuid.uuid4().hex[:8]}",
             "clip_filename": str(clip_filename or "").strip(),
+            "source_job_id": str(source_job_id or "").strip(),
+            "source_clip_id": str(source_clip_id or "").strip(),
             "title": str(title or ""),
             "summary": str(summary or ""),
             "video_url": str(video_url or ""),
@@ -225,7 +232,30 @@ def _clip_keys(value):
     return {raw.casefold(), path.name.casefold()}
 
 
-def attach_existing_package(*, clip_filename, post_ids=None):
+def _same_clip(entry, clip_filename, source_job_id="", source_clip_id=""):
+    for field, requested in (("source_job_id", source_job_id), ("source_clip_id", source_clip_id)):
+        existing = str(entry.get(field) or "").strip()
+        if existing and requested and existing != str(requested).strip():
+            return False
+    if source_job_id and source_clip_id and entry.get("source_job_id") and entry.get("source_clip_id"):
+        return (str(entry["source_job_id"]) == str(source_job_id)
+                and str(entry["source_clip_id"]) == str(source_clip_id))
+    return bool(_clip_keys(entry.get("clip_filename")) & _clip_keys(clip_filename))
+
+
+def _reusable(entry, *, needs_article, article_url=""):
+    if entry.get("status") != "ready" or not (entry.get("result") or {}).get("caption"):
+        return False
+    url = str(entry.get("article_url") or "").strip()
+    if article_url and url != str(article_url).strip():
+        return False
+    if needs_article and (not url or entry.get("website_status") != "ready"):
+        return False
+    return not url or (entry.get("website_status") == "ready" and
+                       url in str((entry.get("result") or {}).get("first_comment") or ""))
+
+
+def attach_existing_package(*, clip_filename, post_ids=None, source_job_id="", source_clip_id="", needs_article=True, article_url=""):
     """Attach a finished library package without repeating CMS or LLM work."""
     wanted = [str(value) for value in (post_ids or []) if str(value).strip()]
     keys = _clip_keys(clip_filename)
@@ -235,9 +265,8 @@ def attach_existing_package(*, clip_filename, post_ids=None):
         items = _read(QUEUE_FILE, [])
         item = next(
             (entry for entry in reversed(items)
-             if entry.get("status") == "ready" and _clip_keys(entry.get("clip_filename")) & keys
-             and entry.get("article_url") and entry.get("website_status") == "ready"
-             and str((entry.get("result") or {}).get("first_comment") or "").find(entry["article_url"]) >= 0),
+             if _same_clip(entry, clip_filename, source_job_id, source_clip_id)
+             and _reusable(entry, needs_article=needs_article, article_url=article_url)),
             None,
         )
         if not item:
@@ -437,13 +466,13 @@ def process_content_packages_once():
         # library as an absolute path. Reuse a verified finished package rather
         # than publishing a duplicate CMS article or leaving the post pending.
         prior = next((entry for entry in reversed(items)
-                      if entry.get("id") != item.get("id") and entry.get("status") == "ready"
-                      and _clip_keys(entry.get("clip_filename")) & _clip_keys(item.get("clip_filename"))
-                      and entry.get("article_url") and entry.get("website_status") == "ready"
-                      and ("first_comment" not in (item.get("components") or ["first_comment"])
-                           or str((entry.get("result") or {}).get("first_comment") or "").find(entry["article_url"]) >= 0)), None)
+                      if entry.get("id") != item.get("id")
+                      and _same_clip(entry, item.get("clip_filename"), item.get("source_job_id"), item.get("source_clip_id"))
+                      and _reusable(entry, needs_article=bool(item.get("create_website_article") or
+                                                       "first_comment" in (item.get("components") or [])),
+                                    article_url=item.get("article_url", ""))), None)
         if prior:
-            item.update({"article_url": prior["article_url"], "website_status": "ready",
+            item.update({"article_url": prior.get("article_url", ""), "website_status": prior.get("website_status", "not_configured"),
                          "website_error": "", "embed_status": prior.get("embed_status") or "ready",
                          "result": dict(prior.get("result") or {}), "status": "ready",
                          "error": "", "completed_at": _now()})

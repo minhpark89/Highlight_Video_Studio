@@ -100,6 +100,24 @@ def _llm_headers(api_key: str) -> dict:
     return headers
 
 
+def _safe_text_llm_error(exc):
+    from src.content_packages import sanitize_error
+    return sanitize_error(exc) if isinstance(exc, (ValueError, RuntimeError)) else type(exc).__name__
+
+
+def _text_chat_request(api_base, api_key, model, payload, timeout):
+    from src.text_llm_diagnostics import chat_endpoint, chat_failure
+
+    if not api_base:
+        raise ValueError("Text LLM api_base missing: configure llm.api_base for the text route")
+    if not model or not api_key:
+        raise ValueError(chat_failure(None, has_key=bool(api_key), has_model=bool(model)))
+    response = requests.post(chat_endpoint(api_base), headers=_llm_headers(api_key), json=payload, timeout=timeout)
+    if response.status_code != 200:
+        raise RuntimeError(chat_failure(response.status_code, has_key=True, has_model=True))
+    return response
+
+
 def _image_response_values(payload) -> list:
     """Extract provider image URL/base64 values from OpenAI-style and nested chat responses."""
     values = []
@@ -151,6 +169,7 @@ def get_clip_metadata(clip_filename: str) -> dict:
         "video_title": "",
         "youtube_url": "",
         "job_id": "",
+        "clip_index": "",
         "description": "",
         "youtube_id": "",
         "long_video_path": "",
@@ -183,6 +202,7 @@ def get_clip_metadata(clip_filename: str) -> dict:
                         if _clip_matches(c.get("filename")):
                             matched_job = j
                             meta["job_id"] = j.get("id") or ""
+                            meta["clip_index"] = c.get("clip_index") or c.get("index") or ""
                             meta["youtube_url"] = j.get("youtube_url") or ""
                             meta["clip_start"] = c.get("start", c.get("start_time"))
                             meta["clip_end"] = c.get("end", c.get("end_time"))
@@ -641,10 +661,6 @@ Output strictly valid JSON only:
                   "Without corroborating sources, this article intentionally does not assert a final outcome, a specific tactical explanation or a quote from any participant.")
 
     try:
-        if not api_base or not model:
-            raise ValueError("Chưa cấu hình endpoint/model viết bài")
-        url = f"{api_base.rstrip('/')}/chat/completions"
-        headers = _llm_headers(api_key)
         payload = {
             "model": model,
             "messages": [
@@ -654,7 +670,7 @@ Output strictly valid JSON only:
             "max_tokens": 1800,
             "temperature": 0.7
         }
-        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        resp = _text_chat_request(api_base, api_key, model, payload, 60)
         if resp.status_code == 200:
             d = json_from_chat_response(resp)
             if not isinstance(d, dict):
@@ -666,7 +682,7 @@ Output strictly valid JSON only:
             s2_title = d.get("section_2_title") or s2_title
             s2_content = d.get("section_2_content") or s2_content
     except Exception as exc:
-        logger.warning(f"LLM deep article generation failed: {exc}")
+        logger.warning("LLM deep article generation failed: %s", _safe_text_llm_error(exc))
 
     safe_title = html.escape(str(title))
     safe_lead = html.escape(str(lead))
@@ -756,10 +772,6 @@ Rules:
 5. Return ONLY the comment text. No commentary, no quotation marks."""
 
     try:
-        if not api_base or not model:
-            raise ValueError("Chưa cấu hình endpoint/model First Comment")
-        url = f"{api_base.rstrip('/')}/chat/completions"
-        headers = _llm_headers(api_key)
         payload = {
             "model": model,
             "messages": [
@@ -769,7 +781,7 @@ Rules:
             "max_tokens": 120,
             "temperature": 0.8
         }
-        resp = requests.post(url, headers=headers, json=payload, timeout=45)
+        resp = _text_chat_request(api_base, api_key, model, payload, 45)
         if resp.status_code == 200:
             comment = chat_text_from_response(resp).strip()
             if not comment:
@@ -786,9 +798,9 @@ Rules:
                     comment = f"🔥 Full uncut story and video: {article_url}"
             return comment
         else:
-            logger.warning(f"LLM comment gen error: {resp.status_code} {resp.text}")
+            logger.warning("LLM comment gen error: %s", resp.status_code)
     except Exception as exc:
-        logger.warning(f"LLM comment gen exception (using fallback): {exc}")
+        logger.warning("LLM comment gen exception (using fallback): %s", _safe_text_llm_error(exc))
 
     return fallback_comment
 
