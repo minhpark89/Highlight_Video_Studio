@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 import requests
 from multi_pc.data_root import canonical_data_root
-from src.llm_response import chat_text_from_response, json_from_chat_response
+from src.llm_response import chat_stream_incomplete, chat_text_from_response, json_from_chat_response
 
 logger = logging.getLogger("website_publisher")
 
@@ -113,9 +113,14 @@ def _text_chat_request(api_base, api_key, model, payload, timeout):
         raise ValueError("Text LLM api_base missing: configure llm.api_base for the text route")
     if not model or not api_key:
         raise ValueError(chat_failure(None, has_key=bool(api_key), has_model=bool(model)))
-    response = requests.post(chat_endpoint(api_base), headers=_llm_headers(api_key), json=payload, timeout=timeout)
+    # Ask the provider for a single completed JSON envelope. Some gateways
+    # still return SSE; reject a truncated HTTP 200 rather than using its text.
+    response = requests.post(chat_endpoint(api_base), headers=_llm_headers(api_key),
+                             json={**payload, "stream": False}, timeout=timeout)
     if response.status_code != 200:
         raise RuntimeError(chat_failure(response.status_code, has_key=True, has_model=True))
+    if chat_stream_incomplete(response):
+        raise RuntimeError("Text LLM stream ended without completion")
     return response
 
 
@@ -333,7 +338,7 @@ def get_clip_metadata(clip_filename: str) -> dict:
     
     # Nếu vẫn bị trống hoặc còn là mã rác (VD: "Clip 2", "job_...") -> Đặt tiêu đề giật gân tự nhiên
     if not v_clean or len(v_clean) < 8 or re.match(r'^(clip|job|highlight)', v_clean, re.IGNORECASE):
-        v_clean = "Shocking High-Stakes Encounter & Dramatic Revelation"
+        v_clean = "Original Video and Full Recording Guide"
 
     meta["video_title"] = v_clean.title()
     meta["clean_title"] = meta["video_title"]
@@ -345,14 +350,19 @@ def extract_youtube_video_id(value: str) -> str:
     raw = str(value or "").strip()
     if re.fullmatch(r"[A-Za-z0-9_-]{11}", raw):
         return raw
-    patterns = (
-        r"(?:youtube\.com/(?:watch\?(?:[^#]*&)?v=|embed/|shorts/|live/)|youtu\.be/)([A-Za-z0-9_-]{11})",
-        r"[?&]v=([A-Za-z0-9_-]{11})",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, raw, flags=re.IGNORECASE)
-        if match:
-            return match.group(1)
+    from urllib.parse import parse_qs, urlparse
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    if host in ("youtube.com", "www.youtube.com", "m.youtube.com", "youtube-nocookie.com", "www.youtube-nocookie.com"):
+        candidate = (parse_qs(parsed.query).get("v") or [""])[0] if parsed.path == "/watch" else next(
+            (part for prefix in ("/embed/", "/shorts/", "/live/") if parsed.path.startswith(prefix)
+             for part in [parsed.path[len(prefix):].split("/", 1)[0]]), "")
+    elif host in ("youtu.be", "www.youtu.be"):
+        candidate = parsed.path.strip("/").split("/", 1)[0]
+    else:
+        candidate = ""
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", candidate):
+        return candidate
     return ""
 
 def build_youtube_embed_html(youtube_id: str, title: str = "") -> str:
@@ -414,11 +424,21 @@ def select_smart_video_frame(video_path: str, clip_start=None, clip_end=None, ou
     if not HAS_CV2 or not video_path or not os.path.exists(video_path):
         return ""
     cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        cap.release()
+        return ""
+    # Reject a portrait source before cropping: a horizontal crop of a short
+    # vertical highlight must never masquerade as an original landscape frame.
+    width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    if not height or width / height < 1.45:
+        cap.release()
+        return ""
     best = None
     for timestamp in _candidate_frame_times(video_path, clip_start, clip_end):
         cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000.0)
         ok, frame = cap.read()
-        if ok:
+        if ok and frame.shape[1] / max(1, frame.shape[0]) >= 1.45:
             score = _score_frame(frame)
             if best is None or score > best[0]:
                 best = score, frame
@@ -578,14 +598,13 @@ def upload_long_video_to_public_stream(meta: dict, clip_filename: str) -> str:
     target_video_file = None
     target_stream_name = None
 
-    if long_path and os.path.exists(long_path):
-        target_video_file = Path(long_path)
-        target_stream_name = target_video_file.name
-    else:
-        clip_path = HVS_DIR / "output" / clip_filename
-        if clip_path.exists():
-            target_video_file = clip_path
-            target_stream_name = clip_filename
+    clip_path = Path(str(clip_filename or ""))
+    if not clip_path.is_absolute():
+        clip_path = _runtime_data_root() / "output" / clip_path
+    for candidate in (meta.get("source_video_path"), long_path):
+        if candidate and Path(candidate).is_file() and Path(candidate).resolve() != clip_path.resolve():
+            target_video_file = Path(candidate)
+            break
 
     if not target_video_file or not target_video_file.exists():
         return ""
@@ -611,9 +630,12 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str) -> t
     svc._ensure_session(sess)
     meta = get_clip_metadata(clip_filename)
     youtube_id = extract_youtube_video_id(meta.get("youtube_id") or meta.get("youtube_url"))
+    clip_path = Path(str(clip_filename or ""))
+    if not clip_path.is_absolute():
+        clip_path = _runtime_data_root() / "output" / clip_path
     source_path = next((str(path) for path in (
         meta.get("source_video_path"), meta.get("long_video_path")
-    ) if path and Path(path).is_file()), "")
+    ) if path and Path(path).is_file() and Path(path).resolve() != clip_path.resolve()), "")
     hero = ""
     if get_image_provider_config()["model"] != "__video_frame__":
         generated = generate_llm_hook_image(video_title)
@@ -744,6 +766,20 @@ Output strictly valid JSON only:
                   "The images in this article come from the original horizontal source or its source-video thumbnail when available. They offer reference points for returning to the longer recording, not substitutes for it. "
                   "Watch the full video below, compare the beginning, middle and end of the relevant passage, and decide which observations are directly supported. "
                   "Without corroborating sources, this article intentionally does not assert a final outcome, a specific tactical explanation or a quote from any participant.")
+    s1_content += ("\nBegin by separating the title from the recording itself. The title is a locator for this source, not a transcript or a verified description of every frame. "
+                   "Record the timestamp of any passage you want to discuss, then return to a little earlier in the same video to check what the camera had already established. "
+                   "If the recording includes cuts, overlays, subtitles or commentary, keep each of those distinct from the visible action. "
+                   "A still image can help you find a moment again, but it cannot establish the order or duration of what happens around it. "
+                   "When comparing reference images, check whether their backgrounds and viewpoints are consistent; do not assume they show consecutive moments. "
+                   "A useful account of the sequence names what is directly visible, notes when in the source it appears, and leaves uncertain details unresolved.")
+    s2_content += ("\nFor a careful review, write down observations separately from interpretations. An observation might be that the camera changes position or that a figure enters the frame; "
+                   "an interpretation would assign a reason for that movement. The latter needs more evidence than a single image or a title. "
+                   "Audio can add context, but speech should be attributed only when the speaker can actually be identified from the source. "
+                   "Likewise, a subtitle or caption is not a substitute for independently checking what can be heard. "
+                   "Consider what the camera does not show: events before recording began, activity beyond the edges of the frame, and what followed after it stopped. "
+                   "Those limits matter most when a short extract is presented as though it settles an entire story. "
+                   "If you share a conclusion, cite the relevant passage in the embedded recording and explain which part remains uncertain. "
+                   "That approach makes the full-length source useful even when no separate reporting, transcript or corroboration is available.")
 
     try:
         payload = {
@@ -760,14 +796,19 @@ Output strictly valid JSON only:
             d = json_from_chat_response(resp)
             if not isinstance(d, dict):
                 raise ValueError("LLM article response is not an object")
-            seo_title = d.get("seo_title") or seo_title
-            lead = d.get("lead_paragraph") or lead
-            s1_title = d.get("section_1_title") or s1_title
-            s1_content = d.get("section_1_content") or s1_content
-            s2_title = d.get("section_2_title") or s2_title
-            s2_content = d.get("section_2_content") or s2_content
+            required = ("lead_paragraph", "section_1_title", "section_1_content",
+                        "section_2_title", "section_2_content")
+            if any(not isinstance(d.get(key), str) or not d[key].strip() for key in required):
+                raise ValueError("Incomplete article response")
+            if len(re.findall(r"\b[A-Za-z]+\b", " ".join(d[key] for key in required))) < 500:
+                raise ValueError("Article response below 500-word gate")
+            seo_title = d.get("seo_title") if isinstance(d.get("seo_title"), str) and d["seo_title"].strip() else seo_title
+            lead, s1_title, s1_content, s2_title, s2_content = (d[key] for key in required)
     except Exception as exc:
         logger.warning("LLM deep article generation failed: %s", _safe_text_llm_error(exc))
+
+    if len(re.findall(r"\b[A-Za-z]+\b", " ".join((lead, s1_title, s1_content, s2_title, s2_content)))) < 500:
+        raise WebsiteServiceError("Article below 500-word gate; CMS publish blocked")
 
     safe_title = html.escape(str(title))
     safe_lead = html.escape(str(lead))

@@ -134,7 +134,7 @@ def _llm_package(title, summary, video_url=""):
         "set first_comment to an empty string rather than inventing a link.\n"
         f"Title: {title}\nSummary: {summary}\nSource: {video_url}"
     )
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if cfg.get("api_key"):
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
     # A 200 can contain commentary, an empty reasoning-only reply, or incomplete
@@ -144,7 +144,8 @@ def _llm_package(title, summary, video_url=""):
     for attempt in range(2):
         response = requests.post(
             chat_endpoint(endpoint), headers=headers,
-            json={"model": model, "messages": messages, "temperature": 0.45 if attempt == 0 else 0.2},
+            json={"model": model, "messages": messages, "stream": False,
+                  "max_tokens": 2048, "temperature": 0.45 if attempt == 0 else 0.2},
             timeout=45,
         )
         if response.status_code in QUOTA_CODES:
