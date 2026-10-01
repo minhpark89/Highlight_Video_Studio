@@ -161,6 +161,36 @@ def _process_scheduled_posts_once(
     queue_result = process_due_first_comments(poster, now=int(current_dt.timestamp()))
     posts = load_posts()
     posts_by_id = {post.get("id"): post for post in posts}
+    reconciled = 0
+    for post in posts:
+        if post.get("status") != "processing" or not post.get("meta_post_id"):
+            continue
+        attempts = int(post.get("meta_reconcile_attempts") or 0)
+        if attempts >= 6 or now_ts < float(post.get("meta_next_check_at") or 0):
+            continue
+        # New records require the same exact Page/token mapping as publishing.
+        page = next((p for p in page_manager.list_pages() if str(p.get("page_id")) == str(post.get("page_id"))), None)
+        verdict = preflight_pages([page], token_vault, page_manager) if page and post.get("token_id") else {"ok": False}
+        if not verdict.get("ok"):
+            post["meta_reconcile_error"] = "Exact Page credential unavailable; read-only verification paused."
+            continue
+        credential = verdict["ready"][0]
+        from src.publisher.meta_reel_poster import MetaReelPoster as _MetaReelPoster
+        check = _MetaReelPoster(token_vault=token_vault).check_processing_reel(
+            post["meta_post_id"], credential["token"], credential["token_id"]
+        )
+        post["meta_reconcile_attempts"] = attempts + 1
+        post["meta_next_check_at"] = now_ts + 60
+        reconciled += 1
+        if check.get("verified"):
+            post["post_fb_id"] = check["video_id"]
+            post["fb_url"] = check["fb_url"]
+            # Ledger and post state must agree before displaying confirmed success.
+            try:
+                _record_posted_clip(post.get("media_file") or post.get("clip_filename"))
+                post.update({"status": "published", "published_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"), "error": ""})
+            except Exception as exc:
+                post["ledger_error"] = sanitize_error(exc)
     for outcome in queue_result.get("outcomes", []):
         post = posts_by_id.get(outcome.get("post_id"))
         if not post:
@@ -301,6 +331,14 @@ def _process_scheduled_posts_once(
                 first_comment="",
             )
             facebook_id = result.get("video_id") or result.get("reel_id")
+            if result.get("processing") and result.get("meta_post_id"):
+                post.update({"status": "processing", "meta_post_id": str(result["meta_post_id"]),
+                             "meta_upload_video_id": str(result.get("upload_video_id") or ""),
+                             "meta_reconcile_attempts": 0, "meta_next_check_at": now_ts + 60,
+                             "retryable": False, "retry_stage": "meta_processing",
+                             "error": "Meta is processing; awaiting independent read-only verification. Do not retry."})
+                save_posts(posts)
+                continue
             if not result.get("success") or not facebook_id:
                 post.update({
                     "status": "failed",
@@ -353,7 +391,7 @@ def _process_scheduled_posts_once(
                 "error": "Publish started but outcome is unknown; reconcile on Facebook before retrying.",
             })
 
-    if claimed_posts or recovered or queue_result.get("changed"):
+    if claimed_posts or recovered or reconciled or queue_result.get("changed"):
         save_posts(posts)
     failed = sum(1 for post in claimed_posts if post.get("status") == "failed")
     return {"claimed": len(claimed_posts), "recovered": recovered, "failed": failed, "queue": queue_result, "posts": posts}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import html
 import os
 import re
 import threading
@@ -52,13 +53,14 @@ def _now():
 def fallback_package(title: str, summary: str = "", article_url: str = "") -> dict:
     clean = " ".join(str(title or "Untold Highlight").split()).strip()
     context = " ".join(str(summary or "").split()).strip()
-    hero = f"THE MOMENT EVERYONE MISSED: {clean}"[:110]
-    lead = context or "A split-second decision changed the direction of the entire scene, and the detail is easy to miss on a first viewing."
+    hero = clean[:110]
+    lead = context or f"A guide to reviewing the original video associated with {clean}."
     article = (
-        f"<h2>{hero}</h2><p>{lead}</p>"
-        "<p>The opening sequence establishes the pressure immediately. Small changes in timing, spacing, and reaction create the decisive turning point, while the people involved have almost no time to adjust.</p>"
-        "<h3>What changed the outcome</h3><p>Viewed carefully, the key moment is not a single dramatic gesture but a chain of choices. Each response narrows the available options until the final result becomes unavoidable.</p>"
-        "<h3>Why viewers are replaying it</h3><p>The full sequence rewards a second look because the most important clue appears before the obvious climax. Watch the complete footage and compare the setup with the aftermath.</p>"
+        f"<h2>{html.escape(hero)}</h2><p>{html.escape(lead)}</p>"
+        "<h3>Start with the source</h3><p>Watch the original full-length recording before drawing conclusions from a short highlight or its title. Identify the relevant passage and note what appears before and after it. A title and a short description provide a subject, not independent confirmation of what happened, who was involved, or how the event ended. If the source is unavailable, this guide cannot verify those details.</p>"
+        "<h3>Review the sequence</h3><p>Replay the relevant passage at normal speed, then pause at the start, middle and end. Compare what is actually visible across those points. Notice when a cut, camera change, replay or overlay changes the view. A still image can help locate a moment in the source but cannot establish continuity on its own. Keep direct observations separate from interpretation, and leave details unresolved if the video does not show them clearly.</p>"
+        "<h3>Check the context</h3><p>Look at the surrounding minutes to see whether they add context to the selected passage. On-screen captions, audio and a camera angle can be useful clues, but none should be presented as a verified outside source without corroboration. The recording may show actions in frame while leaving motivations, audience reactions and events outside the frame unknown. Return to the original footage for any claim that matters, and seek an independent source if the claim goes beyond what the recording can support.</p>"
+        "<h3>What remains open</h3><p>This no-LLM overview deliberately does not invent a result, a quote, a location or a cause. The full video is the reference for judging the selected moment; the article is a viewing guide rather than a reported account. If a decisive detail is not visible, describe the uncertainty instead of treating an attractive narrative as evidence.</p>"
     )
     link = str(article_url or "").strip()
     comment = "👀 Watch the setup again—the detail just before the turning point explains everything."

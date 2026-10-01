@@ -1890,7 +1890,7 @@ def api_publish_reel():
             duplicate = next((post for post in scheduled_posts if
                 post.get("page_id") == pid and
                 (post.get("media_file") or post.get("clip_filename")) == clip_filename and
-                post.get("status") in ("scheduled", "publishing", "published")
+                post.get("status") in ("scheduled", "publishing", "processing", "published")
             ), None)
             if duplicate:
                 results.append({
@@ -1974,6 +1974,18 @@ def api_publish_reel():
         verified = immediate_preflight["ready"][0]
         p_token = verified["token"]
 
+        # A prior ambiguous finish must not be replayed by another click.
+        existing = next((item for item in load_posts() if
+            str(item.get("page_id")) == str(pid) and
+            (item.get("media_file") or item.get("clip_filename")) == clip_filename and
+            item.get("status") in ("scheduled", "publishing", "processing", "published")
+        ), None)
+        if existing:
+            results.append({"page_id": pid, "page_name": p_info.get("page_name"),
+                            "success": False, "error": "Clip already queued, processing or posted for this Page; reconcile before retry.",
+                            "duplicate_post_id": existing.get("id")})
+            continue
+
         res = reel_poster.publish_reel(
             page_id=pid,
             page_token=p_token,
@@ -2029,6 +2041,26 @@ def api_publish_reel():
                     "token_id": verified["token_id"],
                 })
                 save_posts(immediate_posts)
+        elif res.get("processing") and res.get("meta_post_id"):
+            pending_posts = load_posts()
+            pending_posts.insert(0, {
+                "id": f"post_{int(time.time())}_{uuid.uuid4().hex[:6]}",
+                "title": title, "content": caption, "page_id": pid,
+                "page_name": p_info.get("page_name", pid), "type": "reel",
+                "media_file": clip_filename, "first_comment": first_comment,
+                "article_url": str(data.get("article_url") or data.get("website_url") or "").strip(),
+                "status": "processing", "meta_post_id": str(res["meta_post_id"]),
+                "meta_upload_video_id": str(res.get("upload_video_id") or ""),
+                "meta_reconcile_attempts": 0, "meta_next_check_at": time.time() + 60,
+                "retryable": False, "retry_stage": "meta_processing",
+                "error": "Meta is processing; awaiting independent read-only verification. Do not retry.",
+                "token_id": verified["token_id"],
+                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            })
+            save_posts(pending_posts)
+            results.append({"page_id": pid, "page_name": p_info.get("page_name"),
+                            "success": False, "processing": True, "outcome_unknown": True,
+                            "meta_post_id": str(res["meta_post_id"]), "error": "Meta processing; do not retry."})
         else:
             results.append({
                 "page_id": pid,

@@ -6,6 +6,36 @@ from unittest import mock
 
 
 class ImageSourceTests(unittest.TestCase):
+    def test_non_llm_article_is_substantial_grounded_and_uses_original_horizontal_images(self):
+        import re
+        from src.publisher import website_publisher as publisher
+
+        with mock.patch.object(publisher, "get_llm_config", return_value={}):
+            _, body = publisher.generate_deep_article_content(
+                "Fixture title", "https://cdn.test/original-wide.jpg",
+                ["https://cdn.test/original-wide.jpg", "https://cdn.test/original-wide-2.jpg"],
+                youtube_id="abcdefghijk",
+            )
+        words = re.findall(r"\b[A-Za-z]+\b", re.sub(r"<[^>]*>", " ", body))
+        self.assertGreaterEqual(len(words), 290)
+        self.assertIn("How to examine the original sequence", body)
+        self.assertIn("What the footage can and cannot confirm", body)
+        self.assertIn("original-wide-2.jpg", body)
+        self.assertIn("youtube-nocookie.com/embed/abcdefghijk", body)
+        self.assertNotIn("viewers witnessed", body)
+        self.assertNotIn("tactical genius", body.lower())
+
+    def test_content_package_fallback_is_grounded_and_escapes_untrusted_metadata(self):
+        import re
+        from src.content_packages import fallback_package
+
+        result = fallback_package("<script>Sample</script>")
+        plain = re.sub(r"<[^>]*>", " ", result["article_html"])
+        self.assertGreaterEqual(len(re.findall(r"\b[A-Za-z]+\b", plain)), 280)
+        self.assertIn("&lt;script&gt;", result["article_html"])
+        self.assertNotIn("<script>", result["article_html"])
+        self.assertNotIn("viewers are replaying", plain.lower())
+
     def test_frame_mode_uses_original_video_not_short_clip(self):
         from src.publisher import website_publisher as publisher
 

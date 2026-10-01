@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -16,6 +17,28 @@ class MetaReelPoster:
                 self.token_vault.record_usage(token_or_id, response.headers)
             except Exception:
                 pass
+
+    def check_processing_reel(self, candidate_id, page_token, token_id=None):
+        """Read only: a finish post_id is a candidate, never proof of publication."""
+        if not re.fullmatch(r"[0-9]+(?:_[0-9]+)?", str(candidate_id or "")) or not page_token:
+            return {"verified": False}
+        try:
+            response = requests.get(f"{self.base_url}/{candidate_id}", params={
+                "fields": "id,status,permalink_url", "access_token": page_token,
+            }, timeout=12)
+            self._track_headers(token_id or page_token, response)
+            if not response.ok:
+                return {"verified": False}
+            data = response.json()
+            status = data.get("status") or {}
+            state = str(status.get("video_status") or "").lower() if isinstance(status, dict) else ""
+            # An explicit ready/published state and a real permalink are needed;
+            # a bare id, processing state or error is not evidence of a live Reel.
+            if str(data.get("id")) == str(candidate_id) and state in ("ready", "published") and str(data.get("permalink_url") or "").startswith("https://"):
+                return {"verified": True, "video_id": str(candidate_id), "fb_url": data["permalink_url"]}
+        except (requests.RequestException, ValueError, TypeError):
+            pass
+        return {"verified": False}
 
     def publish_reel(self, page_id, page_token, video_path, description="", first_comment="", schedule_time=None, token_id=None):
         video_path = Path(video_path)
@@ -109,6 +132,12 @@ class MetaReelPoster:
             if not r_finish.ok:
                 err_msg = finish_data.get("error", {}).get("message", str(finish_data))
                 return {"success": False, "outcome_unknown": True, "error": f"Meta finish rejected (HTTP {r_finish.status_code}); reconcile before retry: {err_msg}"}
+            # Meta may return post_id while the Reel is still processing. Keep
+            # it as a reconciliation candidate, not a confirmed Reel object.
+            if finish_data.get("post_id") and not finish_data.get("video_id") and not finish_data.get("reel_id"):
+                return {"success": False, "processing": True, "outcome_unknown": True,
+                        "meta_post_id": str(finish_data["post_id"]), "upload_video_id": str(video_id),
+                        "error": "Meta accepted finish; Reel processing. Verify remotely before marking posted; do not retry."}
             # A success response without an object id is not authoritative.
             if not finish_data.get("video_id") and not finish_data.get("reel_id"):
                 err_msg = finish_data.get("error", {}).get("message", str(finish_data))

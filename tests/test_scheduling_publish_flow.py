@@ -101,6 +101,35 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertTrue(result["outcome_unknown"])
 
+    def test_meta_finish_post_id_is_processing_candidate_not_published(self):
+        from src.publisher.meta_reel_poster import MetaReelPoster
+        with tempfile.TemporaryDirectory() as folder:
+            video = Path(folder) / "clip.mp4"
+            video.write_bytes(b"fixture")
+            responses = [
+                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"video_id": "upload-1", "upload_url": "https://upload.test/1"}),
+                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {}),
+                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"success": True, "message": "Video is Processing...check upload status", "post_id": "122117668215471152"}),
+            ]
+            with mock.patch("src.publisher.meta_reel_poster.requests.post", side_effect=responses) as post:
+                result = MetaReelPoster().publish_reel("page-1", "page-token", video, first_comment="Do not send")
+        self.assertFalse(result["success"])
+        self.assertTrue(result["processing"])
+        self.assertEqual(result["meta_post_id"], "122117668215471152")
+        self.assertNotIn("fb_url", result)
+        self.assertEqual(post.call_count, 3)
+
+    def test_read_only_reconciliation_requires_explicit_ready_and_permalink(self):
+        from src.publisher.meta_reel_poster import MetaReelPoster
+        poster = MetaReelPoster()
+        response = mock.Mock(ok=True, headers={}, json=lambda: {"id": "123", "status": {"video_status": "processing"}, "permalink_url": "https://facebook.test/reel/123"})
+        with mock.patch("src.publisher.meta_reel_poster.requests.get", return_value=response) as get, mock.patch("src.publisher.meta_reel_poster.requests.post") as post:
+            self.assertFalse(poster.check_processing_reel("123", "fixture-token")["verified"])
+            response.json = lambda: {"id": "123", "status": {"video_status": "ready"}, "permalink_url": "https://facebook.test/reel/123"}
+            self.assertTrue(poster.check_processing_reel("123", "fixture-token")["verified"])
+            post.assert_not_called()
+            self.assertEqual(get.call_count, 2)
+
     def test_invalid_schedule_time_is_rejected_without_immediate_publish(self):
         from web import app as web_app
 
@@ -510,6 +539,47 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
         posts_file = root / "posts.json"
         posts_file.write_text(json.dumps([post]), encoding="utf-8")
         return folder, root, output, posts_file
+
+    def test_processing_post_id_persists_and_only_read_only_verification_updates_ledger(self):
+        from src.publisher import first_comment_queue
+        from src.publisher.meta_reel_poster import MetaReelPoster
+        from web import scheduled_publisher as worker
+
+        folder, root, output, posts_file = self._fixture({
+            "id": "post-pending", "status": "scheduled", "scheduled_time": "2026-01-01 00:00:00",
+            "page_id": "page-1", "token_id": "tok-1", "media_file": "clip.mp4",
+        })
+        poster = mock.Mock()
+        poster.publish_reel.return_value = {"success": False, "processing": True,
+            "meta_post_id": "123", "upload_video_id": "upload-1"}
+        try:
+            with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
+                worker, "OUTPUT_DIR", output
+            ), mock.patch.object(worker, "POSTED_CLIPS_FILE", root / "posted.json"), mock.patch.object(
+                first_comment_queue, "QUEUE_FILE", root / "comments.json"
+            ), mock.patch("src.publisher.meta_preflight.preflight_pages", return_value={
+                "ok": True, "ready": [{"token": "verified-token", "token_id": "tok-1"}]
+            }), mock.patch("src.publisher.page_manager.PageManager.list_pages", return_value=[{"page_id": "page-1"}]), mock.patch.object(
+                MetaReelPoster, "check_processing_reel", side_effect=[{"verified": False},
+                    {"verified": True, "video_id": "123", "fb_url": "https://facebook.test/reel/123"}]
+            ) as check:
+                worker.process_scheduled_posts_once(poster=poster, now=datetime(2026, 1, 1, 1, 0, 0))
+                pending = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+                self.assertEqual(pending["status"], "processing")
+                self.assertEqual(pending["meta_post_id"], "123")
+                self.assertFalse(pending["retryable"])
+                self.assertFalse((root / "posted.json").exists())
+                worker.process_scheduled_posts_once(poster=poster, now=datetime(2026, 1, 1, 1, 2, 0))
+                self.assertEqual(json.loads(posts_file.read_text(encoding="utf-8"))[0]["status"], "processing")
+                worker.process_scheduled_posts_once(poster=poster, now=datetime(2026, 1, 1, 1, 4, 0))
+                confirmed = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+                self.assertEqual(confirmed["status"], "published")
+                self.assertEqual(json.loads((root / "posted.json").read_text()), ["clip.mp4"])
+                self.assertEqual(check.call_count, 2)
+                poster.publish_reel.assert_called_once()
+                poster.post_first_comment.assert_not_called()
+        finally:
+            folder.cleanup()
 
     def test_confirmed_reel_remains_published_when_comment_and_ledger_fail(self):
         from src.publisher import first_comment_queue

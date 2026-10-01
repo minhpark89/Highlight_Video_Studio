@@ -584,7 +584,7 @@ def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: li
         img_mid_html = f"""
         <div style="margin: 24px 0; text-align: center;">
           <img src="{body_imgs[0]}" alt="{title} tactical sequence" style="width: 100%; max-width: 720px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12);">
-          <p style="font-size: 13px; color: #64748b; margin-top: 6px; font-style: italic;">Detailed frame capture showing tactical movement and the pivotal turning point.</p>
+          <p style="font-size: 13px; color: #64748b; margin-top: 6px; font-style: italic;">Reference frame from the original source video; compare with the complete sequence below.</p>
         </div>
         """
     
@@ -593,7 +593,7 @@ def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: li
         img_late_html = f"""
         <div style="margin: 24px 0; text-align: center;">
           <img src="{body_imgs[1]}" alt="{title} dramatic climax" style="width: 100%; max-width: 720px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12);">
-          <p style="font-size: 13px; color: #64748b; margin-top: 6px; font-style: italic;">The decisive climax captured seconds before the conclusion.</p>
+          <p style="font-size: 13px; color: #64748b; margin-top: 6px; font-style: italic;">Another source-video frame for context, not independent evidence of an outcome.</p>
         </div>
         """
 
@@ -622,11 +622,23 @@ Output strictly valid JSON only:
 }}"""
 
     seo_title = f"{title} - Full Uncut Breakdown & Scene Analysis"
-    lead = f"Moments of sheer brilliance and unexpected drama rarely happen in isolation. In '{title}', viewers witnessed a breathtaking sequence of events that pushed athletic instincts and split-second decision-making to the absolute limit."
-    s1_title = "The Decisive Sequence: Unraveling the Crucial Seconds"
-    s1_content = "From the opening moments of this encounter, the tactical momentum shifted with dizzying speed. Observers initially anticipated a routine play, yet minute adjustments in spacing and pressure created an unanticipated opening that changed everything."
-    s2_title = "Aftermath & Tactical Takeaways"
-    s2_content = "Replaying the sequence frame-by-frame reveals subtleties that casual viewers easily missed in real-time. The coordination and the raw technical mastery displayed under extreme duress offer a masterclass in modern execution."
+    # No-LLM copy must not invent a play, reaction, athlete or outcome absent
+    # from source metadata. Provide a substantial viewing guide instead.
+    lead = (f"This page brings together the original full-length video associated with '{title}' and a guide to watching it closely. "
+            "The title identifies the subject, but it cannot establish what happened on screen or how anyone reacted. "
+            "Use the complete recording below to assess the sequence in its own context rather than relying on a short excerpt or an unverified account.")
+    s1_title = "How to examine the original sequence"
+    s1_content = ("Start with the beginning of the source recording and note where the relevant sequence starts. "
+                  "Look at what is visible before the moment highlighted by the title, including the camera angle, the number of people in frame and any on-screen labels. "
+                  "Those details help establish context but should not be treated as proof of a claim that the recording does not show.\n"
+                  "On a second viewing, pause at the start and end of the sequence. Compare those frames with the intervening footage rather than inferring a cause from a single still. "
+                  "If an edit, replay or camera change appears, distinguish it from continuous footage. The original video embedded on this page is the primary reference for these checks; the accompanying images are viewing aids, not independent evidence.")
+    s2_title = "What the footage can and cannot confirm"
+    s2_content = ("A recording can show actions within its frame, but it does not by itself identify motives, establish events outside the frame or verify claims about audience reaction. "
+                  "Check the surrounding minutes for context before drawing a conclusion from the selected moment. If a detail remains unclear, describe it as unclear rather than filling the gap with a confident explanation.\n"
+                  "The images in this article come from the original horizontal source or its source-video thumbnail when available. They offer reference points for returning to the longer recording, not substitutes for it. "
+                  "Watch the full video below, compare the beginning, middle and end of the relevant passage, and decide which observations are directly supported. "
+                  "Without corroborating sources, this article intentionally does not assert a final outcome, a specific tactical explanation or a quote from any participant.")
 
     try:
         if not api_base or not model:
@@ -702,7 +714,7 @@ Output strictly valid JSON only:
           Watch The Complete Full-Length Uncut Video Below
         </h3>
         <p style="font-size: 14px; color: #94a3b8; max-width: 600px; margin: 0 auto 20px auto;">
-          Experience every unedited angle and decisive moment from start to finish. Stream the complete footage below in full high definition.
+          Review the available original recording below and compare the sequence with the surrounding context.
         </p>
         
         {video_player_html}
