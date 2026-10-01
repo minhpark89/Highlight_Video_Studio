@@ -46,7 +46,7 @@ class MetaReelPoster:
             pass
         return {"verified": False}
 
-    def publish_reel(self, page_id, page_token, video_path, description="", first_comment="", schedule_time=None, token_id=None):
+    def publish_reel(self, page_id, page_token, video_path, description="", first_comment="", schedule_time=None, token_id=None, reconcile_seconds=0):
         video_path = Path(video_path)
         if not video_path.exists():
             return {"success": False, "error": f"Video không tồn tại: {video_path}"}
@@ -138,8 +138,23 @@ class MetaReelPoster:
             if not r_finish.ok:
                 err_msg = finish_data.get("error", {}).get("message", str(finish_data))
                 return {"success": False, "outcome_unknown": True, "error": f"Meta finish rejected (HTTP {r_finish.status_code}); reconcile before retry: {err_msg}"}
-            # Meta may return post_id while the Reel is still processing. Keep
-            # it as a reconciliation candidate, not a confirmed Reel object.
+            # A successful Finish response is an acceptance, not proof that the
+            # Reel is public. Verify the upload video object with a read-only GET.
+            if not is_scheduled and reconcile_seconds:
+                deadline = time.time() + max(0, min(int(reconcile_seconds), 30))
+                while True:
+                    check = self.check_processing_reel(video_id, page_token, token_id=track_target)
+                    if check.get("verified"):
+                        comment_result = (self.post_first_comment(video_id, page_token, first_comment.strip(), token_id=track_target)
+                                          if first_comment and first_comment.strip() else None)
+                        return {"success": True, "video_id": check["video_id"], "fb_url": check["fb_url"],
+                                "status": "PUBLISHED", "comment_result": comment_result, "verified_meta": True}
+                    if time.time() >= deadline:
+                        break
+                    time.sleep(min(2, max(0, deadline - time.time())))
+                return {"success": False, "processing": True, "outcome_unknown": True,
+                        "meta_post_id": str(finish_data.get("post_id") or ""), "upload_video_id": str(video_id),
+                        "error": "Meta accepted finish; Reel processing. Verify remotely before marking posted; do not retry."}
             if finish_data.get("post_id") and not finish_data.get("video_id") and not finish_data.get("reel_id"):
                 return {"success": False, "processing": True, "outcome_unknown": True,
                         "meta_post_id": str(finish_data["post_id"]), "upload_video_id": str(video_id),

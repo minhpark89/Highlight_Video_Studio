@@ -29,6 +29,7 @@ OVERDUE_GRACE_SECONDS = 120
 # Workers sharing one loop (Flask dev server vs packaged waitress) must not double-claim.
 _worker_lock = threading.Lock()
 _worker_started = False
+_worker_waiting_for_lease = False
 
 _heartbeat = {
     "running": False,
@@ -78,6 +79,7 @@ def worker_status():
     with _heartbeat_lock:
         snapshot = dict(_heartbeat)
     snapshot["thread_alive"] = bool(_worker_thread and _worker_thread.is_alive())
+    snapshot["waiting_for_lease"] = _worker_waiting_for_lease
     return snapshot
 
 
@@ -126,6 +128,41 @@ def _record_posted_clip(clip_filename):
                 temp.replace(POSTED_CLIPS_FILE)
             finally:
                 temp.unlink(missing_ok=True)
+
+
+def remove_posted_clip_file(clip_filename, posts):
+    """Remove only a confirmed published clip inside this installation output."""
+    raw = str(clip_filename or "").strip()
+    if not raw:
+        return False
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = OUTPUT_DIR / candidate
+    candidate = candidate.resolve()
+    root = OUTPUT_DIR.resolve()
+    if not candidate.is_relative_to(root) or not candidate.is_file():
+        return False
+    def same_clip(post):
+        value = str(post.get("media_file") or post.get("clip_filename") or "").strip()
+        if not value:
+            return False
+        path = Path(value)
+        return (path if path.is_absolute() else OUTPUT_DIR / path).resolve() == candidate
+    users = [post for post in posts if same_clip(post)]
+    if not users or any(post.get("status") != "published" or not post.get("post_fb_id") for post in users):
+        return False
+    if any(post.get("auto_first_comment") and post.get("website_status") in ("pending_generation", "failed") for post in users):
+        return False
+    try:
+        if raw not in json.loads(POSTED_CLIPS_FILE.read_text(encoding="utf-8")):
+            return False
+    except (OSError, ValueError):
+        return False
+    try:
+        candidate.unlink()
+        return True
+    except OSError:
+        return False
 
 
 def _process_scheduled_posts_once(
@@ -355,10 +392,11 @@ def _process_scheduled_posts_once(
                 video_path=str(video_path),
                 description=f"{title}\n\n{content}",
                 first_comment="",
+                reconcile_seconds=12,
             )
             facebook_id = result.get("video_id") or result.get("reel_id")
-            if result.get("processing") and result.get("meta_post_id"):
-                post.update({"status": "processing", "meta_post_id": str(result["meta_post_id"]),
+            if result.get("processing") and (result.get("meta_post_id") or result.get("upload_video_id")):
+                post.update({"status": "processing", "meta_post_id": str(result.get("meta_post_id") or ""),
                              "meta_upload_video_id": str(result.get("upload_video_id") or ""),
                              "meta_reconcile_attempts": 0, "meta_next_check_at": now_ts + 60,
                              "retryable": False, "retry_stage": "meta_processing",
@@ -417,7 +455,13 @@ def _process_scheduled_posts_once(
                 "error": "Publish started but outcome is unknown; reconcile on Facebook before retrying.",
             })
 
-    if claimed_posts or recovered or reconciled or queue_result.get("changed"):
+    removed = 0
+    for published_post in posts:
+        if published_post.get("status") == "published" and not published_post.get("local_video_deleted_at"):
+            if remove_posted_clip_file(published_post.get("media_file") or published_post.get("clip_filename"), posts):
+                published_post["local_video_deleted_at"] = current_dt.strftime("%Y-%m-%d %H:%M:%S")
+                removed += 1
+    if claimed_posts or recovered or reconciled or queue_result.get("changed") or removed:
         save_posts(posts)
     failed = sum(1 for post in claimed_posts if post.get("status") == "failed")
     return {"claimed": len(claimed_posts), "recovered": recovered, "failed": failed, "queue": queue_result, "posts": posts}
@@ -440,10 +484,11 @@ _PROCESS_LEASE = ProcessLease("scheduled-publisher", BASE_DIR / "data", stale_af
 
 def scheduled_publisher_worker_loop():
     """Run publishing cycles continuously; all external calls remain in the cycle helper."""
-    global _worker_started
-    if not _PROCESS_LEASE.acquire():
-        _safe_log("[ScheduledPublisher] Another process already owns the publisher lease; skipping duplicate worker.")
-        return
+    global _worker_started, _worker_waiting_for_lease
+    _worker_waiting_for_lease = True
+    while not _PROCESS_LEASE.acquire():
+        time.sleep(5)
+    _worker_waiting_for_lease = False
     if not _worker_lock.acquire(blocking=False):
         _PROCESS_LEASE.release()
         _safe_log("[ScheduledPublisher] Worker loop already running in this process; skipping duplicate start.")
@@ -496,7 +541,7 @@ _worker_thread = None
 _worker_thread_lock = threading.Lock()
 
 
-def start_worker_thread():
+def start_worker_thread(restart_dead=False):
     """Idempotently start the background worker; safe to call from app and packaged entrypoint.
 
     The guard must survive a thread that exits immediately (a stubbed loop in tests
@@ -506,7 +551,8 @@ def start_worker_thread():
     global _worker_thread
     with _worker_thread_lock:
         if _worker_thread is not None:
-            return _worker_thread
+            if _worker_thread.is_alive() or not restart_dead:
+                return _worker_thread
         thread = threading.Thread(target=scheduled_publisher_worker_loop, daemon=True, name="scheduled-publisher")
         _worker_thread = thread
         thread.start()

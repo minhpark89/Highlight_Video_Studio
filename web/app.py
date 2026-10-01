@@ -1858,6 +1858,8 @@ def api_publish_reel():
                 parsed_schedule_ts = int(schedule_time)
             except Exception:
                 return jsonify({"success": False, "error": "Thời gian lên lịch không hợp lệ; dùng YYYY-MM-DD HH:MM hoặc timestamp.", "code": "invalid_schedule_time"}), 400
+        if parsed_schedule_ts <= int(time.time()) + 5:
+            return jsonify({"success": False, "error": "Thời gian lên lịch phải ở tương lai (ít nhất 5 giây). Hãy chọn lại giờ đăng.", "code": "schedule_time_in_past"}), 400
         preflight = preflight_pages(target_pages, token_vault, page_manager)
         if not preflight.get("ok"):
             return jsonify({"success": False, "error": 'Preflight quyền đăng bài thất bại', **preflight["blocked"]}), 400
@@ -2033,6 +2035,7 @@ def api_publish_reel():
             first_comment=first_comment,
             schedule_time=curr_sched,
             token_id=verified["token_id"],
+            reconcile_seconds=12,
         )
 
         facebook_id = res.get("video_id") or res.get("reel_id")
@@ -2080,7 +2083,12 @@ def api_publish_reel():
                     "token_id": verified["token_id"],
                 })
                 save_posts(immediate_posts)
-        elif res.get("processing") and res.get("meta_post_id"):
+                try:
+                    from web.scheduled_publisher import _record_posted_clip
+                    _record_posted_clip(clip_filename)
+                except Exception:
+                    pass  # A local cleanup failure must never change a confirmed Meta result.
+        elif res.get("processing") and (res.get("meta_post_id") or res.get("upload_video_id")):
             pending_posts = load_posts()
             pending_posts.insert(0, {
                 "id": f"post_{int(time.time())}_{uuid.uuid4().hex[:6]}",
@@ -2088,7 +2096,7 @@ def api_publish_reel():
                 "page_name": p_info.get("page_name", pid), "type": "reel",
                 "media_file": clip_filename, "first_comment": first_comment,
                 "article_url": str(data.get("article_url") or data.get("website_url") or "").strip(),
-                "status": "processing", "meta_post_id": str(res["meta_post_id"]),
+                "status": "processing", "meta_post_id": str(res.get("meta_post_id") or ""),
                 "meta_upload_video_id": str(res.get("upload_video_id") or ""),
                 "meta_reconcile_attempts": 0, "meta_next_check_at": time.time() + 60,
                 "retryable": False, "retry_stage": "meta_processing",
@@ -2099,7 +2107,7 @@ def api_publish_reel():
             save_posts(pending_posts)
             results.append({"page_id": pid, "page_name": p_info.get("page_name"),
                             "success": False, "processing": True, "outcome_unknown": True,
-                            "meta_post_id": str(res["meta_post_id"]), "error": "Meta processing; do not retry."})
+                            "meta_post_id": str(res.get("meta_post_id") or ""), "error": "Meta processing; do not retry."})
         else:
             results.append({
                 "page_id": pid,
@@ -2111,6 +2119,17 @@ def api_publish_reel():
 
     if pages_updated:
         page_manager.save_pages(pages)
+    if not schedule_time and target_page_ids and len(results) == len(target_page_ids) and all(r.get("success") for r in results):
+        try:
+            from web.scheduled_publisher import remove_posted_clip_file
+            current_posts = load_posts()
+            if remove_posted_clip_file(clip_filename, current_posts):
+                for post in current_posts:
+                    if str(post.get("media_file") or "") == clip_filename and post.get("status") == "published":
+                        post["local_video_deleted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                save_posts(current_posts)
+        except Exception:
+            pass  # Never change the Meta result because local cleanup failed.
     if schedule_time and success_count:
         save_posts(scheduled_posts)
         prioritize_scheduled_packages(scheduled_package_ids)
@@ -2118,9 +2137,10 @@ def api_publish_reel():
             start_content_package_worker()
 
     return jsonify({
-        "success": success_count > 0,
+        "success": success_count > 0 or any(result.get("processing") for result in results),
         "total_targets": len(target_page_ids),
         "success_count": success_count,
+        "processing_count": sum(1 for result in results if result.get("processing")),
         "results": results
     })
 
@@ -2251,10 +2271,13 @@ def api_scheduler_status():
     """Expose worker heartbeat so the UI can show stale/overdue warnings."""
     try:
         try:
-            from web.scheduled_publisher import worker_status as _status
+            from web.scheduled_publisher import worker_status as _status, start_worker_thread as _start_worker
         except ImportError:
-            from scheduled_publisher import worker_status as _status
+            from scheduled_publisher import worker_status as _status, start_worker_thread as _start_worker
         status = _status()
+        if not status.get("thread_alive"):
+            _start_worker(restart_dead=True)
+            status = _status()
     except Exception as exc:
         try:
             from web.scheduled_publisher import sanitize_error
@@ -3090,55 +3113,30 @@ def api_batch_assign_token():
 
 @app.route("/api/clips/purge_posted", methods=["POST"])
 def api_purge_posted_clips():
-    """
-    Xóa tất cả các video clip đã được đánh dấu 'is_posted' hoặc đã đưa vào lịch thành công
-    giúp giải phóng dung lượng ổ D và chống đăng trùng video.
-    """
-    posted_file = BASE_DIR / "posted_clips.json"
-    if not posted_file.exists():
-        return jsonify({"success": True, "deleted_count": 0, "freed_mb": 0, "message": "Chưa có clip nào được đánh dấu đã đăng."})
-    
+    """Compatibility endpoint: remove only clips confirmed published."""
     try:
-        posted_data = json.loads(posted_file.read_text(encoding="utf-8"))
-    except Exception:
-        posted_data = []
-
-    if not posted_data:
-        return jsonify({"success": True, "deleted_count": 0, "freed_mb": 0, "message": "Danh sách đã đăng rỗng."})
-
+        from web.scheduled_publisher import remove_posted_clip_file
+    except ImportError:
+        from scheduled_publisher import remove_posted_clip_file
+    posts = load_posts()
     deleted_count = 0
     total_freed_bytes = 0
-    jobs = load_jobs()
-    jobs_updated = False
-
-    for fn in posted_data:
-        file_path = OUTPUT_DIR / fn
-        if file_path.exists():
-            try:
-                total_freed_bytes += file_path.stat().st_size
-                file_path.unlink()
-                deleted_count += 1
-            except Exception as err:
-                print(f"[Purge] Error deleting {fn}: {err}")
-
-        # Đồng bộ xoá khỏi jobs.json
-        for j in jobs:
-            clips = j.get("clips", [])
-            new_clips = [c for c in clips if c.get("filename") != fn]
-            if len(new_clips) != len(clips):
-                j["clips"] = new_clips
-                jobs_updated = True
-
-    if jobs_updated:
-        save_jobs(jobs)
-
+    for clip in sorted({str(p.get("media_file") or p.get("clip_filename") or "").strip() for p in posts}):
+        if not clip:
+            continue
+        candidate = Path(clip)
+        if not candidate.is_absolute():
+            candidate = OUTPUT_DIR / candidate
+        try:
+            size = candidate.stat().st_size if candidate.is_file() else 0
+        except OSError:
+            size = 0
+        if remove_posted_clip_file(clip, posts):
+            deleted_count += 1
+            total_freed_bytes += size
     freed_mb = round(total_freed_bytes / (1024 * 1024), 2)
-    return jsonify({
-        "success": True,
-        "deleted_count": deleted_count,
-        "freed_mb": freed_mb,
-        "message": f"Đã xóa thành công {deleted_count} video đã dùng, giải phóng {freed_mb} MB trên ổ D!"
-    })
+    return jsonify({"success": True, "deleted_count": deleted_count, "freed_mb": freed_mb,
+                    "message": "Da don cac clip da xuat ban va da xac minh."})
 
 @app.route("/api/website/publish_draft", methods=["POST"])
 def api_publish_website_article():

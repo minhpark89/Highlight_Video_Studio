@@ -3,10 +3,37 @@ from __future__ import annotations
 
 import os
 import socket
+import sys
 import time
 from pathlib import Path
 
 APP_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _local_pid_alive(pid: int) -> bool:
+    """Check lease owner without signalling or terminating a Windows process."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return kernel.GetLastError() != 87  # Invalid PID; access denied means alive.
+        try:
+            code = ctypes.c_ulong()
+            if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True  # Unknown is not evidence that it is safe to reclaim.
+            return code.value == 259
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
 
 
 def canonical_data_root(*, allow_repo_fallback=None) -> Path:
@@ -55,7 +82,12 @@ class ProcessLease:
             except FileExistsError:
                 try:
                     age = time.time() - self.path.stat().st_mtime
-                    if age <= self.stale_after:
+                    owner = self.owner_file.read_text(encoding="utf-8") if self.owner_file.exists() else ""
+                    fields = dict(line.split("=", 1) for line in owner.splitlines() if "=" in line)
+                    same_host = fields.get("host") == socket.gethostname()
+                    pid = int(fields.get("pid") or 0)
+                    alive = _local_pid_alive(pid) if same_host else True
+                    if (same_host and alive) or (not same_host and age <= self.stale_after) or (not owner and age <= self.stale_after):
                         return False
                     for child in self.path.iterdir():
                         child.unlink(missing_ok=True)
