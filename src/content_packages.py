@@ -474,6 +474,13 @@ def _apply_to_posts(item):
                     "token": post.get("token"), "token_id": post.get("token_id"),
                     "comment": post["first_comment"],
                 })
+        if (post.get("status") == "failed" and post.get("retry_stage") == "website_content"
+                and post.get("article_url") and post.get("website_status") == "ready"
+                and str(post["article_url"]) in str(post.get("first_comment") or "")):
+            post["status"] = "scheduled"
+            post["retryable"] = False
+            post.pop("schedule_error", None)
+            post["error"] = ""
     save_posts_file(posts_file, posts)
     if comments_to_queue:
         try:
