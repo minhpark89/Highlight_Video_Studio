@@ -52,6 +52,46 @@ class YouTubeEmbedPublishTests(unittest.TestCase):
             article_url, youtube_id=video_id, video_stream_url=""
         )
 
+    def test_invalid_id_falls_back_to_original_youtube_url_before_upload(self):
+        from src.publisher import website_publisher as publisher
+
+        video_id = "dQw4w9WgXcQ"
+        service = mock.Mock()
+        service.publish_article.return_value = {
+            "status": "success", "article_url": "https://example.test/blog/article"
+        }
+        with mock.patch.object(publisher, "get_website_config", return_value=(
+            {"base_url": "https://example.test"}, mock.Mock(exists=mock.Mock(return_value=True))
+        )), mock.patch.object(publisher, "get_clip_metadata", return_value={
+            "video_title": "Fixture Original Story", "youtube_id": "invalid",
+            "youtube_url": f"https://youtu.be/{video_id}",
+        }), mock.patch.object(publisher, "upload_long_video_to_public_stream") as upload, mock.patch.object(
+            publisher, "extract_and_upload_article_assets", return_value=("", [])
+        ), mock.patch.object(publisher, "get_llm_config", return_value={}), mock.patch.object(
+            publisher, "WebsiteArticleService", return_value=service
+        ):
+            publisher.publish_clip_to_website_cms("clip.mp4")
+        upload.assert_not_called()
+        self.assertIn(f"youtube-nocookie.com/embed/{video_id}", service.publish_article.call_args.kwargs["body_html"])
+
+    def test_no_youtube_and_rejected_video_stops_before_article_assets(self):
+        from src.publisher import website_publisher as publisher
+        from core.website_article_service import WebsiteServiceError
+
+        with mock.patch.object(publisher, "get_website_config", return_value=(
+            {"base_url": "https://example.test"}, mock.Mock(exists=mock.Mock(return_value=True))
+        )), mock.patch.object(publisher, "get_clip_metadata", return_value={
+            "video_title": "Fixture Original Story", "youtube_id": "invalid"
+        }), mock.patch.object(publisher, "upload_long_video_to_public_stream", side_effect=WebsiteServiceError(
+            "CMS video upload is not supported; 5 MiB image-only endpoint"
+        )), mock.patch.object(publisher, "extract_and_upload_article_assets") as assets, mock.patch.object(
+            publisher, "WebsiteArticleService"
+        ) as service:
+            with self.assertRaisesRegex(WebsiteServiceError, "5 MiB"):
+                publisher.publish_clip_to_website_cms("clip.mp4")
+        assets.assert_not_called()
+        service.assert_not_called()
+
     @mock.patch("core.website_article_service.requests.get")
     def test_public_article_embed_verification_requires_original_marker(self, get):
         from core.website_article_service import WebsiteArticleService, WebsiteServiceError

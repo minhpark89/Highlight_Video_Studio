@@ -1763,6 +1763,7 @@ def api_delete_group(group_id):
 
 @app.route("/api/publish/reel", methods=["POST"])
 def api_publish_reel():
+    from src.content_packages import scheduled_video_path
     data = request.json or {}
     page_id = data.get("page_id")
     page_ids = data.get("page_ids") or []
@@ -1777,9 +1778,10 @@ def api_publish_reel():
     if not clip_filename:
         return jsonify({"error": "Thiếu tên file clip"}), 400
     
-    video_path = OUTPUT_DIR / clip_filename
-    if not video_path.exists():
-        return jsonify({"error": f"Không tìm thấy file video: {clip_filename}"}), 404
+    try:
+        video_path = scheduled_video_path(OUTPUT_DIR, clip_filename)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        return jsonify({"success": False, "error": str(exc), "code": "invalid_video_path"}), 400
 
     pages = page_manager.list_pages()
     groups = page_manager.list_groups()
@@ -2398,6 +2400,7 @@ def api_retry_post_website(post_id):
 
 @app.route("/api/distribute/batch", methods=["POST"])
 def api_distribute_batch():
+    from src.content_packages import scheduled_video_path
     import re
     from datetime import datetime, timedelta
     data = request.json or {}
@@ -2477,7 +2480,12 @@ def api_distribute_batch():
 
     folder_path = Path(group.get("folder_path") or group.get("folder_binding") or str(OUTPUT_DIR))
     if not folder_path.exists():
-        folder_path = OUTPUT_DIR
+        return jsonify({"success": False, "code": "missing_output_folder",
+                        "error": "Configured schedule clip folder does not exist"}), 400
+    # The worker resolves scheduled filenames under OUTPUT_DIR, never a foreign folder.
+    if not folder_path.resolve().is_relative_to(OUTPUT_DIR.resolve()):
+        return jsonify({"success": False, "code": "foreign_output_folder",
+                        "error": "Schedule clips must be inside this installation's output directory"}), 400
 
     posted_file = BASE_DIR / "posted_clips.json"
     posted_set = set()
@@ -2492,12 +2500,21 @@ def api_distribute_batch():
     available_clips = []
     if clip_filenames:
         for fn in clip_filenames:
-            if fn not in posted_set and fn not in queued_clips and (folder_path / fn).exists():
-                available_clips.append(fn)
+            try:
+                candidate = scheduled_video_path(OUTPUT_DIR, folder_path / fn)
+            except (ValueError, FileNotFoundError, OSError) as exc:
+                return jsonify({"success": False, "code": "invalid_video_path", "error": str(exc)}), 400
+            relative = str(candidate.relative_to(OUTPUT_DIR.resolve()))
+            if relative not in posted_set and relative not in queued_clips:
+                available_clips.append(relative)
     else:
         for p in sorted(folder_path.glob("*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True):
-            if p.name not in posted_set and p.name not in queued_clips:
-                available_clips.append(p.name)
+            try:
+                relative = str(scheduled_video_path(OUTPUT_DIR, p).relative_to(OUTPUT_DIR.resolve()))
+            except (ValueError, FileNotFoundError, OSError):
+                continue
+            if relative not in posted_set and relative not in queued_clips:
+                available_clips.append(relative)
 
     if not available_clips:
         return jsonify({"error": "Không còn video clip mới nào chưa đăng/chưa hẹn để phân bổ! Hãy render thêm hoặc kiểm tra thư mục nguồn."}), 400

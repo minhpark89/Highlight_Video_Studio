@@ -149,6 +149,7 @@ def _process_scheduled_posts_once(
     from src.publisher.token_vault import TokenVault
     from src.publisher.meta_preflight import preflight_pages
     from src.publisher.website_publisher import generate_curiosity_comment_with_llm, publish_clip_to_website_cms
+    from src.content_packages import scheduled_video_path
 
     poster = poster or MetaReelPoster()
     website_publisher = website_publisher or publish_clip_to_website_cms
@@ -232,11 +233,8 @@ def _process_scheduled_posts_once(
     for post in posts:
         if post.get("status") != "scheduled":
             continue
-        # Content package generation is asynchronous. Hold due posts while the
-        # required website/comment package is queued or running, then publish on
-        # a later cycle once the package has persisted its results.
-        if post.get("auto_first_comment") and post.get("content_package_status") in ("queued", "running"):
-            continue
+        # Content/CMS work is independent of Facebook. A delayed package must
+        # never hold a due Meta post indefinitely; publish without its comment.
         scheduled_time = post.get("scheduled_time")
         if not scheduled_time:
             continue
@@ -260,7 +258,12 @@ def _process_scheduled_posts_once(
         title = post.get("title", "")
         content = post.get("content", "")
         first_comment = post.get("first_comment", "")
-        video_path = OUTPUT_DIR / clip_filename if clip_filename else None
+        video_error = "Video file unavailable at publish time"
+        try:
+            video_path = scheduled_video_path(OUTPUT_DIR, clip_filename)
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            video_path = None
+            video_error = sanitize_error(exc)
 
         # Re-check the immutable Page/token binding at due time. The queue may
         # survive a token refresh/restart; never publish with a stale or generic
@@ -304,7 +307,7 @@ def _process_scheduled_posts_once(
         if not video_path or not video_path.exists():
             post.update({
                 "status": "failed",
-                "error": f"Không tìm thấy file video: {clip_filename}",
+                "error": video_error,
                 "retryable": True,
                 "retry_stage": "local_video",
             })
@@ -315,6 +318,8 @@ def _process_scheduled_posts_once(
         # a duplicate CMS article. A prior CMS failure does not cancel Facebook.
         if first_comment:
             post["first_comment_status"] = "ready"
+        elif post.get("auto_first_comment") and post.get("content_package_status") in ("queued", "running"):
+            post["first_comment_status"] = "pending_generation"
         else:
             post["first_comment_status"] = post.get("first_comment_status") or "not_configured"
 

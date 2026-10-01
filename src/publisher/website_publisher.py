@@ -483,9 +483,8 @@ Exact required visual elements matching viral clickbait standard:
 
 def upload_long_video_to_public_stream(meta: dict, clip_filename: str) -> str:
     """
-    TẬP TRUNG 100% PHÁT QUA DIRECT HTML5 VIDEO PLAYER (BẢN FULL DÀI):
-    Upload file MP4 gốc dài (downloads/*.mp4) lên VPS public hosting Caddy (https://studio.shopkitai.com/videos/...).
-    Hỗ trợ phát trực tiếp trên iPhone, Android, PC mượt mà 100%, có Range requests, tua được!
+    Upload a local original only through the configured video transport.
+    The CMS image presign endpoint must never receive an MP4.
     """
     long_path = meta.get("long_video_path")
     target_video_file = None
@@ -510,8 +509,6 @@ def upload_long_video_to_public_stream(meta: dict, clip_filename: str) -> str:
         raise WebsiteServiceError("Chưa cấu hình Website CMS")
 
     svc = WebsiteArticleService(str(cfg_file))
-    # CMS cấp presigned HTTPS URL và public URL. Cách này chạy trên mọi máy,
-    # không phụ thuộc SSH key hoặc username Windows của máy build.
     public_url = svc.upload_video(str(target_video_file))
     svc.verify_public_media(public_url, require_range=True)
     return public_url
@@ -828,7 +825,7 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
 
     # 2. Ưu tiên nhúng YouTube gốc để không lưu MP4 trên server. Chỉ upload
     # video dài làm fallback cho các job cũ không có nguồn YouTube hợp lệ.
-    youtube_id = extract_youtube_video_id(meta.get("youtube_id") or meta.get("youtube_url"))
+    youtube_id = extract_youtube_video_id(meta.get("youtube_id")) or extract_youtube_video_id(meta.get("youtube_url"))
     video_stream_url = ""
     if not youtube_id:
         video_stream_url = upload_long_video_to_public_stream(meta, clip_filename)

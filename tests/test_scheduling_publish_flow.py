@@ -152,6 +152,56 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         self.assertEqual(response.get_json()["code"], "invalid_schedule_time")
         publish.assert_not_called()
 
+    def test_schedule_rejects_foreign_absolute_video_even_if_output_has_same_basename(self):
+        from web import app as web_app
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "output"
+            output.mkdir()
+            (output / "clip.mp4").write_bytes(b"unrelated")
+            foreign = root / "elsewhere" / "clip.mp4"
+            foreign.parent.mkdir()
+            foreign.write_bytes(b"requested")
+            with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
+                web_app.reel_poster, "publish_reel"
+            ) as publish:
+                response = web_app.app.test_client().post("/api/publish/reel", json={
+                    "page_id": "page-1", "filename": str(foreign), "schedule_time": "2099-01-02 03:04",
+                })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["code"], "invalid_video_path")
+        publish.assert_not_called()
+
+    def test_batch_rejects_foreign_folder_before_scheduling(self):
+        from web import app as web_app
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "output"
+            foreign = root / "foreign"
+            output.mkdir()
+            foreign.mkdir()
+            (foreign / "clip.mp4").write_bytes(b"foreign")
+            (output / "clip.mp4").write_bytes(b"unrelated")
+            group = {"id": "group-1", "name": "Group", "page_ids": ["page-1"],
+                     "folder_binding": str(foreign), "schedule_config": {"times": ["23:59"]}}
+            with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
+                web_app, "BASE_DIR", root
+            ), mock.patch.object(web_app.page_manager, "list_groups", return_value=[group]), mock.patch.object(
+                web_app.page_manager, "list_pages", return_value=[self._verified_page()]
+            ), mock.patch.object(web_app.token_vault, "get_token_by_id", return_value=self._credential_entry()), mock.patch.object(
+                web_app, "save_posts"
+            ) as save:
+                response = web_app.app.test_client().post("/api/distribute/batch", json={
+                    "group_id": "group-1", "posts_per_page": 1,
+                })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["code"], "foreign_output_folder")
+        save.assert_not_called()
+
     def test_schedule_payload_persists_comment_website_and_never_calls_meta(self):
         from web import app as web_app
 
@@ -528,6 +578,24 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         self.assertIn("https://example.test/article", item["result"]["first_comment"])
         self.assertEqual(item["website_status"], "ready")
 
+    def test_package_failure_keeps_cms_and_content_errors_distinct_after_meta_success(self):
+        from src import content_packages
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            posts_file = root / "posts.json"
+            posts_file.write_text(json.dumps([{"id": "published-1", "status": "published",
+                "post_fb_id": "meta-1", "website_status": "failed", "website_error": "CMS unavailable"}]), encoding="utf-8")
+            with mock.patch.object(content_packages, "DATA_ROOT", root):
+                content_packages._apply_failure_to_posts({"id": "package-1", "post_ids": ["published-1"],
+                    "status": "failed", "website_status": "failed", "website_error": "CMS unavailable",
+                    "error": "LLM generation failed"})
+            saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+        self.assertEqual(saved["status"], "published")
+        self.assertEqual(saved["post_fb_id"], "meta-1")
+        self.assertEqual(saved["website_error"], "CMS unavailable")
+        self.assertEqual(saved["content_package_error"], "LLM generation failed")
+
 
 class SchedulerWorkerHardeningTests(unittest.TestCase):
     def _fixture(self, post):
@@ -611,11 +679,12 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
         self.assertIn("ledger unavailable", saved["ledger_error"])
         poster.publish_reel.assert_called_once()
 
-    def test_worker_holds_due_post_while_content_package_is_running(self):
+    def test_worker_does_not_hold_due_post_while_content_package_is_running(self):
         from src.publisher import first_comment_queue
         from web import scheduled_publisher as worker
 
         poster = mock.Mock()
+        poster.publish_reel.return_value = {"success": True, "video_id": "fixture-video"}
         folder, root, output, posts_file = self._fixture({
             "id": "post-package-running", "status": "scheduled",
             "scheduled_time": "2026-01-01 00:00:00", "page_id": "page-1",
@@ -634,8 +703,82 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
                 saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
         finally:
             folder.cleanup()
-        self.assertEqual(result["claimed"], 0)
-        self.assertEqual(saved["status"], "scheduled")
+        self.assertEqual(result["claimed"], 1)
+        self.assertEqual(saved["status"], "published")
+        self.assertEqual(saved["content_package_status"], "running")
+        poster.publish_reel.assert_called_once()
+        poster.post_first_comment.assert_not_called()
+
+    def test_due_post_missing_video_fails_before_meta_and_never_retries(self):
+        from src.publisher import first_comment_queue
+        from web import scheduled_publisher as worker
+
+        folder, root, output, posts_file = self._fixture({
+            "id": "missing-video", "status": "scheduled", "scheduled_time": "2026-01-01 00:00:00",
+            "page_id": "page-1", "token": "fixture-token", "media_file": "gone.mp4",
+            "auto_first_comment": True, "content_package_status": "queued",
+        })
+        poster = mock.Mock()
+        try:
+            with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
+                worker, "OUTPUT_DIR", output
+            ), mock.patch.object(first_comment_queue, "QUEUE_FILE", root / "comments.json"):
+                worker.process_scheduled_posts_once(poster=poster, now=datetime(2026, 1, 1, 1))
+                worker.process_scheduled_posts_once(poster=poster, now=datetime(2026, 1, 1, 2))
+                saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+        finally:
+            folder.cleanup()
+        self.assertEqual(saved["status"], "failed")
+        self.assertEqual(saved["retry_stage"], "local_video")
+        self.assertEqual(saved["content_package_status"], "queued")
+        poster.publish_reel.assert_not_called()
+
+    def test_due_post_foreign_absolute_path_never_posts_same_named_output_clip(self):
+        from src.publisher import first_comment_queue
+        from web import scheduled_publisher as worker
+
+        folder, root, output, posts_file = self._fixture({
+            "id": "foreign-video", "status": "scheduled", "scheduled_time": "2026-01-01 00:00:00",
+            "page_id": "page-1", "token": "fixture-token", "media_file": str(Path(tempfile.gettempdir()) / "clip.mp4"),
+        })
+        poster = mock.Mock()
+        try:
+            with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
+                worker, "OUTPUT_DIR", output
+            ), mock.patch.object(first_comment_queue, "QUEUE_FILE", root / "comments.json"):
+                worker.process_scheduled_posts_once(poster=poster, now=datetime(2026, 1, 1, 1))
+                saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+        finally:
+            folder.cleanup()
+        self.assertEqual(saved["status"], "failed")
+        self.assertEqual(saved["retry_stage"], "local_video")
+        poster.publish_reel.assert_not_called()
+
+    def test_due_post_with_backlog_still_requires_exact_page_preflight(self):
+        from src.publisher import first_comment_queue
+        from web import scheduled_publisher as worker
+
+        folder, root, output, posts_file = self._fixture({
+            "id": "blocked-binding", "status": "scheduled", "scheduled_time": "2026-01-01 00:00:00",
+            "page_id": "page-1", "token_id": "wrong-binding", "media_file": "clip.mp4",
+            "auto_first_comment": True, "content_package_status": "running",
+        })
+        poster = mock.Mock()
+        try:
+            with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
+                worker, "OUTPUT_DIR", output
+            ), mock.patch.object(first_comment_queue, "QUEUE_FILE", root / "comments.json"), mock.patch(
+                "src.publisher.page_manager.PageManager.list_pages", return_value=[{"page_id": "page-1"}]
+            ), mock.patch("src.publisher.meta_preflight.preflight_pages", return_value={
+                "ok": False, "blocked": {"code": "wrong_token", "stage": "mapping", "action": "Sync Page"},
+            }):
+                worker.process_scheduled_posts_once(poster=poster, now=datetime(2026, 1, 1, 1))
+                saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+        finally:
+            folder.cleanup()
+        self.assertEqual(saved["status"], "failed")
+        self.assertEqual(saved["retry_stage"], "meta_preflight")
+        self.assertEqual(saved["content_package_status"], "running")
         poster.publish_reel.assert_not_called()
 
     def test_overdue_six_minutes_post_is_claimed_not_left_scheduled(self):

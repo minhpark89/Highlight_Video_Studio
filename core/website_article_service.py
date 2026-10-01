@@ -22,6 +22,8 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 
+CMS_IMAGE_LIMIT_BYTES = 5 * 1024 * 1024
+
 
 class WebsiteServiceError(RuntimeError):
     """Raised when CMS authentication, upload, or publishing is not verified."""
@@ -161,13 +163,21 @@ class WebsiteArticleService:
         }
 
     def _presign_and_upload(self, session: _BackendSession, file_path: str) -> str:
-        self._ensure_session(session)
         path = Path(file_path)
         if not path.is_file():
             raise WebsiteServiceError(f"Không tìm thấy file cần upload: {path}")
 
         content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         is_video = content_type.startswith("video/")
+        if is_video:
+            raise WebsiteServiceError(
+                "CMS /uploads/presigned-image-url is image-only; video upload is not verified. "
+                "Use the original YouTube embed or configured, verified SCP video transport. "
+                "The CMS image limit is 5 MiB; do not send MP4 to the image endpoint."
+            )
+        if path.stat().st_size > CMS_IMAGE_LIMIT_BYTES:
+            raise WebsiteServiceError("CMS image exceeds the 5 MiB upload limit; choose a smaller image.")
+        self._ensure_session(session)
         generic_endpoint = f"{self.cfg.api_base_url}/uploads/presigned-image-url"
         generic_request = {
             "fileName": path.name,
@@ -281,11 +291,9 @@ class WebsiteArticleService:
     def test_video_uploader(self) -> Dict[str, Any]:
         settings = self._video_settings()
         if settings["method"] == "cms":
-            return {
-                "success": True,
-                "method": "cms",
-                "message": "CMS upload đã chọn; quyền upload sẽ được xác minh khi gửi file.",
-            }
+            raise WebsiteServiceError(
+                "CMS image endpoint does not support video upload; use original YouTube embed or configured SCP."
+            )
         if settings["method"] != "scp":
             raise WebsiteServiceError("Video upload method chỉ hỗ trợ cms hoặc scp")
         settings = self._validate_scp_settings()
@@ -314,7 +322,16 @@ class WebsiteArticleService:
             raise WebsiteServiceError(f"Không tìm thấy video cần upload: {path}")
         settings = self._video_settings()
         if settings["method"] == "cms":
-            return self.upload_public_media(str(path))
+            if path.stat().st_size > CMS_IMAGE_LIMIT_BYTES:
+                raise WebsiteServiceError(
+                    "Video exceeds the CMS 5 MiB image upload limit. "
+                    "Do not send MP4 to /uploads/presigned-image-url; use the original "
+                    "YouTube embed or a configured, verified SCP video transport."
+                )
+            raise WebsiteServiceError(
+                "CMS video upload is not supported: /uploads/presigned-image-url is image-only "
+                "and limited to 5 MiB. Use the original YouTube embed or configured, verified SCP."
+            )
         if settings["method"] != "scp":
             raise WebsiteServiceError("Video upload method chỉ hỗ trợ cms hoặc scp")
 

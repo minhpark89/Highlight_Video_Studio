@@ -37,47 +37,41 @@ class ReleaseGuardTests(unittest.TestCase):
         }), encoding="utf-8")
         return WebsiteArticleService(str(config))
 
-    def test_cms_video_upload_uses_generic_media_uploader_by_default(self):
+    def test_cms_video_upload_fails_before_auth_or_network_even_under_limit(self):
         with tempfile.TemporaryDirectory() as folder:
             service = self.make_service(folder, {"method": "cms"})
             video = Path(folder) / "video.mp4"
             video.write_bytes(b"video")
-            generic_upload = FakeResponse(200, {"data": {
-                "upload": {"url": "https://storage.test/upload", "method": "PUT", "headers": {}},
-                "fileUrl": "https://cdn.test/video.mp4",
-            }})
             fake_session = mock.Mock()
             fake_session.authenticated = True
-            fake_session.http.post.return_value = generic_upload
-            uploaded = FakeResponse(200)
             with mock.patch("core.website_article_service._BackendSession", return_value=fake_session), mock.patch(
-                "core.website_article_service.requests.request", return_value=uploaded
-            ) as request, mock.patch.object(service, "verify_public_media") as verify:
-                public_url = service.upload_video(str(video))
-            fake_session.http.post.assert_called_once()
-            self.assertEqual(
-                fake_session.http.post.call_args.args[0],
-                "https://example.test/admin/api/v1/uploads/presigned-image-url",
-            )
-            self.assertNotIn("social-planner", fake_session.http.post.call_args.args[0])
-            self.assertEqual(public_url, "https://cdn.test/video.mp4")
-            request.assert_called_once()
-            verify.assert_called_once_with(public_url, require_range=True)
+                "core.website_article_service.requests.request"
+            ) as request:
+                with self.assertRaisesRegex(WebsiteServiceError, "image-only.*5 MiB"):
+                    service.upload_video(str(video))
+                with self.assertRaisesRegex(WebsiteServiceError, "image-only"):
+                    service.upload_public_media(str(video))
+                with self.assertRaisesRegex(WebsiteServiceError, "image endpoint"):
+                    service.test_video_uploader()
+            fake_session.http.post.assert_not_called()
+            request.assert_not_called()
 
-    def test_cms_video_upload_does_not_hide_generic_uploader_failure(self):
+    def test_cms_oversized_video_and_image_fail_without_presign(self):
         with tempfile.TemporaryDirectory() as folder:
             service = self.make_service(folder, {"method": "cms"})
             video = Path(folder) / "video.mp4"
-            video.write_bytes(b"video")
+            image = Path(folder) / "image.jpg"
+            for path in (video, image):
+                with path.open("wb") as handle:
+                    handle.truncate(5 * 1024 * 1024 + 1)
             fake_session = mock.Mock()
             fake_session.authenticated = True
-            fake_session.http.post.return_value = FakeResponse(
-                403, {"message": "generic upload forbidden"}
-            )
             with mock.patch("core.website_article_service._BackendSession", return_value=fake_session):
-                with self.assertRaisesRegex(WebsiteServiceError, "generic upload forbidden"):
+                with self.assertRaisesRegex(WebsiteServiceError, "exceeds the CMS 5 MiB image upload limit"):
                     service.upload_video(str(video))
-            fake_session.http.post.assert_called_once()
+                with self.assertRaisesRegex(WebsiteServiceError, "5 MiB"):
+                    service.upload_public_media(str(image))
+            fake_session.http.post.assert_not_called()
 
     def test_scp_failure_never_returns_fabricated_url(self):
         with tempfile.TemporaryDirectory() as folder:

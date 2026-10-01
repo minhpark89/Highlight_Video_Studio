@@ -232,6 +232,27 @@ def _clip_keys(value):
     return {raw.casefold(), path.name.casefold()}
 
 
+def scheduled_video_path(output_dir, clip_filename):
+    """Resolve scheduled media only inside this installation's output directory.
+
+    Reject foreign absolute paths and symlinks that escape output; accepting a
+    basename for a foreign file could silently publish an unrelated local clip.
+    """
+    raw = str(clip_filename or "").strip()
+    if not raw:
+        raise ValueError("Video path is empty")
+    root = Path(output_dir).resolve()
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    candidate = candidate.resolve()
+    if not candidate.is_relative_to(root):
+        raise ValueError("Video must be inside this installation's output directory")
+    if not candidate.is_file():
+        raise FileNotFoundError(f"Video file not found: {raw}")
+    return candidate
+
+
 def _same_clip(entry, clip_filename, source_job_id="", source_clip_id=""):
     for field, requested in (("source_job_id", source_job_id), ("source_clip_id", source_clip_id)):
         existing = str(entry.get(field) or "").strip()
@@ -367,7 +388,10 @@ def _apply_to_posts(item):
         post["website_error"] = item.get("website_error", "")
         if result.get("first_comment"):
             post["first_comment"] = result["first_comment"]
-            post["first_comment_status"] = "ready"
+            # A package may finish after Facebook published without a comment.
+            # Do not suggest that an already-published post still has a pending
+            # comment dispatch or trigger an implicit second publishing attempt.
+            post["first_comment_status"] = "ready_after_publish" if post.get("status") in ("published", "processing") else "ready"
             post["first_comment_error"] = ""
     save_posts_file(posts_file, posts)
 
@@ -387,8 +411,9 @@ def _apply_failure_to_posts(item):
         post["content_package_status"] = item["status"]
         if item.get("article_url"):
             post["article_url"] = item["article_url"]
-        post["website_status"] = item.get("website_status") or "failed"
-        post["website_error"] = item.get("website_error") or item.get("error", "")
+        post["website_status"] = item.get("website_status") or post.get("website_status") or "not_configured"
+        post["website_error"] = item.get("website_error", "")
+        post["content_package_error"] = item.get("error", "")
         if not post.get("first_comment"):
             post["first_comment_status"] = "generation_failed"
             post["first_comment_error"] = item.get("error", "")
