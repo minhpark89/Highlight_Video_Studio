@@ -556,6 +556,7 @@ def retry_package_component(package_id, component, mode=None):
     )
     if component == "first_comment" and snapshot["article_url"] not in str(result.get(component) or ""):
         result[component] = fallback_package(snapshot.get("title", ""), snapshot.get("summary", ""), snapshot["article_url"])[component]
+        result["source"] = "template_fallback"
     with _LOCK:
         items = _read(QUEUE_FILE, [])
         item = next((entry for entry in items if entry.get("id") == package_id), None)
@@ -563,7 +564,10 @@ def retry_package_component(package_id, component, mode=None):
             return None
         merged = item.get("result") if isinstance(item.get("result"), dict) else {}
         merged[component] = result.get(component)
-        merged["source"] = result.get("source", "unknown")
+        if component == "first_comment":
+            merged["first_comment_source"] = "llm" if result.get("source") == "llm" else "template_fallback"
+        else:
+            merged["source"] = result.get("source", "unknown")
         # A title/comment-only retry cannot clear an unrelated CMS failure.
         website_failed = item.get("website_status") == "failed"
         item.update({"result": merged, "status": "failed" if website_failed else "ready",
