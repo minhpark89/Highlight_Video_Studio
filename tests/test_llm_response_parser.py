@@ -124,6 +124,26 @@ class ResponseParserTests(unittest.TestCase):
         self.assertEqual(len(calls[1]['messages']), 2)
         success.assert_called_once()
 
+    def test_content_package_comment_requires_exact_article_url(self):
+        from src import content_packages as cp
+        cfg = {"configured_base": "http://example.test/v1", "api_key": "fixture-private", "model": "fixture"}
+        article_url = "https://example.test/article/one"
+        calls = []
+        def post(url, **kwargs):
+            calls.append(kwargs["json"])
+            comment = "Generic comment" if len(calls) == 1 else f"Specific video detail: {article_url}"
+            return FakeResponse(json.dumps({"choices": [{"message": {"content": json.dumps({**PACKAGE, "first_comment": comment})}}]}))
+        with mock.patch('src.content_builder.get_llm_candidates', return_value=cfg), mock.patch(
+            'src.content_builder._get_task_model', return_value='fixture'
+        ), mock.patch.object(cp, 'circuit_status', return_value={"open": False}), mock.patch.object(
+            cp.requests, 'post', side_effect=post
+        ), mock.patch.object(cp, 'record_llm_success'):
+            result = cp.generate_package('Fixture', mode='llm', article_url=article_url)
+        self.assertEqual(result['first_comment_source'], 'llm')
+        self.assertIn(article_url, result['first_comment'])
+        self.assertIn(article_url, calls[0]['messages'][0]['content'])
+        self.assertEqual(len(calls), 2)
+
     def test_http_and_quota_are_not_retried_or_misreported_as_llm(self):
         from src import content_packages as cp
         cfg = {"configured_base": "http://example.test/v1", "api_key": "fixture-private", "model": "fixture"}

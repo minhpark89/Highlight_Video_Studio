@@ -634,6 +634,21 @@ class BackendApiTests(unittest.TestCase):
         listed = self.client.get("/api/tokens").get_json()["tokens"]
         self.assertEqual(listed[0]["pages_count"], 1)
 
+    def test_page_list_reports_scheduled_and_published_without_stale_group(self):
+        self.pages.save_pages([{"page_id": "PAGE_A", "group_ids": ["deleted"], "group_name": "BM 1", "total_posted": 0}])
+        self.pages.save_groups([{"id": "group-live", "name": "Live Group", "page_ids": ["PAGE_A"]}])
+        posts = [
+            {"page_id": "PAGE_A", "status": "published"},
+            {"page_id": "PAGE_A", "status": "scheduled"},
+        ]
+        with mock.patch.object(self.appmod, "load_posts", return_value=posts):
+            response = self.client.get("/api/pages")
+        page = response.get_json()["pages"][0]
+        self.assertEqual(page["published_count"], 1)
+        self.assertEqual(page["scheduled_count"], 1)
+        self.assertEqual(page["group_name"], "Live Group")
+        self.assertEqual(page["group_ids"], ["group-live"])
+
     def test_group_allocation_assigns_only_verified_one_page_one_token(self):
         token = {"id": "tok_1", "name": "T1", "token": "EAAB_one", "status": "ACTIVE"}
         self.vault._save([token])
