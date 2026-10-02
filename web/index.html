@@ -3465,10 +3465,11 @@
       cardsContainer.innerHTML = pageItems.map(p => {
         const pName = p.page_name || p.name || 'Fanpage Facebook';
         const pId = p.page_id || p.id || 'N/A';
-        const totalPosts = p.total_posted || 0;
+        const totalPosts = Number(p.published_count || p.total_posted || 0);
+        const scheduledPosts = Number(p.scheduled_count || 0) + Number(p.publishing_count || 0);
         const hasToken = !!(p.page_token || p.has_token);
         const tokenName = p.token_name || 'System User';
-        const grpName = p.group_name || 'BM 1 (Dàn 100 Page)';
+        const grpName = p.group_name || 'Chưa nhóm';
         const avatarUrl = p.avatar || `https://graph.facebook.com/${pId}/picture?type=normal`;
 
         // Avatar tròn: load ảnh thật từ Facebook CDN, nếu lỗi mới fallback sang chữ viết tắt
@@ -3507,7 +3508,7 @@
                 <i class="bi bi-key-fill"></i> ${tokenName}
               </span>
               <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); font-size: 11px; padding: 5px 9px;">
-                <i class="bi bi-film"></i> ${totalPosts} bài đăng
+                <i class="bi bi-film"></i> ${totalPosts} đã đăng${scheduledPosts ? ` · ${scheduledPosts} đang chờ` : ''}
               </span>
             </div>
 
@@ -3535,10 +3536,11 @@
       tbody.innerHTML = pageItems.map(p => {
         const pName = p.page_name || p.name || 'Fanpage Facebook';
         const pId = p.page_id || p.id || 'N/A';
-        const totalPosts = p.total_posted || 0;
+        const totalPosts = Number(p.published_count || p.total_posted || 0);
+        const scheduledPosts = Number(p.scheduled_count || 0) + Number(p.publishing_count || 0);
         const hasToken = !!(p.page_token || p.has_token);
         const tokenName = p.token_name || 'System User';
-        const grpName = p.group_name || 'Mặc định';
+        const grpName = p.group_name || 'Chưa nhóm';
 
         return `
           <tr>
@@ -3546,7 +3548,7 @@
             <td><code>${pId}</code></td>
             <td><span class="badge" style="background:#1e293b; color:#f59e0b;">${tokenName}</span></td>
             <td><span class="badge" style="background:#1e293b; color:#c084fc;">${grpName}</span></td>
-            <td><strong>${totalPosts}</strong> bài</td>
+            <td><strong>${totalPosts}</strong> đã đăng${scheduledPosts ? ` · ${scheduledPosts} chờ` : ''}</td>
             <td>${hasToken ? '<span class="badge badge-done">Hoạt động</span>' : '<span class="badge badge-error">Thiếu token</span>'}</td>
             <td style="text-align: right;">
               <a href="https://facebook.com/${pId}" target="_blank" class="btn btn-secondary btn-sm" style="padding: 2px 6px; font-size: 11px;"><i class="bi bi-box-arrow-up-right"></i></a>
@@ -3627,7 +3629,7 @@
                 </div>
               </div>
               <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
-                <span class="badge" style="background: rgba(192, 132, 252, 0.15); color: #c084fc; font-size: 10px;">${p.group_name || 'BM 1'}</span>
+                <span class="badge" style="background: rgba(192, 132, 252, 0.15); color: #c084fc; font-size: 10px;">${p.group_name || 'Chưa nhóm'}</span>
                 ${hasToken ? '<span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #34d399; font-size: 10px;">Vĩnh viễn</span>' : '<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: #f87171; font-size: 10px;">Thiếu token</span>'}
               </div>
             </label>
@@ -3966,6 +3968,7 @@
       const res = await fetch('/api/token-groups');
       const data = await res.json();
       const groups = data.groups || [];
+      cachedTokenGroups = groups;
 
       // Calculate total tokens
       const resTok = await fetch('/api/tokens');
@@ -3984,11 +3987,14 @@
         const count = (g.token_ids || []).length;
         const isActive = currentSelectedTokenGroupId === g.id;
         pillsHtml += `
-          <button class="btn btn-sm ${isActive ? 'btn-primary' : 'btn-outline'}"
-                  onclick="filterTokensByGroup('${g.id}')"
-                  style="border-radius: 20px; padding: 4px 14px; font-weight: 700; ${isActive ? 'background: linear-gradient(135deg, #ec4899, #8b5cf6); border: none;' : ''}">
-            <i class="bi bi-collection"></i> ${g.name} (${count})
-          </button>
+          <span style="display:inline-flex;align-items:center;border-radius:20px;border:1px solid #334155;overflow:hidden;">
+            <button class="btn btn-sm ${isActive ? 'btn-primary' : 'btn-outline'}" data-group-id="${escapeHtml(g.id)}"
+                    onclick="filterTokensByGroup(this.dataset.groupId)"
+                    style="border-radius:0; padding:4px 10px; font-weight:700; ${isActive ? 'background: linear-gradient(135deg, #ec4899, #8b5cf6); border: none;' : ''}">
+              <i class="bi bi-collection"></i> ${escapeHtml(g.name)} (${count})
+            </button>
+            <button class="btn btn-sm btn-outline" data-group-id="${escapeHtml(g.id)}" onclick="deleteTokenGroupById(this.dataset.groupId)" aria-label="Xóa nhóm Token ${escapeHtml(g.name)}" title="Xóa nhóm Token" style="border:0;border-radius:0;color:#f87171;padding:4px 8px;"><i class="bi bi-trash"></i></button>
+          </span>
         `;
       });
 
@@ -4030,6 +4036,11 @@
       await Promise.all([loadTokensOnly(), loadTokensAndPages()]);
     } catch (err) { alert('Allocation request failed: ' + err.message); }
     finally { if (button) { button.disabled = false; button.innerHTML = oldLabel; } }
+  }
+
+  function deleteTokenGroupById(groupId) {
+    const group = cachedTokenGroups.find(g => String(g.id) === String(groupId));
+    if (group) deleteTokenGroup(group.id, group.name);
   }
 
   async function loadTokensOnly() {
@@ -5416,9 +5427,10 @@
   async function executeBatchSchedule() {
     const groupId = document.getElementById('sched-conf-group-id').value;
     const postsPerPage = parseInt(document.getElementById('sched-conf-posts-per-page').value) || 1;
-
-    closeScheduleConfigModal();
-
+    const submitButton = document.querySelector('#modal-schedule-config button[onclick="executeBatchSchedule()"]');
+    const oldButtonLabel = submitButton ? submitButton.innerHTML : '';
+    if (submitButton) { submitButton.disabled = true; submitButton.innerHTML = '<i class="bi bi-arrow-repeat spin"></i> Đang quét clip, xác thực Page và tạo lịch...'; }
+    showToast('Đang lên lịch cho nhóm Page — hệ thống đang xác thực mapping và chuẩn bị Content LLM...');
     const useLlm = document.getElementById('sched-conf-use-llm') ? document.getElementById('sched-conf-use-llm').checked : true;
 
     try {
@@ -5435,7 +5447,10 @@
       });
       const data = await res.json();
       if (data.success) {
-        alert(`Đã lên lịch thành công ${data.scheduled_count} bài viết!\n- Mỗi page: ${postsPerPage} bài\n- 100% First Comment Tiếng Anh\n- Kiểm tra chi tiết tại tab Quản lý Bài Đăng.`);
+        const pending = data.content_package_pending || 0;
+        const fallback = data.content_package_fallback || 0;
+        closeScheduleConfigModal();
+        alert(`Đã lên lịch thành công ${data.scheduled_count} bài viết!\n- Mỗi page: ${postsPerPage} bài\n- Content LLM: ${data.content_package_llm || 0} bài\n- Đang chờ xử lý: ${pending} bài${fallback ? `\n- LLM fallback: ${fallback} bài (xem Content Studio để thử lại)` : ''}\n- Trạng thái chi tiết ở Quản lý Bài Đăng và Content Studio.`);
         switchTab('pane-posts');
         loadPostsTable();
       } else {
@@ -5443,6 +5458,8 @@
       }
     } catch (e) {
       alert('Lỗi kết nối máy chủ: ' + e.message);
+    } finally {
+      if (submitButton) { submitButton.disabled = false; submitButton.innerHTML = oldButtonLabel; }
     }
   }
 
@@ -5774,6 +5791,8 @@
         let commentSnippet = '';
         if (safeComment) {
           commentSnippet = safeComment.length > 50 ? safeComment.substring(0, 50) + '...' : safeComment;
+          const commentOrigin = p.first_comment_source || (p.content_package_source === 'llm' ? 'Không rõ nguồn — kiểm tra Content Studio' : (String(p.content_package_source || '').startsWith('no_llm') ? 'Comment mẫu fallback' : 'Chưa rõ nguồn'));
+          commentSnippet += `<div style="color:${commentOrigin === 'llm' ? '#4ade80' : '#fbbf24'};font-size:10px;">${commentOrigin === 'llm' ? 'First Comment do LLM tạo' : escapeHtml(commentOrigin === 'template_fallback' ? 'First Comment mẫu fallback' : commentOrigin)}</div>`;
           if (p.status === 'published' && p.first_comment_status === 'posted') {
             commentSnippet += '<div style="color:#22c55e;font-size:10px;">First Comment đã đăng</div>';
           } else if (p.status === 'published' && ['pending', 'pending_retry'].includes(p.first_comment_status)) {
@@ -5802,6 +5821,9 @@
             <td style="padding: 12px 14px; color: #64748b; font-weight: 600;">${index + 1}</td>
             <td style="padding: 12px 14px;">
               <div style="font-weight: 700; color: #f8fafc; font-size: 13.5px;">${safeTitle}</div>
+              <div style="font-size: 10.5px; margin-top: 3px; color: ${p.content_package_source === 'llm' ? '#4ade80' : (p.content_package_source && String(p.content_package_source).startsWith('no_llm') ? '#fbbf24' : '#94a3b8')};">
+                <i class="bi bi-robot"></i> Content: ${p.content_package_source === 'llm' ? 'LLM đã tạo' : (p.content_package_source && String(p.content_package_source).startsWith('no_llm') ? 'Fallback — cần thử lại LLM' : (p.content_package_status || 'đang xử lý'))}
+              </div>
               <div style="font-size: 11.5px; color: #94a3b8; font-family: monospace; margin-top: 2px;"><i class="bi bi-film"></i> ${safeMedia}</div>
               ${videoActions}
             </td>

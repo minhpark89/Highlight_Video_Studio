@@ -116,7 +116,7 @@ def record_llm_success():
     _write(CIRCUIT_FILE, {"opened_at": 0, "retry_at": 0, "failures": 0, "reason": ""})
 
 
-def _llm_package(title, summary, video_url=""):
+def _llm_package(title, summary, video_url="", article_url=""):
     from src.content_builder import get_llm_candidates, _get_task_model
 
     cfg = get_llm_candidates()
@@ -130,9 +130,10 @@ def _llm_package(title, summary, video_url=""):
         "Create a content package for a rendered highlight. Return one JSON object ONLY (no reasoning, "
         "markdown or prose) with string keys hero_title, article_html, first_comment, caption, "
         "and an array of strings hashtags. Article HTML must be a useful 350+ word story, "
-        "but do not invent events or facts not supported by the inputs. If there is no article URL, "
-        "set first_comment to an empty string rather than inventing a link.\n"
-        f"Title: {title}\nSummary: {summary}\nSource: {video_url}"
+        "but do not invent events or facts not supported by the inputs. "
+        "If an Article URL is provided, write a unique first_comment tied to this video's title and "
+        "include that exact Article URL once. If no Article URL is provided, set first_comment to an empty string.\n"
+        f"Title: {title}\nSummary: {summary}\nSource: {video_url}\nArticle URL: {article_url}"
     )
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if cfg.get("api_key"):
@@ -165,6 +166,8 @@ def _llm_package(title, summary, video_url=""):
                 raise ValueError("LLM returned an incomplete content package")
             if not isinstance(data.get("first_comment"), str):
                 raise ValueError("LLM returned an incomplete content package")
+            if article_url and article_url not in data["first_comment"]:
+                raise ValueError("LLM First Comment omitted the verified article URL")
             if not isinstance(data.get("hashtags"), list) or not all(
                 isinstance(tag, str) for tag in data["hashtags"]
             ):
@@ -181,6 +184,7 @@ def _llm_package(title, summary, video_url=""):
             )}]
             continue
         data["source"] = "llm"
+        data["first_comment_source"] = "llm" if article_url else "pending_article_url"
         record_llm_success()
         return data
 
@@ -200,7 +204,7 @@ def generate_package(title, summary="", video_url="", mode="auto", article_url="
         result = {**fallback, "source": "no_llm_circuit_open", "circuit": circuit_status()}
     else:
         try:
-            result = _llm_package(title, summary, video_url)
+            result = _llm_package(title, summary, video_url, article_url)
         except QuotaError as exc:
             if selected_mode == "llm":
                 raise RuntimeError(sanitize_error(exc)) from None
@@ -453,6 +457,7 @@ def _apply_to_posts(item):
         post["content_package_id"] = item["id"]
         post["content_package_status"] = item.get("status", "ready")
         post["content_package_source"] = result.get("source")
+        post["first_comment_source"] = result.get("first_comment_source") or post.get("first_comment_source", "")
         post["content"] = result.get("caption") or post.get("content", "")
         if result.get("hero_title"):
             post["title"] = result["hero_title"]
@@ -524,6 +529,7 @@ def _apply_failure_to_posts(item):
         post["website_status"] = item.get("website_status") or post.get("website_status") or "not_configured"
         post["website_error"] = item.get("website_error", "")
         post["content_package_error"] = item.get("error", "")
+        post["first_comment_source"] = "failed"
         if not post.get("first_comment"):
             post["first_comment_status"] = "generation_failed"
             post["first_comment_error"] = item.get("error", "")
@@ -667,6 +673,9 @@ def _process_new_content_package(item):
             comment = str(result.get("first_comment") or "").strip()
             if not comment or article_url not in comment:
                 result["first_comment"] = fallback_package(item["title"], item.get("summary", ""), article_url)["first_comment"]
+                result["first_comment_source"] = "template_fallback"
+            elif not result.get("first_comment_source"):
+                result["first_comment_source"] = "template_fallback" if str(result.get("source") or "").startswith("no_llm") else "llm"
             if not result.get("first_comment") or article_url not in result["first_comment"]:
                 raise RuntimeError("First Comment không chứa đúng URL bài CMS mới")
         retryable = str(result.get("source") or "").startswith("no_llm_quota_fallback")

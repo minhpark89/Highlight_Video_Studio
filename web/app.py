@@ -1743,9 +1743,44 @@ def api_delete_token(token_id):
 def api_list_pages():
     pages = page_manager.list_pages()
     groups = page_manager.list_groups()
+    valid_groups = {str(g.get("id")): g for g in groups if g.get("id")}
+    # Page mapping stores the last successful publish counter, while the post
+    # queue is the authoritative source for work scheduled during the current
+    # run. Expose both so the UI never shows a misleading zero during a batch.
+    try:
+        posts = load_posts()
+    except Exception:
+        posts = []
+    stats = {}
+    for post in posts if isinstance(posts, list) else []:
+        pid = str(post.get("page_id") or "").strip()
+        if not pid:
+            continue
+        row = stats.setdefault(pid, {"published_count": 0, "scheduled_count": 0, "publishing_count": 0})
+        status = str(post.get("status") or "").lower()
+        if status in ("published", "success"):
+            row["published_count"] += 1
+        elif status == "publishing":
+            row["publishing_count"] += 1
+        elif status in ("scheduled", "processing"):
+            row["scheduled_count"] += 1
+    enriched = []
+    for page in pages:
+        item = dict(page)
+        pid = str(item.get("page_id") or "").strip()
+        item.update(stats.get(pid, {"published_count": 0, "scheduled_count": 0, "publishing_count": 0}))
+        # Never display a deleted/stale group label as if it still existed.
+        group_ids = [str(gid) for gid in (item.get("group_ids") or []) if str(gid) in valid_groups]
+        for group in groups:
+            gid = str(group.get("id") or "")
+            if gid and gid not in group_ids and pid in {str(p) for p in (group.get("page_ids") or [])}:
+                group_ids.append(gid)
+        item["group_ids"] = group_ids
+        item["group_name"] = valid_groups[group_ids[0]].get("name") if group_ids else "Chưa nhóm"
+        enriched.append(item)
     return jsonify({
         "success": True,
-        "pages": pages,
+        "pages": enriched,
         "groups": groups,
         "mapping_health": page_manager.mapping_health(),
     })
@@ -2837,11 +2872,24 @@ def api_distribute_batch():
         prioritize_scheduled_packages(scheduled_package_ids)
         if scheduled_package_ids:
             start_content_package_worker()
+    package_sources = {}
+    package_statuses = {}
+    for entry in posts[-scheduled_count:] if scheduled_count else []:
+        source = str(entry.get("content_package_source") or "pending")
+        status = str(entry.get("content_package_status") or "pending")
+        package_sources[source] = package_sources.get(source, 0) + 1
+        package_statuses[status] = package_statuses.get(status, 0) + 1
     return jsonify({
         "success": True,
         "scheduled_count": scheduled_count,
         "posts_per_page": posts_per_page,
         "website_failed_count": 0,
+        "content_package_sources": package_sources,
+        "content_package_statuses": package_statuses,
+        "content_package_ready": package_statuses.get("ready", 0),
+        "content_package_pending": sum(value for key, value in package_statuses.items() if key in ("queued", "running", "pending")),
+        "content_package_llm": package_sources.get("llm", 0),
+        "content_package_fallback": sum(value for key, value in package_sources.items() if key.startswith("no_llm")),
         "message": f"Đã phân bổ thành công {scheduled_count} bài viết cho {len(page_ids)} Fanpage ({posts_per_page} bài/page)!"
     })
 
@@ -3425,6 +3473,7 @@ def apply_ready_package_to_post(post, package):
     """Keep in-memory scheduled entries consistent with a reused persisted package."""
     result = package.get("result") or {}
     post["content_package_source"] = result.get("source")
+    post["first_comment_source"] = result.get("first_comment_source") or ("template_fallback" if result.get("first_comment") and str(result.get("source") or "").startswith("no_llm") else "")
     post["content"] = result.get("caption") or post.get("content", "")
     post["title"] = result.get("hero_title") or post.get("title", "")
     post["article_url"] = package.get("article_url") or post.get("article_url", "")
