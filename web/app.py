@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 from pathlib import Path
 
 # The scheduled queue lives under one canonical root per installation; a packaged
@@ -96,7 +96,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.2"
 
 @app.after_request
 def add_header(response):

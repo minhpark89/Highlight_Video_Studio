@@ -11,7 +11,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 if ($BuildChannel -ne "desktop-test") { throw "Phase 1.5 permits only BUILD_CHANNEL=desktop-test" }
-if ($Version -notin @("1.0.19", "1.1.1")) { throw "Unsupported desktop-test APP_VERSION: $Version" }
+if ($Version -notin @("1.0.19", "1.1.2")) { throw "Unsupported desktop-test APP_VERSION: $Version" }
 if ($Version -eq "1.0.19" -and -not $PreviewRevision) { throw "Legacy v1.0.19 builds require PreviewRevision" }
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
