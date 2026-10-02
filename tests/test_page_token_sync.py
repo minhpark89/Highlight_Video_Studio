@@ -644,6 +644,21 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(resp.get_json()["count"], 1)
         self.assertEqual(self.pages.list_pages()[0]["token_id"], "tok_1")
 
+    def test_group_allocation_respects_page_limit_without_partial_write(self):
+        token = {"id": "tok_1", "name": "T1", "token": "EAAB_one", "status": "ACTIVE"}
+        self.vault._save([token])
+        self.pages.sync_pages_from_token(token, [
+            {"id": "PAGE_A", "access_token": "page-a"},
+            {"id": "PAGE_B", "access_token": "page-b"},
+        ])
+        before = self.pages.list_pages()
+        response = self.client.post("/api/pages/batch_assign_token", json={
+            "auto_verified": True, "max_pages_per_token": 1,
+        })
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["code"], "token_capacity")
+        self.assertEqual(self.pages.list_pages(), before)
+
     def test_group_save_syncs_each_token_and_balances_verified_pages(self):
         tokens = [
             {"id": f"tok_{i}", "name": f"Token {i}", "token": f"EAAB_{i}", "status": "ACTIVE"}

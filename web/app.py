@@ -97,7 +97,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.1.6"
+APP_VERSION = "1.1.7"
 
 @app.after_request
 def add_header(response):
@@ -1581,9 +1581,12 @@ def api_rebind_token_group_pages(gid):
 @app.route("/api/token-groups/<gid>", methods=["DELETE"])
 def api_delete_token_group(gid):
     groups = load_token_groups()
+    before = len(groups)
     new_groups = [g for g in groups if g.get("id") != gid]
+    if len(new_groups) == before:
+        return jsonify({"success": False, "error": "Nhóm token không tồn tại"}), 404
     save_token_groups(new_groups)
-    return jsonify({"success": True, "message": "Đã xóa nhóm token!"})
+    return jsonify({"success": True, "deleted_id": str(gid), "message": "Đã xóa nhóm token!"})
 
 
 @app.route("/api/tokens", methods=["GET"])
@@ -2617,10 +2620,22 @@ def api_distribute_batch():
     group_times = sched_cfg.get("times") or ["11:30", "19:30"]
     group_stagger = sched_cfg.get("stagger_minutes") or stagger_minutes
 
-    folder_path = Path(group.get("folder_path") or group.get("folder_binding") or str(OUTPUT_DIR)).expanduser()
+    configured_folder = str(group.get("folder_binding") or group.get("folder_path") or "").strip()
+    folder_path = Path(configured_folder or str(OUTPUT_DIR)).expanduser()
     if not folder_path.is_dir():
-        return jsonify({"success": False, "code": "missing_output_folder",
-                        "error": "Configured schedule clip folder does not exist"}), 400
+        legacy_default = str(folder_path).replace("/", "\\").lower().rstrip("\\") == r"d:\highlight_video_studio\output"
+        if legacy_default and OUTPUT_DIR.is_dir():
+            folder_path = OUTPUT_DIR
+            saved_groups = page_manager.list_groups()
+            for saved_group in saved_groups:
+                if str(saved_group.get("id")) == str(group_id):
+                    saved_group["folder_binding"] = str(OUTPUT_DIR)
+                    saved_group["folder_path"] = str(OUTPUT_DIR)
+                    page_manager.save_groups(saved_groups)
+                    break
+        else:
+            return jsonify({"success": False, "code": "missing_output_folder",
+                            "error": f"Configured schedule clip folder does not exist: {folder_path}"}), 400
     folder_path = folder_path.resolve()
     canonical_output = OUTPUT_DIR.resolve()
     if not canonical_output.is_dir():
@@ -3101,6 +3116,12 @@ def api_batch_assign_token():
     token_group_id = str(data.get("token_group_id") or "").strip()
     auto_verified = data.get("auto_verified") is True
     if token_group_id or auto_verified:
+        try:
+            max_pages_per_token = int(data.get("max_pages_per_token") or 0)
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "error": "Số Page / Token phải là số nguyên"}), 400
+        if max_pages_per_token < 0 or max_pages_per_token > 50:
+            return jsonify({"success": False, "error": "Số Page / Token phải từ 1 đến 50"}), 400
         token_group = next((g for g in load_token_groups() if str(g.get("id")) == token_group_id), None) if token_group_id else None
         if token_group_id and not token_group:
             return jsonify({"success": False, "error": "Token group not found"}), 404
@@ -3112,7 +3133,6 @@ def api_batch_assign_token():
             if token_group:
                 token_group["page_ids"] = _group_page_ids(selected_ids, str(token_group.get("page_source_token_id") or ""))
                 token_group["pages_synced_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                save_token_groups(load_token_groups()) if False else None
                 groups = load_token_groups()
                 for group in groups:
                     if str(group.get("id")) == token_group_id:
@@ -3153,12 +3173,18 @@ def api_batch_assign_token():
             if not choices:
                 blocked.append({"page_id": pid, "code": "missing_mapping"})
                 continue
+            if max_pages_per_token:
+                choices = [choice for choice in choices if loads[choice[0]] < max_pages_per_token]
+            if not choices:
+                blocked.append({"page_id": pid, "code": "token_capacity"})
+                continue
             tid, binding, credential = min(choices, key=lambda choice: (loads[choice[0]], token_ids.index(choice[0])))
             planned.append((page, tid, binding, credential))
             loads[tid] += 1
         if blocked:
-            return jsonify({"success": False, "stage": "mapping", "code": "missing_mapping",
-                            "error": "Some selected Pages have no active verified Token mapping in this group. Sync only the blocked Pages with a credential that manages them.",
+            capacity_blocked = any(item["code"] == "token_capacity" for item in blocked)
+            return jsonify({"success": False, "stage": "mapping", "code": "token_capacity" if capacity_blocked else "missing_mapping",
+                            "error": (f"Không đủ Token đã xác thực cho giới hạn {max_pages_per_token} Page/Token." if capacity_blocked else "Some selected Pages have no active verified Token mapping in this group. Sync only the blocked Pages with a credential that manages them."),
                             "blocked": blocked, "sync_errors": sync_errors, "count": 0}), 409
         for page, tid, binding, credential in planned:
             page["token_id"] = tid

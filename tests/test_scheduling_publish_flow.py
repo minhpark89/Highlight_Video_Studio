@@ -420,6 +420,31 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             self.assertEqual((output / post["media_file"]).read_bytes(), b"foreign")
             self.assertEqual((output / "clip.mp4").read_bytes(), b"unrelated")
 
+    def test_batch_repairs_missing_legacy_default_output_folder(self):
+        from web import app as web_app
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "output"
+            output.mkdir()
+            group = {"id": "group-1", "name": "Group", "page_ids": ["page-1"],
+                     "folder_binding": r"D:\Highlight_Video_Studio\output"}
+            groups = [group]
+            with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
+                web_app, "BASE_DIR", root
+            ), mock.patch.object(web_app.page_manager, "list_groups", return_value=groups), mock.patch.object(
+                web_app.page_manager, "save_groups"
+            ) as save_groups, mock.patch.object(web_app.page_manager, "list_pages", return_value=[self._verified_page()]), mock.patch.object(
+                web_app.token_vault, "get_token_by_id", return_value=self._credential_entry()
+            ):
+                response = web_app.app.test_client().post("/api/distribute/batch", json={
+                    "group_id": "group-1", "posts_per_page": 1,
+                })
+            self.assertNotEqual(response.get_json().get("code"), "missing_output_folder")
+            self.assertEqual(group["folder_binding"], str(output))
+            save_groups.assert_called_once()
+
     def test_batch_rejects_traversal_before_staging_or_saving(self):
         from web import app as web_app
 

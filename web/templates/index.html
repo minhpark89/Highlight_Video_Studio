@@ -1365,7 +1365,7 @@
             </div>
             <div style="display: flex; gap: 8px;">
               <button class="btn btn-secondary" onclick="loadTokensOnly()"><i class="bi bi-arrow-repeat"></i> Làm mới</button>
-              <button class="btn btn-primary" onclick="openTokenGroupModal()"><i class="bi bi-folder-plus"></i> + Thêm Nhóm Token</button>
+              <button class="btn btn-primary" onclick="openTokenGroupModal()"><i class="bi bi-folder-plus"></i> Quản lý Nhóm Token</button>
               <button class="btn btn-outline" onclick="openAddTokenModal()"><i class="bi bi-plus-lg"></i> Thêm Token</button>
             </div>
           </div>
@@ -3670,7 +3670,7 @@
     const nameInput = document.getElementById('group-input-name');
     const folderInput = document.getElementById('group-input-folder');
     const name = nameInput ? nameInput.value.trim() : '';
-    const folder = folderInput ? folderInput.value.trim() : 'D:\\Highlight_Video_Studio\\output';
+    const folder = folderInput ? folderInput.value.trim() : '';
 
     if (!name) {
       alert('Vui lòng nhập tên nhóm Fanpage (ví dụ: Nhóm Review, Nhóm Tin Tức...)!');
@@ -3941,11 +3941,14 @@
   async function deleteTokenGroup(gid, gname) {
     if (!confirm(`Xóa nhóm token '${gname}'?`)) return;
     try {
-      const res = await fetch('/api/token-groups/' + gid, { method: 'DELETE' });
+      const res = await fetch('/api/token-groups/' + encodeURIComponent(gid), { method: 'DELETE' });
       const d = await res.json();
-      if (d.success) {
+      if (res.ok && d.success) {
         showToast('Đã xóa nhóm token thành công!');
-        await loadTokenGroupsList();
+        currentSelectedTokenGroupId = 'all';
+        await Promise.all([loadTokenGroupsList(), loadTokenGroupsPills(), loadTokensOnly()]);
+      } else {
+        alert('Không thể xóa nhóm token: ' + (d.error || 'Server error'));
       }
     } catch (e) {
       alert(e.message);
@@ -4003,10 +4006,19 @@
 
   async function rebalanceTokenPageAllocation() {
     const allocationGroupId = document.getElementById('token-allocation-group')?.value || '';
+    const maxPages = Number(document.getElementById('pages-per-token-input')?.value || 0);
+    if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 50) {
+      alert('Số Page gán cho 1 Token phải từ 1 đến 50.');
+      return;
+    }
+    const button = document.querySelector('button[onclick="rebalanceTokenPageAllocation()"]');
+    const oldLabel = button ? button.innerHTML : '';
+    if (button) { button.disabled = true; button.innerHTML = '<i class="bi bi-arrow-repeat spin"></i> Đang đồng bộ...'; }
+    showToast('Đang kiểm tra mapping và phân bổ Page, vui lòng chờ...');
     try {
       const res = await fetch('/api/pages/batch_assign_token', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(allocationGroupId ? {token_group_id: allocationGroupId, sync_pages: true} : {auto_verified: true, sync_pages: true})
+        body: JSON.stringify(allocationGroupId ? {token_group_id: allocationGroupId, max_pages_per_token: maxPages} : {auto_verified: true, max_pages_per_token: maxPages})
       });
       const result = await res.json();
       if (!res.ok || !result.success) {
@@ -4014,9 +4026,10 @@
         alert((result.error || 'Allocation blocked') + (blocked ? `\nPages needing a verified binding: ${blocked}` : ''));
         return;
       }
-      showToast(`Assigned ${result.count} Pages using verified bindings; target load is 3–4 Pages per token.`);
+      showToast(`Đã gán ${result.count} Page, tối đa ${maxPages} Page/Token bằng mapping đã xác thực.`);
       await Promise.all([loadTokensOnly(), loadTokensAndPages()]);
     } catch (err) { alert('Allocation request failed: ' + err.message); }
+    finally { if (button) { button.disabled = false; button.innerHTML = oldLabel; } }
   }
 
   async function loadTokensOnly() {
@@ -6179,7 +6192,7 @@
           </div>
           <div>
             <label class="form-label" style="font-size: 12px; font-weight: 600; color: #94a3b8;">Thư mục nguồn (Folder Binding):</label>
-            <input type="text" id="group-input-folder" class="form-control" value="D:\Highlight_Video_Studio\output" readonly>
+            <input type="text" id="group-input-folder" class="form-control" value="" placeholder="Kho video output của ứng dụng" readonly>
             <span style="font-size: 11px; color: #64748b;">Video render xong từ studio sẽ tự động sẵn sàng cho nhóm này đăng bài.</span>
           </div>
           <div>
