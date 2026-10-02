@@ -875,6 +875,28 @@ class SchedulingPublishFlowTests(unittest.TestCase):
 
 
 class SchedulerWorkerHardeningTests(unittest.TestCase):
+    def test_reel_without_website_link_never_reaches_meta(self):
+        from web import scheduled_publisher as worker
+
+        folder, root, output, posts_file = self._fixture({
+            "id": "post-unlinked", "type": "reel", "status": "scheduled",
+            "scheduled_time": "2026-01-01 00:00:00", "page_id": "page-1",
+            "token": "fixture-token", "media_file": "clip.mp4",
+            "first_comment": "Read more", "auto_first_comment": False,
+        })
+        poster = mock.Mock()
+        try:
+            with mock.patch.object(worker, "POSTS_FILE", posts_file), mock.patch.object(
+                worker, "OUTPUT_DIR", output
+            ), mock.patch.object(worker, "POSTED_CLIPS_FILE", root / "posted.json"):
+                worker.process_scheduled_posts_once(poster=poster, now=datetime(2026, 1, 1, 1, 0, 0))
+            saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+        finally:
+            folder.cleanup()
+        self.assertEqual(saved["status"], "scheduled")
+        self.assertEqual(saved["retry_stage"], "website_content")
+        poster.publish_reel.assert_not_called()
+
     def _fixture(self, post):
         folder = tempfile.TemporaryDirectory()
         root = Path(folder.name)
