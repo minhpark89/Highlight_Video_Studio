@@ -96,7 +96,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.1.4"
+APP_VERSION = "1.1.5"
 
 @app.after_request
 def add_header(response):
@@ -1821,6 +1821,10 @@ def api_publish_reel():
     title = data.get("title", "")
     caption = data.get("caption", "")
     first_comment = data.get("first_comment", "")
+    article_url = str(data.get("article_url") or data.get("website_url") or "").strip()
+    first_comment = str(first_comment or "").strip()
+    if article_url and article_url not in first_comment:
+        first_comment = f"{first_comment}\n{article_url}".strip()
     schedule_time = data.get("schedule_time") # ISO or "YYYY-MM-DD HH:MM" or timestamp
     stagger_minutes = int(data.get("stagger_minutes", 15)) # Leech gio giua cac page
     
@@ -2065,6 +2069,25 @@ def api_publish_reel():
 
         facebook_id = res.get("video_id") or res.get("reel_id")
         if res.get("success") and facebook_id:
+            comment_result = res.get("comment_result") or {}
+            post_id = f"post_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+            comment_status = "posted" if comment_result.get("success") else ("ready" if first_comment else "not_configured")
+            comment_queue_id = ""
+            comment_error = str(comment_result.get("error") or "")
+            if first_comment and not comment_result.get("success"):
+                try:
+                    from src.publisher.first_comment_queue import enqueue_first_comment
+                    queued = enqueue_first_comment(
+                        facebook_id, p_token, first_comment, int(time.time()) + 30,
+                        token_id=verified["token_id"], post_id=post_id,
+                    )
+                    comment_status = "pending_retry" if queued.get("success") else "queue_failed"
+                    comment_queue_id = queued.get("queue_id") or ""
+                    if not queued.get("success"):
+                        comment_error = str(queued.get("error") or comment_error)
+                except Exception as exc:
+                    comment_status = "queue_failed"
+                    comment_error = str(exc)
             success_count += 1
             p_info["total_posted"] = p_info.get("total_posted", 0) + 1
             pages_updated = True
@@ -2076,14 +2099,15 @@ def api_publish_reel():
                 "video_id": res.get("video_id"),
                 "fb_url": res.get("fb_url"),
                 "scheduled_publish_time": res.get("scheduled_publish_time"),
-                "comment_result": res.get("comment_result")
+                "comment_result": comment_result,
+                "first_comment_status": comment_status,
             })
             if not schedule_time:
                 # Immediate publishes must appear in Post Management just like
                 # worker-published scheduled posts, including a clickable Reel URL.
                 immediate_posts = load_posts()
                 immediate_posts.insert(0, {
-                    "id": f"post_{int(time.time())}_{uuid.uuid4().hex[:6]}",
+                    "id": post_id,
                     "title": title,
                     "content": caption,
                     "page_id": pid,
@@ -2091,13 +2115,13 @@ def api_publish_reel():
                     "type": "reel",
                     "media_file": clip_filename,
                     "first_comment": first_comment,
-                    "article_url": str(data.get("article_url") or data.get("website_url") or "").strip(),
-                    "website_status": "ready" if str(data.get("article_url") or data.get("website_url") or "").strip() else "not_configured",
+                    "article_url": article_url,
+                    "website_status": "ready" if article_url else "not_configured",
                     "website_error": "",
-                    "first_comment_status": (
-                        "posted" if (res.get("comment_result") or {}).get("success")
-                        else ("ready" if first_comment else "not_configured")
-                    ),
+                    "first_comment_status": comment_status,
+                    "first_comment_error": comment_error,
+                    "first_comment_queue_id": comment_queue_id,
+                    "comment_id": comment_result.get("comment_id") or "",
                     "post_fb_id": facebook_id or "",
                     "fb_url": res.get("fb_url") or (
                         f"https://www.facebook.com/reel/{facebook_id}" if facebook_id else ""
@@ -3548,3 +3572,4 @@ if __name__ == "__main__":
     bind_host = os.environ.get("HIGHLIGHT_BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
     print(f"Highlight Video Studio starting on http://{bind_host}:5080 with Waitress (threads=8)...")
     waitress.serve(app, host=bind_host, port=5080, threads=8, channel_timeout=30)
+

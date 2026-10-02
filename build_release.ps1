@@ -11,7 +11,7 @@
 
 $ErrorActionPreference = "Stop"
 if ($BuildChannel -ne "desktop-test") { throw "Phase 1.5 permits only BUILD_CHANNEL=desktop-test" }
-if ($Version -notin @("1.0.19", "1.1.4")) { throw "Unsupported desktop-test APP_VERSION: $Version" }
+if ($Version -notin @("1.0.19", "1.1.5")) { throw "Unsupported desktop-test APP_VERSION: $Version" }
 if ($Version -eq "1.0.19" -and -not $PreviewRevision) { throw "Legacy v1.0.19 builds require PreviewRevision" }
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -197,3 +197,4 @@ try { Remove-Item -LiteralPath $payload -Force -ErrorAction Stop } catch { Write
 try { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction Stop } catch { Write-Warning "Could not remove temporary stage: $stage" }
 Write-Host "Release built: $setup"
 Write-Host "SHA256: $hash"
+

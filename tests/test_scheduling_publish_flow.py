@@ -7,6 +7,47 @@ from unittest import mock
 
 
 class SchedulingPublishFlowTests(unittest.TestCase):
+    def test_immediate_comment_failure_queues_retry_with_website_link(self):
+        from web import app as web_app
+        from src.publisher import first_comment_queue
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "output"
+            output.mkdir()
+            (output / "clip.mp4").write_bytes(b"video")
+            posts_file = root / "posts.json"
+            queue_file = root / "comments.json"
+            with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
+                web_app, "POSTS_FILE", posts_file
+            ), mock.patch.object(first_comment_queue, "QUEUE_FILE", queue_file), mock.patch.object(
+                web_app.page_manager, "list_pages", return_value=[self._verified_page()]
+            ), mock.patch.object(web_app.page_manager, "list_groups", return_value=[]), mock.patch.object(
+                web_app.page_manager, "save_pages"
+            ), mock.patch.object(web_app.token_vault, "get_token_by_id", return_value=self._credential_entry()), mock.patch.object(
+                web_app.reel_poster, "publish_reel", return_value={
+                    "success": True, "video_id": "reel-1", "status": "PUBLISHED",
+                    "comment_result": {"success": False, "error": "Meta busy"},
+                }
+            ) as publish, mock.patch("web.scheduled_publisher._record_posted_clip"), mock.patch(
+                "web.scheduled_publisher.remove_posted_clip_file", return_value=False
+            ):
+                response = web_app.app.test_client().post("/api/publish/reel", json={
+                    "page_id": "page-1", "filename": "clip.mp4", "first_comment": "Read more",
+                    "article_url": "https://example.test/article",
+                })
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()["results"][0]["first_comment_status"], "pending_retry")
+            saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+            queued = json.loads(queue_file.read_text(encoding="utf-8"))[0]
+            self.assertEqual(saved["status"], "published")
+            self.assertEqual(saved["first_comment_status"], "pending_retry")
+            self.assertEqual(saved["first_comment_queue_id"], queued["id"])
+            self.assertEqual(queued["post_id"], saved["id"])
+            self.assertIn("https://example.test/article", queued["comment_text"])
+            self.assertEqual(publish.call_args.kwargs["first_comment"], queued["comment_text"])
+
     def test_schedule_click_enqueues_priority_and_starts_worker_after_persist(self):
         from web import app as web_app
         from src import content_packages as cp
@@ -445,7 +486,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             publish.assert_not_called()
             saved = json.loads(posts_file.read_text(encoding="utf-8"))
-        self.assertEqual(saved[0]["first_comment"], "Configured comment")
+        self.assertEqual(saved[0]["first_comment"], "Configured comment\nhttps://example.test/article")
         self.assertEqual(saved[0]["first_comment_status"], "ready")
         self.assertEqual(saved[0]["article_url"], "https://example.test/article")
         self.assertEqual(saved[0]["website_status"], "ready")
