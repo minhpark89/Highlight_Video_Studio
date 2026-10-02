@@ -97,7 +97,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.1.7"
+APP_VERSION = "1.1.8"
 
 @app.after_request
 def add_header(response):
