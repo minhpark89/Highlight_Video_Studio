@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -19,7 +19,7 @@ internal sealed class InstallerForm : Form
 
     internal InstallerForm()
     {
-        Text = TestProductName + " v1.1.2 - Installer";
+        Text = TestProductName + " v1.1.3 - Installer";
         ClientSize = new Size(620, 355);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;

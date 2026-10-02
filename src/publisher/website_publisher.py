@@ -666,11 +666,20 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str) -> t
         hero = f"https://i.ytimg.com/vi/{youtube_id}/hqdefault.jpg"
     if not hero:
         raise WebsiteServiceError("Không có ảnh ngang từ video gốc hoặc YouTube; không dùng frame clip dọc")
-    if not images and youtube_id:
-        images = [f"https://i.ytimg.com/vi/{youtube_id}/hqdefault.jpg"]
-    return hero, images[:2]
+    if youtube_id:
+        # Keep three real, non-empty visual references even when the original
+        # horizontal source is unavailable. These are stable YouTube thumbnails.
+        variants = [
+            f"https://i.ytimg.com/vi/{youtube_id}/maxresdefault.jpg",
+            f"https://i.ytimg.com/vi/{youtube_id}/hqdefault.jpg",
+            f"https://i.ytimg.com/vi/{youtube_id}/0.jpg",
+        ]
+        images = (images + [url for url in variants if url not in images and url != hero])[:2]
+        if not hero:
+            hero = variants[0]
+    return hero, [url for url in images[:2] if str(url).strip()]
 
-def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: list, video_stream_url: str = "", youtube_id: str = "") -> tuple:
+def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: list, video_stream_url: str = "", youtube_id: str = "", source_summary: str = "") -> tuple:
     """
     Sinh bài viết dài chuyên sâu 500+ từ chuẩn báo chí quốc tế:
     - ĐẦU BÀI: Hiển thị ngay tấm ảnh Hook LLM to sắc nét (Hero Banner)!
@@ -738,7 +747,7 @@ Requirements:
 3. "section_1_content": 2 rich paragraphs breaking down the technical precision, the immediate reaction, and why conventional wisdom failed.
 4. "section_2_title": "Inside the Climax: Tactical Genius & Aftermath"
 5. "section_2_content": 2 paragraphs exploring the aftermath, expert opinions, and the lasting significance of this scene.
-6. Make it thorough, journalistic, and captivating (approx 450-600 words).
+6. Make it thorough, journalistic, and captivating (650-900 words; never below 600 words).
 Output strictly valid JSON only:
 {{
   "seo_title": "{title} - Full Uncut Breakdown & Scene Analysis",
@@ -801,17 +810,24 @@ Output strictly valid JSON only:
                         "section_2_title", "section_2_content")
             if any(not isinstance(d.get(key), str) or not d[key].strip() for key in required):
                 raise ValueError("Incomplete article response")
-            if len(re.findall(r"\b[A-Za-z]+\b", " ".join(d[key] for key in required))) < 500:
-                raise ValueError("Article response below 500-word gate")
+            if len(re.findall(r"\b[A-Za-z]+\b", " ".join(d[key] for key in required))) < 600:
+                raise ValueError("Article response below 600-word gate")
             seo_title = d.get("seo_title") if isinstance(d.get("seo_title"), str) and d["seo_title"].strip() else seo_title
             lead, s1_title, s1_content, s2_title, s2_content = (d[key] for key in required)
     except Exception as exc:
         logger.warning("LLM deep article generation failed: %s", _safe_text_llm_error(exc))
 
-    if len(re.findall(r"\b[A-Za-z]+\b", " ".join((lead, s1_title, s1_content, s2_title, s2_content)))) < 500:
-        raise WebsiteServiceError("Article below 500-word gate; CMS publish blocked")
+    if len(re.findall(r"\b[A-Za-z]+\b", " ".join((lead, s1_title, s1_content, s2_title, s2_content)))) < 600:
+        raise WebsiteServiceError("Article below 600-word gate; CMS publish blocked")
 
     safe_title = html.escape(str(title))
+    summary = str(source_summary or "").strip()
+    summary = summary[:1800] if summary else (
+        f"The available source is the complete recording titled {title}. "
+        "No verified transcript or detailed source description was provided with this clip. "
+        "Watch the embedded original recording to check the sequence, context and outcome directly."
+    )
+    safe_summary = html.escape(summary)
     safe_lead = html.escape(str(lead))
     safe_s1_title = html.escape(str(s1_title))
     safe_s1_content = html.escape(str(s1_content)).replace(chr(10), '<br><br>')
@@ -821,6 +837,8 @@ Output strictly valid JSON only:
     <div class="article-content" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.8; color: #1e293b; max-width: 820px; margin: 0 auto; font-size: 16px;">
       
       {hero_top_html}
+
+      <section class="original-video-summary"><h2>Original video summary</h2><p>{safe_summary}</p></section>
 
       <p class="lead" style="font-size: 18px; font-weight: 600; color: #0f172a; line-height: 1.7; margin-bottom: 24px; border-left: 4px solid #38bdf8; padding-left: 16px; background: rgba(56, 189, 248, 0.04); padding-top: 10px; padding-bottom: 10px; border-radius: 0 8px 8px 0;">
         {safe_lead}
@@ -987,8 +1005,24 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
 
     # 4. Tạo ảnh và bài viết sau khi biết chắc slug chưa được đăng.
     hero_img, body_imgs = extract_and_upload_article_assets(clip_filename, video_title)
+    if youtube_id:
+        fallback_images = [
+            f"https://i.ytimg.com/vi/{youtube_id}/maxresdefault.jpg",
+            f"https://i.ytimg.com/vi/{youtube_id}/hqdefault.jpg",
+            f"https://i.ytimg.com/vi/{youtube_id}/0.jpg",
+        ]
+        hero_img = hero_img or fallback_images[0]
+        body_imgs = list(body_imgs or [])
+        for image in fallback_images:
+            if image != hero_img and image not in body_imgs:
+                body_imgs.append(image)
+            if len(body_imgs) >= 2:
+                break
+    if len({url for url in [hero_img, *body_imgs] if str(url).strip()}) < 3:
+        raise WebsiteServiceError("Article requires three distinct source images before CMS publication")
     seo_title, body_html = generate_deep_article_content(
-        video_title, hero_img, body_imgs, video_stream_url=video_stream_url, youtube_id=youtube_id
+        video_title, hero_img, body_imgs, video_stream_url=video_stream_url, youtube_id=youtube_id,
+        source_summary=meta.get("description") or "",
     )
 
     # 6. Publish lên CMS qua WebsiteArticleService kèm Hero Image (Hook Thumbnail)

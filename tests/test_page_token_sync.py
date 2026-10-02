@@ -644,6 +644,30 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(resp.get_json()["count"], 1)
         self.assertEqual(self.pages.list_pages()[0]["token_id"], "tok_1")
 
+    def test_group_save_syncs_each_token_and_balances_verified_pages(self):
+        tokens = [
+            {"id": f"tok_{i}", "name": f"Token {i}", "token": f"EAAB_{i}", "status": "ACTIVE"}
+            for i in range(3)
+        ]
+        self.vault._save(tokens)
+        all_pages = [{"id": f"PAGE_{i}", "name": f"Page {i}", "access_token": f"page-{i}"} for i in range(10)]
+
+        def refresh(token_id):
+            token = next(t for t in tokens if t["id"] == token_id)
+            return token, all_pages
+
+        with mock.patch.object(self.vault, "refresh_token_pages", side_effect=refresh):
+            created = self.client.post("/api/token-groups", json={
+                "name": "Balanced", "token_ids": [t["id"] for t in tokens], "sync_pages": True,
+            })
+        self.assertEqual(created.status_code, 200)
+        group = created.get_json()["group"]
+        self.assertEqual(len(group["page_ids"]), 10)
+        assigned = self.client.post("/api/pages/batch_assign_token", json={"token_group_id": group["id"]})
+        self.assertEqual(assigned.status_code, 200)
+        self.assertEqual(sorted(assigned.get_json()["loads"].values()), [3, 3, 4])
+        self.assertEqual(assigned.get_json()["over_four"], {})
+
     def test_group_allocation_ignores_stale_binding_and_fails_closed(self):
         token = {"id": "tok_1", "name": "T1", "token": "fresh-token", "status": "ACTIVE"}
         self.vault._save([token])

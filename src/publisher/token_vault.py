@@ -199,15 +199,31 @@ class TokenVault:
                 }
             
             pages = []
-            for item in data.get("data", []):
-                pages.append({
-                    "page_id": item.get("id"),
-                    "page_name": item.get("name"),
-                    "category": item.get("category", ""),
-                    "page_token": item.get("access_token"),
-                    "tasks": item.get("tasks") or [],
-                    "avatar": item.get("picture", {}).get("data", {}).get("url", "")
-                })
+            seen = set()
+            for page_number in range(50):
+                for item in data.get("data", []):
+                    page_id = str(item.get("id") or "")
+                    if not page_id or page_id in seen:
+                        continue
+                    seen.add(page_id)
+                    pages.append({
+                        "page_id": page_id,
+                        "page_name": item.get("name"),
+                        "category": item.get("category", ""),
+                        "page_token": item.get("access_token"),
+                        "tasks": item.get("tasks") or [],
+                        "avatar": item.get("picture", {}).get("data", {}).get("url", "")
+                    })
+                next_url = (data.get("paging") or {}).get("next")
+                if not next_url:
+                    break
+                if not str(next_url).startswith("https://graph.facebook.com/"):
+                    raise ValueError("Unexpected Page discovery pagination URL")
+                data = requests.get(next_url, timeout=12).json()
+                if "error" in data:
+                    raise ValueError("Page discovery pagination failed")
+            else:
+                raise ValueError("Page discovery exceeded 50 pages of results")
             return {
                 "status": "ACTIVE",
                 "error": "",

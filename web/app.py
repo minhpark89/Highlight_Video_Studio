@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 from pathlib import Path
 
 # The scheduled queue lives under one canonical root per installation; a packaged
@@ -96,7 +96,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 
 @app.after_request
 def add_header(response):
@@ -1476,6 +1476,29 @@ def _pages_for_source_token(page_source_token_id):
     })
 
 
+def _sync_group_credentials(token_ids):
+    """Discover each group credential; never infer access from another token."""
+    errors = []
+    for token_id in token_ids:
+        try:
+            entry, discovered = token_vault.refresh_token_pages(token_id)
+            if not entry or entry.get("status") != "ACTIVE":
+                errors.append({"token_id": token_id, "error": (entry or {}).get("error_msg") or "Token inactive"})
+                continue
+            page_manager.sync_pages_from_token(entry, discovered)
+        except Exception as exc:
+            errors.append({"token_id": token_id, "error": str(exc)})
+    return errors
+
+
+def _group_page_ids(token_ids, source_id=""):
+    ids = set(_pages_for_source_token(source_id))
+    for page in page_manager.list_pages():
+        if set(page.get("token_bindings") or {}).intersection(token_ids):
+            ids.add(str(page.get("page_id")))
+    return sorted(ids - {""})
+
+
 @app.route("/api/token-groups", methods=["POST"])
 def api_save_token_group():
     data = request.json or {}
@@ -1496,7 +1519,8 @@ def api_save_token_group():
         return jsonify({"error": "Token không tồn tại trong Vault: " + ", ".join(unknown_ids)}), 404
     if page_source_token_id and page_source_token_id not in vault_ids:
         return jsonify({"error": "Token nguồn Page không tồn tại trong Vault"}), 404
-    page_ids = _pages_for_source_token(page_source_token_id)
+    sync_errors = _sync_group_credentials(token_ids) if data.get("sync_pages") is True else []
+    page_ids = _group_page_ids(token_ids, page_source_token_id) if data.get("sync_pages") is True else _pages_for_source_token(page_source_token_id)
 
     groups = load_token_groups()
     existing = next((g for g in groups if g.get("id") == gid), None)
@@ -1505,7 +1529,7 @@ def api_save_token_group():
         existing["token_ids"] = token_ids
         existing["strategy"] = strategy
         existing["note"] = note
-        if has_source or not existing.get("page_source_token_id"):
+        if has_source or not existing.get("page_source_token_id") or data.get("sync_pages") is True:
             existing["page_source_token_id"] = page_source_token_id
             existing["page_ids"] = page_ids
         existing["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1526,6 +1550,7 @@ def api_save_token_group():
         "success": True,
         "message": f"Đã lưu Nhóm Token '{name}' thành công!",
         "group": saved,
+        "sync_errors": sync_errors,
     })
 
 
@@ -2119,17 +2144,6 @@ def api_publish_reel():
 
     if pages_updated:
         page_manager.save_pages(pages)
-    if not schedule_time and target_page_ids and len(results) == len(target_page_ids) and all(r.get("success") for r in results):
-        try:
-            from web.scheduled_publisher import remove_posted_clip_file
-            current_posts = load_posts()
-            if remove_posted_clip_file(clip_filename, current_posts):
-                for post in current_posts:
-                    if str(post.get("media_file") or "") == clip_filename and post.get("status") == "published":
-                        post["local_video_deleted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                save_posts(current_posts)
-        except Exception:
-            pass  # Never change the Meta result because local cleanup failed.
     if schedule_time and success_count:
         save_posts(scheduled_posts)
         prioritize_scheduled_packages(scheduled_package_ids)
@@ -2336,7 +2350,7 @@ def api_scheduler_run_due():
             return jsonify({
                 "success": False,
                 "busy": True,
-                "error": "Scheduler dang xu ly mot chu ky khac; khong chay trung de tranh dang lap.",
+                "error": "Worker đang đăng bài khác. Bài quá hạn vẫn nằm trong hàng chờ và sẽ được xử lý ở chu kỳ kế tiếp.",
             }), 409
         return jsonify({
             "success": True,
@@ -3023,6 +3037,20 @@ def api_batch_assign_token():
         token_group = next((g for g in load_token_groups() if str(g.get("id")) == token_group_id), None) if token_group_id else None
         if token_group_id and not token_group:
             return jsonify({"success": False, "error": "Token group not found"}), 404
+        sync_errors = []
+        if data.get("sync_pages") is True:
+            selected_ids = [str(tid) for tid in token_group.get("token_ids", [])] if token_group else [str(t.get("id")) for t in token_vault.list_tokens(mask=False)]
+            sync_errors = _sync_group_credentials(selected_ids)
+            pages = page_manager.list_pages()
+            if token_group:
+                token_group["page_ids"] = _group_page_ids(selected_ids, str(token_group.get("page_source_token_id") or ""))
+                token_group["pages_synced_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                save_token_groups(load_token_groups()) if False else None
+                groups = load_token_groups()
+                for group in groups:
+                    if str(group.get("id")) == token_group_id:
+                        group.update({"page_ids": token_group["page_ids"], "pages_synced_at": token_group["pages_synced_at"]})
+                save_token_groups(groups)
         requested = {str(pid) for pid in data.get("page_ids", []) if pid}
         if token_group:
             group_pages = {str(pid) for pid in token_group.get("page_ids", [])}
@@ -3064,7 +3092,7 @@ def api_batch_assign_token():
         if blocked:
             return jsonify({"success": False, "stage": "mapping", "code": "missing_mapping",
                             "error": "Some selected Pages have no active verified Token mapping in this group. Sync only the blocked Pages with a credential that manages them.",
-                            "blocked": blocked, "count": 0}), 409
+                            "blocked": blocked, "sync_errors": sync_errors, "count": 0}), 409
         for page, tid, binding, credential in planned:
             page["token_id"] = tid
             page["token_name"] = credential.get("name", "System User")
@@ -3073,7 +3101,10 @@ def api_batch_assign_token():
             page["mapping_verified_at"] = binding.get("verified_at", "")
         assigned = len(planned)
         page_manager.save_pages(pages)
-        return jsonify({"success": True, "count": assigned, "message": f"Assigned {assigned} Pages to verified group Tokens."})
+        return jsonify({"success": True, "count": assigned, "loads": loads,
+                        "over_four": {tid: count for tid, count in loads.items() if count > 4},
+                        "sync_errors": sync_errors,
+                        "message": f"Assigned {assigned} Pages to verified group Tokens."})
 
     # 1. Hỗ trợ dạng mảng gán chi tiết từng page (round-robin assignments)
     assignments = data.get("assignments")

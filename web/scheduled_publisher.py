@@ -80,6 +80,7 @@ def worker_status():
         snapshot = dict(_heartbeat)
     snapshot["thread_alive"] = bool(_worker_thread and _worker_thread.is_alive())
     snapshot["waiting_for_lease"] = _worker_waiting_for_lease
+    snapshot["cycle_active"] = _cycle_lock.locked()
     return snapshot
 
 
@@ -337,13 +338,20 @@ def _process_scheduled_posts_once(
         # Page/token preflight. Legacy records only carry their persisted exact
         # page token; preserve that compatibility for offline recovery and old
         # queues instead of letting an unrelated cached Page record block them.
-        if post.get("token_id"):
-            verdict = preflight_pages([page_record], token_vault, page_manager) if page_record else {"ok": False, "blocked": {"code": "missing_page", "stage": "mapping", "action": "Sync Page before publishing."}}
-            blocked = verdict.get("blocked") or {}
-            verified = verdict["ready"][0] if verdict.get("ok") else None
-        else:
-            blocked = {}
-            verified = {"token": page_token, "token_id": post.get("token_id", "")} if page_token else None
+        try:
+            if post.get("token_id"):
+                verdict = preflight_pages([page_record], token_vault, page_manager) if page_record else {"ok": False, "blocked": {"code": "missing_page", "stage": "mapping", "action": "Sync Page before publishing."}}
+                blocked = verdict.get("blocked") or {}
+                verified = verdict["ready"][0] if verdict.get("ok") else None
+            else:
+                blocked = {}
+                verified = {"token": page_token, "token_id": post.get("token_id", "")} if page_token else None
+        except Exception as exc:
+            post.update({"status": "failed", "retryable": True,
+                         "retry_stage": "meta_preflight",
+                         "error": sanitize_error(exc)})
+            save_posts(posts)
+            continue
         if verified is None:
             post.update({
                 "status": "failed",
@@ -467,13 +475,7 @@ def _process_scheduled_posts_once(
                 "error": "Publish started but outcome is unknown; reconcile on Facebook before retrying.",
             })
 
-    removed = 0
-    for published_post in posts:
-        if published_post.get("status") == "published" and not published_post.get("local_video_deleted_at"):
-            if remove_posted_clip_file(published_post.get("media_file") or published_post.get("clip_filename"), posts):
-                published_post["local_video_deleted_at"] = current_dt.strftime("%Y-%m-%d %H:%M:%S")
-                removed += 1
-    if claimed_posts or recovered or reconciled or queue_result.get("changed") or removed:
+    if claimed_posts or recovered or reconciled or queue_result.get("changed"):
         save_posts(posts)
     failed = sum(1 for post in claimed_posts if post.get("status") == "failed")
     return {"claimed": len(claimed_posts), "recovered": recovered, "failed": failed, "queue": queue_result, "posts": posts}

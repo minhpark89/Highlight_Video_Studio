@@ -3923,7 +3923,7 @@
       const res = await fetch('/api/token-groups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, strategy, token_ids: tokenIds, page_source_token_id: pageSourceTokenId })
+        body: JSON.stringify({ name, strategy, token_ids: tokenIds, page_source_token_id: pageSourceTokenId, sync_pages: true })
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -4003,11 +4003,10 @@
 
   async function rebalanceTokenPageAllocation() {
     const allocationGroupId = document.getElementById('token-allocation-group')?.value || '';
-    if (!confirm('Assign only Pages with an active verified credential binding? Unmapped Pages will be listed without changing any assignments.')) return;
     try {
       const res = await fetch('/api/pages/batch_assign_token', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(allocationGroupId ? {token_group_id: allocationGroupId} : {auto_verified: true})
+        body: JSON.stringify(allocationGroupId ? {token_group_id: allocationGroupId, sync_pages: true} : {auto_verified: true, sync_pages: true})
       });
       const result = await res.json();
       if (!res.ok || !result.success) {
@@ -4015,7 +4014,7 @@
         alert((result.error || 'Allocation blocked') + (blocked ? `\nPages needing a verified binding: ${blocked}` : ''));
         return;
       }
-      showToast(`Assigned ${result.count} Pages using verified bindings.`);
+      showToast(`Assigned ${result.count} Pages using verified bindings; target load is 3–4 Pages per token.`);
       await Promise.all([loadTokensOnly(), loadTokensAndPages()]);
     } catch (err) { alert('Allocation request failed: ' + err.message); }
   }
@@ -5184,46 +5183,17 @@
     banner.style.color = '#38bdf8';
     banner.innerHTML = `<i class="bi bi-hourglass-split"></i> Đang gán token cho ${targetPages.length} Fanpage...`;
 
-    // Thuật toán phân bổ
-    // Group target pages theo token_id
-    let tokenMap = {}; // token_id -> array of page_ids
-    tokens.forEach(t => { tokenMap[t.id] = []; });
-
-    if (mode === 'fixed_ratio') {
-      // 1 token = perToken pages
-      let tokenIdx = 0;
-      targetPages.forEach((p, idx) => {
-        // Chọn token hiện tại
-        const tId = tokens[tokenIdx % tokens.length].id;
-        tokenMap[tId].push(p.page_id || p.id);
-        if ((idx + 1) % perToken === 0) {
-          tokenIdx++;
-        }
-      });
-    } else {
-      // Round-robin
-      targetPages.forEach((p, idx) => {
-        const tId = tokens[idx % tokens.length].id;
-        tokenMap[tId].push(p.page_id || p.id);
-      });
-    }
-
-    // Gửi batch_assign_token qua backend
+    // Backend refreshes every credential and assigns only verified Page/token
+    // pairs. Least-load allocation naturally yields 3/4 Pages per token.
     try {
-      let totalAssigned = 0;
-      for (const [tId, pIds] of Object.entries(tokenMap)) {
-        if (pIds.length > 0) {
-          const resp = await fetch('/api/pages/batch_assign_token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token_id: tId, page_ids: pIds })
-          });
-          const resJson = await resp.json();
-          if (resp.ok && resJson.success) {
-            totalAssigned += (resJson.count || pIds.length);
-          }
-        }
-      }
+      const resp = await fetch('/api/pages/batch_assign_token', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto_verified: true, sync_pages: true,
+          page_ids: targetPages.map(p => p.page_id || p.id) })
+      });
+      const resJson = await resp.json();
+      if (!resp.ok || !resJson.success) throw new Error(resJson.error || 'Allocation blocked');
+      const totalAssigned = resJson.count || 0;
 
       banner.style.background = 'rgba(34, 197, 94, 0.2)';
       banner.style.border = '1px solid #22c55e';
@@ -5609,6 +5579,7 @@
   // ================= SCHEDULER WORKER HEALTH & AUTO REFRESH =================
   let postsAutoRefreshTimer = null;
   const postsOverdueIds = new Set();
+  let schedulerCycleActive = false;
 
   async function refreshSchedulerStatus() {
     const textEl = document.getElementById('scheduler-status-text');
@@ -5626,6 +5597,7 @@
       const waitingLease = !!st.waiting_for_lease;
       const lastCycle = st.last_cycle_at ? st.last_cycle_at.substring(11, 19) : '--:--:--';
       const overdueCount = st.overdue_count || 0;
+      schedulerCycleActive = !!st.cycle_active;
       if (waitingLease) {
         textEl.textContent = `Đang chờ worker · chu kỳ cuối ${lastCycle}`;
         textEl.style.color = '#fbbf24';
@@ -5644,8 +5616,9 @@
         if (overdueCount > 0) {
           const lateMin = Math.max(...(st.overdue_posts || []).map(op => Math.round((op.late_seconds || 0) / 60)));
           bannerEl.style.display = 'block';
-          bannerEl.innerHTML = `<i class="bi bi-alarm-fill"></i> <b>${overdueCount} bài đã quá hạn</b> nhưng chưa đăng (trễ nhất ~${lateMin} phút). ` +
-            `Worker có thể đã bỏ lỡ chu kỳ. Nhấn <button onclick="runDuePostsNow()" style="background:#ef4444;color:#fff;border:none;padding:3px 10px;border-radius:6px;font-weight:700;cursor:pointer;">Chạy bài đến hạn</button> để xử lý ngay.`;
+          bannerEl.innerHTML = schedulerCycleActive
+            ? `<i class="bi bi-hourglass-split"></i> <b>${overdueCount} bài đang chờ lượt</b> (trễ nhất ~${lateMin} phút). Worker đang xử lý bài trước và sẽ tự chạy tiếp.`
+            : `<i class="bi bi-alarm-fill"></i> <b>${overdueCount} bài đã quá hạn</b> (trễ nhất ~${lateMin} phút). <button onclick="runDuePostsNow()" style="background:#ef4444;color:#fff;border:none;padding:3px 10px;border-radius:6px;font-weight:700;cursor:pointer;">Chạy bài đến hạn</button>`;
         } else if (st.last_error) {
           bannerEl.style.display = 'block';
           bannerEl.innerHTML = `<i class="bi bi-bug-fill"></i> Lỗi chu kỳ gần nhất: ${escapeHtml(st.last_error)}`;
@@ -5668,6 +5641,8 @@
       const data = await res.json();
       if (data.success) {
         showToast(`Đã xử lý: ${data.claimed || 0} bài đến hạn, khôi phục ${data.recovered || 0} bài kẹt.`);
+      } else if (data.busy) {
+        showToast('Worker đang xử lý bài khác; bài này vẫn giữ trong hàng chờ và sẽ tự chạy tiếp.', 'info');
       } else {
         showToast('Lỗi: ' + (data.error || 'không xác định'), 'error');
       }
@@ -5767,13 +5742,20 @@
         } else {
           const isOverdue = postsOverdueIds.has(p.id) && p.status === 'scheduled';
           statusBadge = isOverdue
-            ? `<span style="background: rgba(239,68,68,0.2); color: #fca5a5; border: 1px solid rgba(239,68,68,0.6); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-alarm-fill"></i> QUÁ HẠN · chưa đăng</span><div style="margin-top:4px;"><button onclick="runDuePostsNow()" style="background:#ef4444;color:#fff;border:none;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">Đăng ngay</button></div>`
+            ? schedulerCycleActive
+              ? '<span style="color:#fbbf24;font-size:11px;">Đang chờ bài trước hoàn tất</span>'
+              : `<span style="background: rgba(239,68,68,0.2); color: #fca5a5; border: 1px solid rgba(239,68,68,0.6); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-alarm-fill"></i> QUÁ HẠN · chưa đăng</span><div style="margin-top:4px;"><button onclick="runDuePostsNow()" style="background:#ef4444;color:#fff;border:none;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">Đăng ngay</button></div>`
             : '<span style="background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-clock-history"></i> Đang hẹn lịch</span>';
         }
 
         let commentSnippet = '';
         if (safeComment) {
           commentSnippet = safeComment.length > 50 ? safeComment.substring(0, 50) + '...' : safeComment;
+          if (p.status === 'published' && p.first_comment_status === 'posted') {
+            commentSnippet += '<div style="color:#22c55e;font-size:10px;">First Comment đã đăng</div>';
+          } else if (p.status === 'published' && ['pending', 'pending_retry'].includes(p.first_comment_status)) {
+            commentSnippet += '<div style="color:#f59e0b;font-size:10px;">First Comment đang chờ Meta xử lý</div>';
+          }
         } else if (p.first_comment_status === 'pending_generation' || p.first_comment_status === 'generating') {
           commentSnippet = '<span style="color:#f59e0b;">Chờ tạo khi đến giờ đăng</span>';
         } else if (p.first_comment_status === 'generation_failed' || p.first_comment_status === 'pending_retry' || p.first_comment_status === 'failed') {
@@ -5790,7 +5772,7 @@
               : '<div style="color:#64748b;margin-top:5px;">Website: không cấu hình</div>';
         const videoActions = safeLocalVideoUrl
           ? `<div style="margin-top:5px;display:flex;gap:8px;"><a href="${safeLocalVideoUrl}" target="_blank" rel="noopener" style="color:#22d3ee;"><i class="bi bi-play-circle"></i> Xem video</a><a href="${safeLocalDownloadUrl}" style="color:#94a3b8;"><i class="bi bi-download"></i> Tải</a></div>`
-          : '<div style="margin-top:5px;color:#ef4444;font-size:11px;">Video local không còn khả dụng</div>';
+          : `<div style="margin-top:5px;color:#94a3b8;font-size:11px;">${p.local_video_deleted_at ? 'Video local đã được dọn' : 'Không tìm thấy file video local'}</div>`;
 
         html += `
           <tr style="border-bottom: 1px solid var(--border); transition: background 0.15s ease;" onmouseover="this.style.background='rgba(255,255,255,0.02)'" onmouseout="this.style.background='transparent'">

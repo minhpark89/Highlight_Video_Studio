@@ -2,8 +2,12 @@ import json
 import os
 import hashlib
 import uuid
+import threading
+import time
 from pathlib import Path
 from datetime import datetime
+
+_PAGES_WRITE_LOCK = threading.RLock()
 
 class PageManager:
     def __init__(self, data_dir=r"D:\Highlight_Video_Studio"):
@@ -27,7 +31,14 @@ class PageManager:
             json.dump(value, f, indent=2, ensure_ascii=False)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        for attempt in range(6):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.1 * (attempt + 1))
 
     @staticmethod
     def credential_fingerprint(token_value):
@@ -46,9 +57,14 @@ class PageManager:
             return []
 
     def save_pages(self, pages):
-        self._atomic_write(self.pages_file, pages)
+        with _PAGES_WRITE_LOCK:
+            self._atomic_write(self.pages_file, pages)
 
     def sync_pages_from_token(self, token_entry, pages_data):
+        with _PAGES_WRITE_LOCK:
+            return self._sync_pages_from_token_locked(token_entry, pages_data)
+
+    def _sync_pages_from_token_locked(self, token_entry, pages_data):
         current_pages = self.list_pages()
         token_id = token_entry.get("id")
         token_name = token_entry.get("name")

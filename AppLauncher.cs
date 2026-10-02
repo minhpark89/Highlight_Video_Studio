@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -17,7 +17,7 @@ internal static class AppLauncher
     private static void Main()
     {
         bool created;
-        instanceMutex = new Mutex(true, @"Local\HighlightDesktopTest-1.1.2", out created);
+        instanceMutex = new Mutex(true, @"Local\HighlightDesktopTest-1.1.3", out created);
         if (!created)
         {
             OpenBrowser();
@@ -160,7 +160,7 @@ internal static class AppLauncher
     {
         internal LauncherForm()
         {
-            Text = "Highlight Desktop Test v1.1.2";
+            Text = "Highlight Desktop Test v1.1.3";
             Width = 410;
             Height = 175;
             StartPosition = FormStartPosition.CenterScreen;
