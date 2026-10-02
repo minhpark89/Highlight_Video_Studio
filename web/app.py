@@ -2855,7 +2855,7 @@ def api_distribute_batch():
                 clip_filename=post_entry["media_file"],
                 title=post_entry["title"],
                 summary=str(post_entry.get("content") or ""),
-                mode="auto",
+                mode="auto" if use_llm_comment else "no_llm",
                 post_ids=[post_entry["id"]],
                 article_url=post_entry.get("article_url", ""),
                 video_url=str(post_entry.get("video_url") or post_entry.get("youtube_url") or ""),
