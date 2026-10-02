@@ -383,10 +383,11 @@ def _process_scheduled_posts_once(
             })
             continue
 
-        if post.get("auto_first_comment"):
+        if post.get("auto_first_comment") or post.get("type") == "reel":
             url = str(post.get("article_url") or "").strip()
             comment = str(post.get("first_comment") or "").strip()
-            if not (url and post.get("website_status") == "ready" and url in comment):
+            website_ready = post.get("website_status") in (None, "", "ready")
+            if not (url and website_ready and url in comment):
                 post["status"] = "failed" if post.get("website_status") == "failed" else "scheduled"
                 post["retryable"] = post["status"] == "failed"
                 post["retry_stage"] = "website_content"

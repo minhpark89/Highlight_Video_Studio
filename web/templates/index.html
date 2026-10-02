@@ -4700,7 +4700,8 @@
     filename: '',
     title: '',
     caption: '',
-    first_comment: ''
+    first_comment: '',
+    article_url: ''
   };
   let globalPagesCatalog = [];
   let globalGroupsCatalog = [];
@@ -4709,7 +4710,8 @@
       filename: filename,
       title: title || 'Clip Highlight',
       caption: title || '',
-      first_comment: ''
+      first_comment: '',
+      article_url: ''
     };
     initAndShowPublishModal();
   }
@@ -4726,7 +4728,8 @@
       filename: filename,
       title: title,
       caption: fbPost || title,
-      first_comment: comment
+      first_comment: comment,
+      article_url: (comment.match(/https?:\/\/[^\s]+/i) || [])[0] || ''
     };
     initAndShowPublishModal();
   }
@@ -4735,6 +4738,7 @@
     document.getElementById('pub-clip-filename').textContent = currentPublishContext.filename;
     document.getElementById('pub-caption').value = currentPublishContext.caption || '';
     document.getElementById('pub-first-comment').value = currentPublishContext.first_comment || '';
+    document.getElementById('pub-article-url').value = currentPublishContext.article_url || '';
     // Set default schedule time to Now + 20 minutes
     const now = new Date();
     now.setMinutes(now.getMinutes() + 20);
@@ -4839,6 +4843,7 @@
     const filename = currentPublishContext.filename;
     const caption = document.getElementById('pub-caption').value.trim();
     const firstComment = document.getElementById('pub-first-comment').value.trim();
+    const articleUrl = document.getElementById('pub-article-url').value.trim();
     const groupId = document.getElementById('pub-select-group').value;
     const singlePageId = document.getElementById('pub-select-single-page').value;
     const mode = document.querySelector('input[name="pub_mode"]:checked')?.value;
@@ -4846,6 +4851,10 @@
     const stagger = parseInt(document.getElementById('pub-schedule-stagger').value || '15', 10);
     if (!groupId && !singlePageId) {
       alert('Vui lòng chọn ít nhất 1 Fanpage hoặc 1 Nhóm Trang để xuất bản!');
+      return;
+    }
+    if (mode !== 'schedule' && !/^https?:\/\/[^\s]+$/i.test(articleUrl)) {
+      alert('Cần nhập link bài Website để đăng ngay và gắn vào First Comment. Hoặc chọn Lên lịch để ứng dụng tự tạo bài.');
       return;
     }
     const btn = document.getElementById('btn-execute-publish');
@@ -4861,6 +4870,7 @@
       title: currentPublishContext.title || '',
       caption: caption,
       first_comment: firstComment,
+      article_url: articleUrl,
       auto_first_comment: mode === 'schedule',
       use_llm_comment: true,
       group_id: groupId || null,
@@ -6832,6 +6842,7 @@
         <div id="pub-pages-target-summary"></div>
         <label>Caption</label><textarea id="pub-caption" class="form-control" rows="4"></textarea>
         <label>First comment</label><textarea id="pub-first-comment" class="form-control" rows="3"></textarea>
+        <label>Link bài Website cho First Comment</label><input id="pub-article-url" class="form-control" type="url" placeholder="https://.../blog/bai-viet"><small>Đăng ngay cần link bài viết. Khi lên lịch, ứng dụng có thể tự tạo bài và comment.</small>
         <label><input type="radio" name="pub_mode" value="now" checked onchange="toggleScheduleOptions()"> Publish now</label>
         <label><input type="radio" name="pub_mode" value="schedule" onchange="toggleScheduleOptions()"> Schedule</label>
         <div id="pub-schedule-box" style="display:none;"><label>Time</label><input id="pub-schedule-datetime" type="datetime-local" class="form-control"><label>Stagger minutes</label><input id="pub-schedule-stagger" type="number" class="form-control" value="15" min="0"></div>

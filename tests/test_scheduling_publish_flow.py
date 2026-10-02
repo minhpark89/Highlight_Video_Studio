@@ -7,6 +7,26 @@ from unittest import mock
 
 
 class SchedulingPublishFlowTests(unittest.TestCase):
+    def test_immediate_publish_requires_website_article_url(self):
+        from web import app as web_app
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "output"
+            output.mkdir()
+            (output / "clip.mp4").write_bytes(b"video")
+            with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
+                web_app.page_manager, "list_pages", return_value=[self._verified_page()]
+            ), mock.patch.object(web_app.page_manager, "list_groups", return_value=[]), mock.patch.object(
+                web_app.reel_poster, "publish_reel"
+            ) as publish:
+                response = web_app.app.test_client().post("/api/publish/reel", json={
+                    "page_id": "page-1", "filename": "clip.mp4", "first_comment": "Read more",
+                })
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.get_json()["code"], "website_article_required")
+            publish.assert_not_called()
+
     def test_immediate_comment_failure_queues_retry_with_website_link(self):
         from web import app as web_app
         from src.publisher import first_comment_queue

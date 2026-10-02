@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 from pathlib import Path
 
 # The scheduled queue lives under one canonical root per installation; a packaged
@@ -23,6 +23,7 @@ import json
 import html
 import re
 import requests
+from urllib.parse import urlparse
 import uuid
 import threading
 from queue import Queue
@@ -96,7 +97,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.1.5"
+APP_VERSION = "1.1.6"
 
 @app.after_request
 def add_header(response):
@@ -1827,6 +1828,7 @@ def api_publish_reel():
         first_comment = f"{first_comment}\n{article_url}".strip()
     schedule_time = data.get("schedule_time") # ISO or "YYYY-MM-DD HH:MM" or timestamp
     stagger_minutes = int(data.get("stagger_minutes", 15)) # Leech gio giua cac page
+
     
     if not clip_filename:
         return jsonify({"error": "Thiếu tên file clip"}), 400
@@ -1897,6 +1899,25 @@ def api_publish_reel():
             if page_record is None:
                 continue
             schedule_target_pages.append((page_record, ready))
+
+    # A direct publish must never report success without a Website-linked
+    # First Comment. Scheduled posts may wait for their content package.
+    parsed_article = urlparse(article_url)
+    article_url_valid = parsed_article.scheme in ("http", "https") and bool(parsed_article.netloc)
+    if article_url and not article_url_valid:
+        return jsonify({"success": False, "error": "Link bài Website không hợp lệ.", "code": "invalid_article_url"}), 400
+    if not schedule_time and not article_url_valid:
+        return jsonify({
+            "success": False,
+            "error": "Bắt buộc nhập link bài Website trước khi đăng Reel; ứng dụng sẽ gắn link vào First Comment.",
+            "code": "website_article_required",
+        }), 400
+    if schedule_time and not article_url_valid and not bool(data.get("auto_first_comment", False)):
+        return jsonify({
+            "success": False,
+            "error": "Lịch đăng cần link bài Website hoặc bật tự động tạo bài và First Comment.",
+            "code": "website_article_required",
+        }), 400
 
     # The website article is generated asynchronously from the content queue; the
     # schedule call must not block on CMS or LLM latency.
@@ -2523,6 +2544,14 @@ def api_distribute_batch():
     use_llm_comment = data.get("use_llm_comment", True)
     configured_first_comment = str(data.get("first_comment") or "").strip()
     configured_website_url = str(data.get("article_url") or data.get("website_url") or "").strip()
+    if configured_website_url and configured_website_url not in configured_first_comment:
+        configured_first_comment = f"{configured_first_comment}\n{configured_website_url}".strip()
+    if not auto_first_comment and not configured_website_url:
+        return jsonify({
+            "success": False,
+            "error": "Cần link bài Website hoặc bật tự động tạo bài để First Comment luôn có link.",
+            "code": "website_article_required",
+        }), 400
 
     if not group_id:
         return jsonify({"error": "Thiếu group_id"}), 400
