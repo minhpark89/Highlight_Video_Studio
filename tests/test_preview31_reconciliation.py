@@ -6,6 +6,56 @@ from unittest import mock
 
 
 class Preview31ReconciliationTests(unittest.TestCase):
+    def test_abandoned_worker_recovers_saved_article_without_republishing_unknown_cms(self):
+        from src import content_packages as packages
+
+        with tempfile.TemporaryDirectory() as folder:
+            queue = Path(folder) / "packages.json"
+            queue.write_text(json.dumps([
+                {"id": "has-url", "status": "running", "article_url": "https://example.test/article",
+                 "create_website_article": True},
+                {"id": "unknown-cms", "status": "running", "article_url": "",
+                 "create_website_article": True},
+            ]), encoding="utf-8")
+            with mock.patch.object(packages, "QUEUE_FILE", queue):
+                self.assertTrue(packages.recover_abandoned_packages())
+            rows = json.loads(queue.read_text(encoding="utf-8"))
+            self.assertEqual(rows[0]["status"], "queued")
+            self.assertEqual(rows[0]["article_url"], "https://example.test/article")
+            self.assertEqual(rows[1]["status"], "failed")
+            self.assertEqual(rows[1]["website_status"], "failed")
+
+    def test_fallback_waiting_for_llm_is_visible_without_second_retry(self):
+        from src import content_packages as packages
+
+        with tempfile.TemporaryDirectory() as folder:
+            queue = Path(folder) / "packages.json"
+            item = {"id": "pending-1", "clip_filename": "clip.mp4", "status": "queued",
+                    "article_url": "https://example.test/article", "website_status": "ready",
+                    "result": {"caption": "Fallback caption", "source": "no_llm_error_fallback"}}
+            queue.write_text(json.dumps([item]), encoding="utf-8")
+            with mock.patch.object(packages, "QUEUE_FILE", queue):
+                self.assertTrue(packages.package_needs_attention(item))
+                self.assertEqual(packages.retry_package("pending-1")["status"], "queued")
+                self.assertEqual(len(packages.list_packages()), 1)
+
+    def test_schedule_attaches_existing_fallback_queue_without_new_package(self):
+        from src import content_packages as packages
+
+        with tempfile.TemporaryDirectory() as folder:
+            queue = Path(folder) / "packages.json"
+            queue.write_text(json.dumps([{
+                "id": "pending-1", "clip_filename": str(Path(folder) / "clip.mp4"),
+                "status": "queued", "post_ids": [], "article_url": "https://example.test/article",
+                "website_status": "ready", "result": {"caption": "Fallback caption",
+                "first_comment": "Read https://example.test/article", "source": "no_llm_error_fallback"},
+            }]), encoding="utf-8")
+            with mock.patch.object(packages, "QUEUE_FILE", queue), mock.patch.object(packages, "_apply_to_posts"):
+                attached = packages.attach_existing_package(clip_filename="clip.mp4", post_ids=["post-1"])
+            self.assertEqual(attached["id"], "pending-1")
+            self.assertEqual(attached["status"], "queued")
+            self.assertEqual(len(json.loads(queue.read_text(encoding="utf-8"))), 1)
+
     def test_ready_package_with_failed_website_is_visible_and_reused_without_new_row(self):
         from src import content_packages as packages
 

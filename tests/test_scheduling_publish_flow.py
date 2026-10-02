@@ -114,6 +114,51 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             start.assert_not_called()
             publish.assert_not_called()
 
+    def test_direct_schedule_attaches_queued_fallback_without_using_draft(self):
+        from web import app as web_app
+        from src import content_packages as cp
+
+        web_app.app.config["TESTING"] = True
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "output"
+            output.mkdir()
+            (output / "clip.mp4").write_bytes(b"video")
+            posts_file = root / "posts.json"
+            queue = root / "content_packages.json"
+            queue.write_text(json.dumps([{
+                "id": "studio-pending", "clip_filename": str(output / "clip.mp4"),
+                "title": "Fixture", "status": "queued", "article_url": "https://example.test/article",
+                "website_status": "ready", "result": {
+                    "caption": "Draft caption", "hero_title": "Draft title",
+                    "first_comment": "Read https://example.test/article", "source": "no_llm_error_fallback",
+                },
+            }]), encoding="utf-8")
+            with mock.patch.object(web_app, "OUTPUT_DIR", output), mock.patch.object(
+                web_app, "POSTS_FILE", posts_file
+            ), mock.patch.object(cp, "DATA_ROOT", root), mock.patch.object(
+                cp, "QUEUE_FILE", queue
+            ), mock.patch.object(web_app.page_manager, "list_pages", return_value=[self._verified_page()]), mock.patch.object(
+                web_app.page_manager, "list_groups", return_value=[]
+            ), mock.patch.object(web_app.token_vault, "get_token_by_id", return_value=self._credential_entry()), mock.patch.object(
+                web_app, "get_clip_metadata", return_value={}
+            ), mock.patch.object(web_app, "start_content_package_worker") as start, mock.patch.object(
+                web_app.reel_poster, "publish_reel"
+            ) as publish:
+                response = web_app.app.test_client().post("/api/publish/reel", json={
+                    "page_id": "page-1", "filename": "clip.mp4", "title": "Original title",
+                    "auto_first_comment": True, "schedule_time": "2099-01-02T03:04",
+                })
+            self.assertEqual(response.status_code, 200)
+            saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
+            self.assertEqual(saved["content_package_id"], "studio-pending")
+            self.assertEqual(saved["content_package_status"], "queued")
+            self.assertEqual(saved["website_status"], "pending_generation")
+            self.assertEqual(saved["content"], "")
+            self.assertEqual(len(json.loads(queue.read_text(encoding="utf-8"))), 1)
+            start.assert_called_once()
+            publish.assert_not_called()
+
     def test_meta_page_task_aliases_accept_publish_capability_but_readonly_tasks_fail(self):
         from src.publisher.meta_preflight import resolve_page_token
 
@@ -410,6 +455,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
 
     def test_batch_schedule_marks_generated_fields_pending_instead_of_missing(self):
         from web import app as web_app
+        from src import content_packages as cp
 
         web_app.app.config["TESTING"] = True
         with tempfile.TemporaryDirectory() as folder:
@@ -432,7 +478,9 @@ class SchedulingPublishFlowTests(unittest.TestCase):
                 web_app.token_vault, "get_token_by_id", return_value=self._credential_entry()
             ), mock.patch.object(
                 web_app, "get_clip_metadata", return_value={"video_title": "Fixture title"}
-            ):
+            ), mock.patch.object(cp, "QUEUE_FILE", root / "content_packages.json"), mock.patch.object(
+                cp, "DATA_ROOT", root
+            ), mock.patch.object(web_app, "start_content_package_worker"):
                 response = client.post("/api/distribute/batch", json={
                     "group_id": "group-1", "posts_per_page": 1, "auto_first_comment": True,
                 })
@@ -693,11 +741,13 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             with mock.patch.object(web_app, "BASE_DIR", root), mock.patch.object(
                 web_app, "POSTS_FILE", root / "posts.json"
             ), mock.patch.object(content_packages, "QUEUE_FILE", queue_file
-            ), mock.patch.object(web_app, "get_clip_metadata", return_value={"video_title": "New"}):
+            ), mock.patch.object(web_app, "list_packages", return_value=[{"id": "p1", "clip_filename": str(clip_queued), "status": "queued"}]
+            ), mock.patch.object(web_app, "get_clip_metadata", return_value={"video_title": "New"}
+            ), mock.patch.object(web_app, "start_content_package_worker"):
                 response = client.post("/api/content-studio/batch", json={"folder": str(root), "mode": "no_llm"})
             payload = response.get_json()
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["count"], 1, payload)
         self.assertEqual(payload["skipped_count"], 2)
         self.assertEqual({item["reason"] for item in payload["skipped"]}, {"already_posted", "already_in_content_queue"})
 

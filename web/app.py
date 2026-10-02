@@ -1978,7 +1978,7 @@ def api_publish_reel():
                 )
                 post_entry["content_package_id"] = package["id"]
                 post_entry["content_package_status"] = package["status"]
-                if (package.get("result") or {}).get("caption"):
+                if package["status"] == "ready" and (package.get("result") or {}).get("caption"):
                     apply_ready_package_to_post(post_entry, package)
                 if package["status"] == "queued":
                     scheduled_package_ids.add(package["id"])
@@ -2733,7 +2733,7 @@ def api_distribute_batch():
             )
             post_entry["content_package_id"] = package["id"]
             post_entry["content_package_status"] = package["status"]
-            if (package.get("result") or {}).get("caption"):
+            if package["status"] == "ready" and (package.get("result") or {}).get("caption"):
                 apply_ready_package_to_post(post_entry, package)
             if package["status"] == "queued":
                 scheduled_package_ids.add(package["id"])

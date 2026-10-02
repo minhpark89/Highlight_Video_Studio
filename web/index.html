@@ -1830,7 +1830,7 @@
             <div id="cs-result-body" style="font-size: 13px; color: #cbd5e1; line-height: 1.6; white-space: pre-wrap;"></div>
           </div>
 
-          <div style="margin-bottom:10px;"><label for="cs-status-filter">Lọc Content Package: </label><select id="cs-status-filter" class="form-control" style="display:inline-block;width:auto;" onchange="loadContentStudioQueue()"><option value="all">Tất cả</option><option value="failed">Cần xử lý (CMS / nội dung)</option></select> <button class="btn btn-sm btn-outline" onclick="csSelectFailedPackages()">Chọn tất cả mục cần xử lý</button> <button class="btn btn-sm btn-outline" onclick="csRetrySelectedPackages(this)">Thử lại mục đã chọn</button> <strong id="cs-selected-count" style="color:#38bdf8;margin-left:8px;">Đã chọn: 0</strong></div>
+          <div style="margin-bottom:10px;"><label for="cs-status-filter">Lọc Content Package: </label><select id="cs-status-filter" class="form-control" style="display:inline-block;width:auto;" onchange="loadContentStudioQueue()"><option value="all">Tất cả</option><option value="failed">Cần xử lý / chờ tạo lại</option></select> <button class="btn btn-sm btn-outline" onclick="csSelectFailedPackages()">Chọn mục có thể thử lại</button> <button class="btn btn-sm btn-outline" onclick="csRetrySelectedPackages(this)">Thử lại mục đã chọn</button> <strong id="cs-selected-count" style="color:#38bdf8;margin-left:8px;">Đã chọn: 0</strong></div>
           <div id="cs-action-msg" role="status" aria-live="polite" style="margin-bottom:10px;font-size:13px;min-height:1.4em;"></div>
           <div class="table-responsive" style="background: #111c33; border: 1px solid #23304d; border-radius: 10px;">
             <table class="table" style="margin-bottom: 0;">
@@ -5918,19 +5918,20 @@
       const allItems = data.items || [];
       const failedOnly = document.getElementById('cs-status-filter')?.value === 'failed';
       const items = failedOnly ? allItems.filter(item => item.needs_attention) : allItems;
-      stats.innerHTML = `Queued: <strong>${data.queued}</strong> \u00b7 Ready: <strong>${data.ready}</strong> \u00b7 Needs attention: <strong>${data.needs_attention}</strong> · Failed: <strong>${data.failed}</strong>`;
+      stats.innerHTML = `Đang chờ: <strong>${data.queued}</strong> · Sẵn sàng: <strong>${data.ready}</strong> · Cần xử lý / chờ tạo lại: <strong>${data.needs_attention}</strong> · Lỗi: <strong>${data.failed}</strong>`;
       const c = data.circuit || {};
       circuit.textContent = c.open
         ? `Circuit breaker \u0110ANG M\u1ede \u2014 th\u1eed l\u1ea1i sau ${c.retry_after_seconds}s (l\u1ed7i quota).`
         : 'Circuit breaker \u0111\u00f3ng \u2014 LLM kh\u1ea3 d\u1ee5ng.';
       if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#64748b;">${failedOnly ? 'No packages need attention.' : 'Chưa có Content Package nào.'}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#64748b;">${failedOnly ? 'Không có mục cần xử lý.' : 'Chưa có Content Package nào.'}</td></tr>`;
         return;
       }
       tbody.innerHTML = items.slice().reverse().sort((a,b) => Number(['queued','running'].includes(b.status)) - Number(['queued','running'].includes(a.status))).map(function(item) {
         const mode = item.mode || 'auto';
         const source = (item.result && item.result.source) || (item.status === 'failed' ? 'error' : '\u2014');
-        const pending = item.status === 'queued' || item.status === 'running' ? 'Đang tạo' : (item.status === 'ready' && item.needs_attention ? 'Cần xử lý' : item.status);
+        const fallbackPending = ['queued', 'running'].includes(item.status) && ['no_llm_error_fallback', 'no_llm_quota_fallback'].includes(source);
+        const pending = fallbackPending ? 'Chờ tạo lại nội dung LLM' : (item.status === 'queued' || item.status === 'running' ? 'Đang tạo' : (item.status === 'ready' && item.needs_attention ? 'Cần xử lý' : item.status));
         const cs = item.component_statuses || {};
         const websiteReady = cs.website_link?.status === 'ready' && !!cs.website_link?.present;
         const websiteError = cs.website_link?.error || item.website_error || '';
@@ -5948,8 +5949,8 @@
           <td>${csEscape(pending)}${item.error ? `<div style="color:#f87171;font-size:11px;white-space:normal;">${csEscape(item.error)}</div>` : ''}${websiteError && websiteError !== item.error ? `<div style="color:#f87171;font-size:11px;white-space:normal;">CMS: ${csEscape(websiteError)}</div>` : ''}</td>
           <td style="line-height:1.6;">${mark('hero_title','Ti\u00eau \u0111\u1ec1')}<br>${mark('article_html','B\u00e0i vi\u1ebft')}<br>${mark('first_comment','First Comment')}<br>${mark('website_link','Link web')}<br><small style="color:#94a3b8;">${csEscape(source)}</small>${fallbackReason ? `<br><small style="color:#fbbf24;">LLM fallback: ${csEscape(fallbackReason)}</small>` : ''}</td>
           <td class="content-studio-actions">
-            ${item.needs_attention ? `<input type="checkbox" class="cs-failed-select" value="${csEscape(item.id)}" aria-label="Chọn bài lỗi ${csEscape(item.title || item.id)}">` : ''}
-            ${item.needs_attention ? `<button class="btn btn-sm btn-outline cs-retry-btn" onclick="csRetryPackage('${csEscape(item.id)}', this)">Thử lại CMS / nội dung</button>` : ''}
+            ${item.needs_attention && !['queued', 'running'].includes(item.status) ? `<input type="checkbox" class="cs-failed-select" value="${csEscape(item.id)}" aria-label="Chọn bài lỗi ${csEscape(item.title || item.id)}">` : ''}
+            ${item.needs_attention && !['queued', 'running'].includes(item.status) ? `<button class="btn btn-sm btn-outline cs-retry-btn" onclick="csRetryPackage('${csEscape(item.id)}', this)">Thử lại CMS / nội dung</button>` : ''}
             <button class="btn btn-sm btn-outline cs-retry-btn" data-package-id="${csEscape(item.id)}" data-component="hero_title" onclick="csRetryComponent('${csEscape(item.id)}','hero_title', this)">T\u1ea1o l\u1ea1i ti\u00eau \u0111\u1ec1</button>
             <button class="btn btn-sm btn-outline cs-retry-btn" data-package-id="${csEscape(item.id)}" data-component="first_comment" onclick="csRetryComponent('${csEscape(item.id)}','first_comment', this)" ${websiteReady ? '' : 'disabled title="Cần bài CMS có URL trước khi tạo comment"'}>T\u1ea1o l\u1ea1i comment</button>
           </td>

@@ -312,10 +312,13 @@ def _reusable(entry, *, needs_article, article_url=""):
 
 def package_needs_attention(item):
     """A ready caption does not hide a failed CMS or a missing required comment."""
+    source = str((item.get("result") or {}).get("source") or "")
     if item.get("status") in ("failed", "retryable"):
         return True
     if item.get("status") in ("queued", "running"):
-        return False
+        # Imported queues can contain hundreds of fallback packages that are
+        # waiting for a real LLM retry. Keep them visible in the repair view.
+        return source in ("no_llm_error_fallback", "no_llm_quota_fallback")
     if item.get("website_status") == "failed":
         return True
     if item.get("create_website_article") and not item.get("article_url"):
@@ -325,7 +328,7 @@ def package_needs_attention(item):
     if url and "first_comment" in (item.get("components") or ["first_comment"]):
         if url not in str(result.get("first_comment") or ""):
             return True
-    return str(result.get("source") or "") in ("no_llm_error_fallback", "no_llm_quota_fallback")
+    return source in ("no_llm_error_fallback", "no_llm_quota_fallback")
 
 
 def attach_existing_package(*, clip_filename, post_ids=None, source_job_id="", source_clip_id="", needs_article=True, article_url=""):
@@ -345,12 +348,15 @@ def attach_existing_package(*, clip_filename, post_ids=None, source_job_id="", s
         if not item:
             item = next((entry for entry in reversed(items)
                          if _same_clip(entry, clip_filename, source_job_id, source_clip_id)
-                         and entry.get("status") in ("ready", "failed", "retryable")
-                         and (entry.get("result") or {}).get("caption")
+                         and entry.get("status") in ("queued", "running", "ready", "failed", "retryable")
+                         and ((entry.get("result") or {}).get("caption") or
+                              (entry.get("status") in ("queued", "running") and
+                               (entry.get("article_url") or entry.get("post_ids") or
+                                (source_job_id and entry.get("source_job_id")))))
                          and (not article_url or not entry.get("article_url") or entry.get("article_url") == article_url)), None)
         if not item:
             return None
-        if not _reusable(item, needs_article=needs_article, article_url=article_url):
+        if item.get("status") not in ("queued", "running") and not _reusable(item, needs_article=needs_article, article_url=article_url):
             if article_url and not item.get("article_url"):
                 item["article_url"] = article_url
             item["create_website_article"] = bool(needs_article and not item.get("article_url"))
@@ -365,7 +371,8 @@ def attach_existing_package(*, clip_filename, post_ids=None, source_job_id="", s
         item["updated_at"] = _now()
         _write(QUEUE_FILE, items)
         snapshot = dict(item)
-    _apply_to_posts(snapshot)
+    if snapshot.get("status") == "ready":
+        _apply_to_posts(snapshot)
     return snapshot
 
 
@@ -568,6 +575,8 @@ def retry_package(package_id, mode=None):
         item = next((entry for entry in items if entry.get("id") == package_id), None)
         if not item:
             return None
+        if item.get("status") in ("queued", "running"):
+            return dict(item)
         if not package_needs_attention(item):
             return dict(item)
         if mode is not None:
@@ -608,22 +617,27 @@ def process_content_packages_once():
                          "website_error": "", "embed_status": prior.get("embed_status") or "ready",
                          "result": dict(prior.get("result") or {}), "status": "ready",
                          "error": "", "completed_at": _now()})
-            _apply_to_posts(item)
         else:
             _process_new_content_package(item)
     except Exception as exc:
         item.update({"status": "retryable" if isinstance(exc, QuotaError) else "failed", "error": sanitize_error(exc), "completed_at": _now()})
-        try:
-            _apply_failure_to_posts(item)
-        except Exception as post_exc:
-            item["error"] = sanitize_error(f"{item['error']}; post sync: {post_exc}")
     with _LOCK:
         latest = _read(QUEUE_FILE, [])
         for index, existing in enumerate(latest):
             if existing.get("id") == item.get("id"):
+                item["post_ids"] = list(dict.fromkeys(list(item.get("post_ids") or []) + list(existing.get("post_ids") or [])))
                 latest[index] = item
                 break
         _write(QUEUE_FILE, latest)
+    try:
+        if item.get("status") == "ready":
+            _apply_to_posts(item)
+        elif item.get("status") in ("failed", "retryable"):
+            _apply_failure_to_posts(item)
+    except Exception as post_exc:
+        item["error"] = sanitize_error(f"{item.get('error', '')}; post sync: {post_exc}")
+        with _LOCK:
+            _write(QUEUE_FILE, latest)
     return {"processed": 1, "item": item, "items": latest}
 
 
@@ -642,7 +656,9 @@ def _process_new_content_package(item):
         # Keep already generated article/caption when only the CMS link or
         # comment needs repair. This also avoids spending another LLM call.
         result = dict(item.get("result") or {})
-        if item.get("regenerate_text") or not result.get("caption") or not result.get("article_html"):
+        if (item.get("regenerate_text") or
+                str(result.get("source") or "") in ("no_llm_error_fallback", "no_llm_quota_fallback") or
+                not result.get("caption") or not result.get("article_html")):
             result = generate_package(
                 item["title"], item.get("summary", ""), item.get("video_url", ""),
                 item.get("mode", "auto"), article_url=article_url,
@@ -657,8 +673,27 @@ def _process_new_content_package(item):
         item.update({"status": "retryable" if retryable else "ready", "result": result, "error": "" if not retryable else "LLM quota exhausted; sẽ tự retry khi quota khả dụng.", "completed_at": _now()})
         if not retryable:
             item.pop("regenerate_text", None)
-        if not retryable:
-            _apply_to_posts(item)
+
+
+def recover_abandoned_packages():
+    """Call only after acquiring the exclusive worker lease."""
+    with _LOCK:
+        items = _read(QUEUE_FILE, [])
+        changed = False
+        for item in items:
+            if item.get("status") != "running":
+                continue
+            if item.get("create_website_article") and not item.get("article_url"):
+                item.update({"status": "failed", "website_status": "failed",
+                             "website_error": "Lần tạo Website trước bị gián đoạn; kiểm tra CMS trước khi thử lại để tránh đăng trùng.",
+                             "error": "Cần đối soát Website sau khi worker dừng giữa chừng."})
+            else:
+                item.update({"status": "queued", "error": "Worker trước đã dừng; tiếp tục tạo nội dung."})
+            item["recovered_at"] = _now()
+            changed = True
+        if changed:
+            _write(QUEUE_FILE, items)
+    return changed
 
 
 def _worker_loop():
@@ -666,6 +701,7 @@ def _worker_loop():
     if not lease.acquire():
         return
     try:
+        recover_abandoned_packages()
         while True:
             lease.touch()
             result = process_content_packages_once()
