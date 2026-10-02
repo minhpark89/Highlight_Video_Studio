@@ -418,6 +418,32 @@ class WebsiteArticleService:
             raise WebsiteServiceError("B\u00e0i vi\u1ebft CMS ch\u01b0a ch\u1ee9a embed video g\u1ed1c")
         return {"success": True, "url": response.url, "embed": "youtube" if youtube_id else "html5"}
 
+    def verify_article_quality(self, article_url: str, *, minimum_words: int = 600,
+                               minimum_images: int = 3, expected_images=None) -> Dict[str, Any]:
+        """Verify the public page still contains the required editorial blocks."""
+        try:
+            response = requests.get(article_url, allow_redirects=True, timeout=self.cfg.timeout)
+        except requests.RequestException as exc:
+            raise WebsiteServiceError(f"KhÃ´ng xÃ¡c minh Ä‘Æ°á»£c cháº¥t lÆ°á»£ng bÃ i public: {exc}") from exc
+        if response.status_code != 200:
+            raise WebsiteServiceError(f"BÃ i public tráº£ HTTP {response.status_code}")
+        source = response.text or ""
+        summary_start = source.find("Original video summary")
+        video_start = source.find("Full Uncut Footage", summary_start)
+        if summary_start < 0 or video_start < 0:
+            raise WebsiteServiceError("BÃ i public thiáº¿u pháº§n tÃ³m táº¯t hoáº·c video gá»‘c")
+        article_section = source[summary_start:video_start]
+        images = re.findall(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\']', source, flags=re.IGNORECASE)
+        image_count = len(images)
+        words = len(re.findall(r"\b[A-Za-z]+\b", re.sub(r"<[^>]+>", " ", article_section)))
+        if expected_images and any(image not in images for image in expected_images):
+            raise WebsiteServiceError("BÃ i public thiáº¿u má»™t hoáº·c nhiá»u áº£nh minh há»a Ä‘Ã£ gá»­i")
+        if image_count < minimum_images:
+            raise WebsiteServiceError(f"BÃ i public chá»‰ cÃ³ {image_count} áº£nh, cáº§n {minimum_images}")
+        if words < minimum_words:
+            raise WebsiteServiceError(f"BÃ i public chá»‰ cÃ³ {words} tá»«, cáº§n {minimum_words}")
+        return {"success": True, "url": response.url, "word_count": words, "image_count": image_count}
+
     def publish_article(
         self,
         title: str,

@@ -10,6 +10,10 @@ try:
     HAS_CV2 = True
 except Exception:
     HAS_CV2 = False
+try:
+    from PIL import Image
+except Exception:
+    Image = None
 import subprocess
 import logging
 from pathlib import Path
@@ -270,8 +274,7 @@ def get_clip_metadata(clip_filename: str) -> dict:
                     and path.parent.resolve(strict=False) == (jobs_file.parent / "output").resolve(strict=False)
                     and str(path.resolve(strict=False)).lower() == requested_resolved)
         # A bare job clip name is meaningful only inside its own output directory.
-        return (requested.is_file()
-                and requested.parent.resolve(strict=False) == (jobs_file.parent / "output").resolve(strict=False)
+        return (requested.parent.resolve(strict=False) == (jobs_file.parent / "output").resolve(strict=False)
                 and path.name.lower() == requested_name and path.name == candidate)
 
     if jobs_file.exists():
@@ -295,6 +298,7 @@ def get_clip_metadata(clip_filename: str) -> dict:
                     meta["clip_end"] = c.get("end", c.get("end_time"))
                     meta["clip_title"] = c.get("title") or ""
                     meta["source_video_path"] = matched_job.get("video_path") or ""
+                    meta["description"] = matched_job.get("description") or ""
                     vt = (matched_job.get("video_title") or "").strip()
                     if vt and not re.search(r'^(video highlight|job_\d+|clip_\d+)', vt, re.IGNORECASE):
                         meta["video_title"] = vt
@@ -321,14 +325,15 @@ def get_clip_metadata(clip_filename: str) -> dict:
         meta["source_video_path"] = meta["long_video_path"]
 
     # 3. Tìm ngược sang crawled_videos.json để lấy title video thật
-    if (not meta["video_title"] or len(meta["video_title"]) < 10) and crawled_file.exists():
+    if crawled_file.exists():
         try:
             with open(crawled_file, "r", encoding="utf-8", errors="ignore") as f:
                 crawled = json.load(f)
                 for cv in crawled:
                     if (y_url and cv.get("url") == y_url) or (meta["youtube_id"] and cv.get("id") == meta["youtube_id"]):
-                        meta["video_title"] = cv.get("title") or meta["video_title"]
-                        meta["description"] = cv.get("description") or ""
+                        if not meta["video_title"] or len(meta["video_title"]) < 10:
+                            meta["video_title"] = cv.get("title") or meta["video_title"]
+                        meta["description"] = cv.get("description") or meta["description"]
                         break
         except Exception:
             pass
@@ -345,6 +350,52 @@ def get_clip_metadata(clip_filename: str) -> dict:
     meta["clean_title"] = meta["video_title"]
 
     return meta
+
+def _source_video_summary(meta: dict, title: str) -> str:
+    description = str(meta.get("description") or "").strip()
+    if description:
+        return description
+    ass_path = _runtime_data_root() / "temp" / f"{Path(str(meta.get('clip_filename') or '')).stem}.ass"
+    if ass_path.is_file():
+        try:
+            lines = []
+            seen = set()
+            for raw in ass_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if "Dialogue:" not in raw:
+                    continue
+                text = raw.split(",", 9)[-1]
+                text = re.sub(r"\{[^}]*\}", "", text).strip()
+                if text and text not in seen:
+                    seen.add(text)
+                    lines.append(text)
+            if lines:
+                return (f"The original recording is titled '{title}'. The clip transcript includes "
+                        "these source phrases: " + " ".join(lines[:80]))[:1800]
+        except OSError:
+            pass
+    youtube_id = extract_youtube_video_id(meta.get("youtube_id") or meta.get("youtube_url"))
+    if youtube_id:
+        try:
+            from youtube_transcript_api import YouTubeTranscriptApi
+            transcript = YouTubeTranscriptApi().fetch(youtube_id)
+            snippets = [str(item.text or "").strip() for item in transcript]
+            snippets = [snippet for snippet in snippets if snippet]
+            if snippets:
+                positions = (0, len(snippets) // 2, max(0, len(snippets) - 10))
+                excerpts = []
+                for position in positions:
+                    excerpt = " ".join(snippets[position:position + 8])[:360]
+                    if excerpt and excerpt not in excerpts:
+                        excerpts.append(excerpt)
+                return (f"The original video, titled '{title}', includes these transcript passages "
+                        "from the opening, middle and closing portions: " + " | ".join(excerpts))[:1800]
+        except Exception as exc:
+            logger.info("Original transcript unavailable: %s", type(exc).__name__)
+    return (
+        f"The original recording is titled '{title}'. No verified transcript or detailed description "
+        "was available, so this page keeps the summary limited to what the source itself can establish."
+    )
+
 
 def extract_youtube_video_id(value: str) -> str:
     """Extract a canonical YouTube video ID from a URL or raw ID."""
@@ -383,7 +434,14 @@ def _valid_image_file(path: str, *, landscape: bool = False) -> bool:
     if not path or not os.path.isfile(path) or os.path.getsize(path) < 256:
         return False
     if not HAS_CV2:
-        return True
+        if Image is None:
+            return False
+        try:
+            with Image.open(path) as image:
+                width, height = image.size
+                return width >= 160 and height >= 120 and (not landscape or width / height >= 1.45)
+        except Exception:
+            return False
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None or image.shape[0] < 120 or image.shape[1] < 160:
         return False
@@ -422,8 +480,34 @@ def _score_frame(frame) -> float:
 
 def select_smart_video_frame(video_path: str, clip_start=None, clip_end=None, output_path: str = "") -> str:
     """Choose a sharp, balanced 16:9 frame from the original source video."""
-    if not HAS_CV2 or not video_path or not os.path.exists(video_path):
+    if not video_path or not os.path.exists(video_path):
         return ""
+    if not HAS_CV2:
+        root = _runtime_data_root()
+        ffprobe = next((str(p) for p in (root / "bin" / "ffprobe.exe", HVS_DIR / "bin" / "ffprobe.exe") if p.is_file()), "ffprobe")
+        ffmpeg = next((str(p) for p in (root / "bin" / "ffmpeg.exe", HVS_DIR / "bin" / "ffmpeg.exe") if p.is_file()), "ffmpeg")
+        try:
+            info = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=width,height:format=duration", "-of", "json", str(video_path)],
+                capture_output=True, text=True, timeout=20, check=True)
+            payload = json.loads(info.stdout)
+            stream = (payload.get("streams") or [{}])[0]
+            width, height = int(stream.get("width") or 0), int(stream.get("height") or 0)
+            if not height or width / height < 1.45:
+                return ""
+            duration = float((payload.get("format") or {}).get("duration") or 0)
+            start = float(clip_start) if clip_start is not None else duration * 0.35
+            end = float(clip_end) if clip_end is not None else duration * 0.65
+            timestamp = max(0.0, min((start + end) / 2, max(0.0, duration - 0.1)))
+            destination = Path(output_path or (HVS_DIR / "temp" / "smart_hero_frame.jpg"))
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run([ffmpeg, "-y", "-ss", str(timestamp), "-i", str(video_path),
+                "-frames:v", "1", "-q:v", "2", str(destination)],
+                capture_output=True, timeout=45, check=True)
+            return str(destination) if _valid_image_file(str(destination), landscape=True) else ""
+        except (OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+            logger.warning("Original source frame extraction failed: %s", type(exc).__name__)
+            return ""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         cap.release()
@@ -510,15 +594,10 @@ def generate_llm_hook_image(video_title: str, model_override: str = "") -> str:
         logger.info("Use video frame fallback for article hook image")
         return ""
 
-    prompt = f"""A viral YouTube thumbnail and article hook image for a dramatic video: "{video_title}".
-Exact required visual elements matching viral clickbait standard:
-1. Scene: High-stakes, intense cinematic night police bodycam or dramatic street confrontation. Rain on asphalt with glowing emergency red and blue police cruiser strobe lights in background.
-2. In the top half, MASSIVE 3D bold sensational text in thick condensed uppercase red font with heavy white stroke outline: 'WILDEST TAKEDOWNS!'
-3. Directly beneath the red text, a bright yellow rectangular badge with bold black text: "You Won't Believe This".
-4. A bright glowing neon red circular outline highlighting the critical focal action on the ground.
-5. A bold curved red 3D arrow pointing directly at the glowing red circle.
-6. In top-left corner, a sleek camera viewfinder overlay icon: '● REC BODYCAM' with white corner brackets.
-7. Ultra-high resolution, photorealistic, cinematic lighting, 16:9 widescreen format."""
+    prompt = f"""Create a 16:9 landscape editorial thumbnail for the original video titled "{video_title}".
+Use only the subject implied by this title. Do not invent real people, events, outcomes, police scenes or bodycam footage unless the title specifically identifies them.
+Use clear, readable headline typography based on the title, strong contrast, and an engaging visual composition.
+The image should work as a website article hero. Do not include false claims or unrelated stock scenes."""
 
     headers = _llm_headers(api_key)
     temp_dir = HVS_DIR / "temp"
@@ -648,8 +727,23 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str) -> t
 
     images = []
     if source_path:
-        # Never silently crop the short portrait highlight into a fake landscape image.
-        for index, (start, end) in enumerate(((meta.get("clip_start"), meta.get("clip_end")), (None, None))):
+        # Sample three different windows from the horizontal original video.
+        # The portrait Reel is deliberately excluded above.
+        try:
+            clip_start = float(meta.get("clip_start"))
+            clip_end = float(meta.get("clip_end"))
+            if clip_end <= clip_start:
+                raise ValueError("invalid clip window")
+            step = (clip_end - clip_start) / 3.0
+            windows = [(clip_start + i * step, clip_start + (i + 1) * step) for i in range(3)]
+        except (TypeError, ValueError):
+            cap = cv2.VideoCapture(source_path) if HAS_CV2 else None
+            duration = (cap.get(cv2.CAP_PROP_FRAME_COUNT) / cap.get(cv2.CAP_PROP_FPS)
+                        if cap and cap.isOpened() and cap.get(cv2.CAP_PROP_FPS) else 0)
+            if cap:
+                cap.release()
+            windows = [(duration * i / 3, duration * (i + 1) / 3) for i in range(3)] if duration else []
+        for index, (start, end) in enumerate(windows):
             frame = select_smart_video_frame(source_path, start, end,
                 str(HVS_DIR / "temp" / f"source_frame_{Path(clip_filename).stem}_{index}.jpg"))
             if not frame:
@@ -661,7 +755,7 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str) -> t
             except Exception as exc:
                 logger.warning("Original-source frame upload failed: %s", exc)
     if not hero and images:
-        hero = images[0]
+        hero = images.pop(0)
     if not hero and youtube_id:
         hero = f"https://i.ytimg.com/vi/{youtube_id}/hqdefault.jpg"
     if not hero:
@@ -670,8 +764,8 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str) -> t
         # Keep three real, non-empty visual references even when the original
         # horizontal source is unavailable. These are stable YouTube thumbnails.
         variants = [
-            f"https://i.ytimg.com/vi/{youtube_id}/maxresdefault.jpg",
             f"https://i.ytimg.com/vi/{youtube_id}/hqdefault.jpg",
+            f"https://i.ytimg.com/vi/{youtube_id}/mqdefault.jpg",
             f"https://i.ytimg.com/vi/{youtube_id}/0.jpg",
         ]
         images = (images + [url for url in variants if url not in images and url != hero])[:2]
@@ -1022,7 +1116,7 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
         raise WebsiteServiceError("Article requires three distinct source images before CMS publication")
     seo_title, body_html = generate_deep_article_content(
         video_title, hero_img, body_imgs, video_stream_url=video_stream_url, youtube_id=youtube_id,
-        source_summary=meta.get("description") or "",
+        source_summary=_source_video_summary(meta, video_title),
     )
 
     # 6. Publish lên CMS qua WebsiteArticleService kèm Hero Image (Hook Thumbnail)
@@ -1039,5 +1133,7 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
         raise WebsiteServiceError("CMS không xác nhận bài viết đã được tạo")
     svc.verify_article(article_url)
     svc.verify_article_embed(article_url, youtube_id=youtube_id, video_stream_url=video_stream_url)
+    svc.verify_article_quality(article_url, minimum_words=600, minimum_images=3,
+                               expected_images=[hero_img, *body_imgs[:2]])
 
     return article_url, hero_img

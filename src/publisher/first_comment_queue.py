@@ -32,12 +32,13 @@ def _save_unlocked(items):
 
 
 def enqueue_first_comment(object_id, page_token, comment_text, due_at, token_id=None, post_id=None):
+    text = str(comment_text or "").strip()
     item = {
         "id": f"fc_{uuid.uuid4().hex[:12]}",
         "object_id": str(object_id),
         "page_token": str(page_token),
         "token_id": str(token_id or ""),
-        "comment_text": str(comment_text),
+        "comment_text": text,
         "due_at": int(due_at),
         "attempts": 0,
         "status": "pending",
@@ -67,12 +68,15 @@ def process_due_first_comments(poster, now=None):
         for item in items:
             if item.get("status") != "pending" or int(item.get("due_at") or 0) > current:
                 continue
-            result = poster.post_first_comment(
-                item.get("object_id"),
-                item.get("page_token"),
-                item.get("comment_text"),
-                token_id=item.get("token_id") or None,
-            )
+            try:
+                result = poster.post_first_comment(
+                    item.get("object_id"),
+                    item.get("page_token"),
+                    item.get("comment_text"),
+                    token_id=item.get("token_id") or None,
+                )
+            except Exception as exc:
+                result = {"success": False, "error": str(exc)}
             item["attempts"] = int(item.get("attempts") or 0) + 1
             if result.get("success"):
                 item["status"] = "posted"

@@ -3,6 +3,23 @@ from unittest import mock
 
 
 class YouTubeEmbedPublishTests(unittest.TestCase):
+    def test_public_article_quality_requires_expected_images_and_summary(self):
+        from core.website_article_service import WebsiteArticleService, WebsiteServiceError
+        service = WebsiteArticleService.__new__(WebsiteArticleService)
+        service.cfg = mock.Mock(timeout=3)
+        article = ("<section><h2>Original video summary</h2>" + ("source context " * 620) +
+                   "<img src='https://img.test/hero.jpg'><img src='https://img.test/one.jpg'>" +
+                   "<img src='https://img.test/two.jpg'>Full Uncut Footage</section>")
+        with mock.patch("core.website_article_service.requests.get", return_value=mock.Mock(
+            status_code=200, url="https://example.test/blog/article", text=article
+        )):
+            result = service.verify_article_quality("https://example.test/blog/article",
+                expected_images=["https://img.test/hero.jpg", "https://img.test/one.jpg", "https://img.test/two.jpg"])
+            self.assertEqual(result["image_count"], 3)
+            with self.assertRaises(WebsiteServiceError):
+                service.verify_article_quality("https://example.test/blog/article",
+                    expected_images=["https://img.test/missing.jpg"])
+
     def test_existing_cms_article_with_verified_embed_is_reused_without_post(self):
         from src.publisher import website_publisher as publisher
 

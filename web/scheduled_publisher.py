@@ -316,7 +316,11 @@ def _process_scheduled_posts_once(
         page_token = post.get("token")
         title = post.get("title", "")
         content = post.get("content", "")
-        first_comment = post.get("first_comment", "")
+        first_comment = str(post.get("first_comment") or "").strip()
+        article_url = str(post.get("article_url") or "").strip()
+        if article_url and article_url not in first_comment:
+            first_comment = f"{first_comment}\n{article_url}".strip()
+            post["first_comment"] = first_comment
         video_error = "Video file unavailable at publish time"
         try:
             video_path = scheduled_video_path(OUTPUT_DIR, clip_filename)
@@ -459,13 +463,23 @@ def _process_scheduled_posts_once(
                     else:
                         queued = enqueue_first_comment(
                             facebook_id, page_token, first_comment,
-                            int(current_dt.timestamp()) + 30, post_id=post_id,
+                            int(current_dt.timestamp()) + 30,
+                            token_id=post.get("token_id"), post_id=post_id,
                         )
-                        post["first_comment_status"] = "pending_retry"
+                        post["first_comment_status"] = "pending_retry" if queued.get("success") else "queue_failed"
                         post["first_comment_error"] = comment_result.get("error", "Không thể đăng First Comment")
                         post["first_comment_queue_id"] = queued.get("queue_id")
                 except Exception as exc:
-                    post["first_comment_status"] = "generation_failed"
+                    try:
+                        queued = enqueue_first_comment(
+                            facebook_id, page_token, first_comment,
+                            int(current_dt.timestamp()) + 30,
+                            token_id=post.get("token_id"), post_id=post_id,
+                        )
+                        post["first_comment_status"] = "pending_retry" if queued.get("success") else "queue_failed"
+                        post["first_comment_queue_id"] = queued.get("queue_id")
+                    except Exception:
+                        post["first_comment_status"] = "queue_failed"
                     post["first_comment_error"] = sanitize_error(exc)
         except Exception:
             post.update({
@@ -475,7 +489,13 @@ def _process_scheduled_posts_once(
                 "error": "Publish started but outcome is unknown; reconcile on Facebook before retrying.",
             })
 
-    if claimed_posts or recovered or reconciled or queue_result.get("changed"):
+    removed = 0
+    for published_post in posts:
+        if published_post.get("status") == "published" and not published_post.get("local_video_deleted_at"):
+            if remove_posted_clip_file(published_post.get("media_file") or published_post.get("clip_filename"), posts):
+                published_post["local_video_deleted_at"] = current_dt.strftime("%Y-%m-%d %H:%M:%S")
+                removed += 1
+    if claimed_posts or recovered or reconciled or queue_result.get("changed") or removed:
         save_posts(posts)
     failed = sum(1 for post in claimed_posts if post.get("status") == "failed")
     return {"claimed": len(claimed_posts), "recovered": recovered, "failed": failed, "queue": queue_result, "posts": posts}

@@ -96,7 +96,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.1.4"
 
 @app.after_request
 def add_header(response):
@@ -2144,6 +2144,17 @@ def api_publish_reel():
 
     if pages_updated:
         page_manager.save_pages(pages)
+    if not schedule_time and target_page_ids and len(results) == len(target_page_ids) and all(r.get("success") for r in results):
+        try:
+            from web.scheduled_publisher import remove_posted_clip_file
+            current_posts = load_posts()
+            if remove_posted_clip_file(clip_filename, current_posts):
+                for post in current_posts:
+                    if str(post.get("media_file") or "") == clip_filename and post.get("status") == "published":
+                        post["local_video_deleted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                save_posts(current_posts)
+        except Exception:
+            pass
     if schedule_time and success_count:
         save_posts(scheduled_posts)
         prioritize_scheduled_packages(scheduled_package_ids)
@@ -2376,6 +2387,9 @@ def api_get_posts():
             post["local_video_url"] = f"/api/clips/play/{media_file}"
             post["local_download_url"] = f"/api/clips/play/{media_file}?download=1"
             post["local_video_available"] = (OUTPUT_DIR / Path(media_file).name).is_file()
+            post["local_video_removed_after_publish"] = (
+                post.get("status") == "published" and not post["local_video_available"]
+            )
         post["article_url"] = str(post.get("article_url") or post.get("website_url") or "").strip()
         package = post.get("content_package") if isinstance(post.get("content_package"), dict) else {}
         item_embed = post.get("website_embed_status") or post.get("embed_status") or package.get("embed_status") or ""

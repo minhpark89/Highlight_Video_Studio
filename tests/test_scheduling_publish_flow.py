@@ -892,7 +892,7 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
         self.assertEqual(saved["status"], "published")
         self.assertEqual(saved["post_fb_id"], "video-confirmed")
         self.assertFalse(saved["retryable"])
-        self.assertEqual(saved["first_comment_status"], "generation_failed")
+        self.assertEqual(saved["first_comment_status"], "pending_retry")
         self.assertIn("ledger unavailable", saved["ledger_error"])
         poster.publish_reel.assert_called_once()
 
