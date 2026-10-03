@@ -5718,7 +5718,7 @@
   // ================= SCHEDULER WORKER HEALTH & AUTO REFRESH =================
   let postsAutoRefreshTimer = null;
   let postsTableLoading = false;
-  const postsOverdueIds = new Set();
+  const postsOverdue = new Map();
   let schedulerCycleActive = false;
 
   async function refreshSchedulerStatus() {
@@ -5749,8 +5749,10 @@
         textEl.style.color = '#ef4444';
       }
 
-      postsOverdueIds.clear();
-      (st.overdue_posts || []).forEach(op => op.status === 'scheduled' && postsOverdueIds.add(op.id));
+      postsOverdue.clear();
+      (st.overdue_posts || []).forEach(op => {
+        if (op.status === 'scheduled') postsOverdue.set(op.id, Math.max(0, Math.round((op.late_seconds || 0) / 60)));
+      });
 
       if (bannerEl) {
         if (overdueCount > 0) {
@@ -5921,11 +5923,12 @@
         } else if (p.status === 'publishing') {
           statusBadge = '<span style="background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-arrow-repeat spin"></i> Đang đăng...</span>';
         } else {
-          const isOverdue = postsOverdueIds.has(p.id) && p.status === 'scheduled';
+          const isOverdue = postsOverdue.has(p.id) && p.status === 'scheduled';
+          const lateMinutes = postsOverdue.get(p.id) || 0;
           statusBadge = isOverdue
             ? schedulerCycleActive
-              ? '<span style="color:#fbbf24;font-size:11px;">Đang chờ bài trước hoàn tất</span>'
-              : `<span style="background: rgba(239,68,68,0.2); color: #fca5a5; border: 1px solid rgba(239,68,68,0.6); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-alarm-fill"></i> QUÁ HẠN · chưa đăng</span><div style="margin-top:4px;"><button onclick="runDuePostsNow()" style="background:#ef4444;color:#fff;border:none;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">Đăng ngay</button></div>`
+              ? `<span style="color:#fbbf24;font-size:11px;"><i class="bi bi-hourglass-split"></i> Trễ ${lateMinutes} phút · đang chờ worker</span>`
+              : `<span style="background: rgba(239,68,68,0.2); color: #fca5a5; border: 1px solid rgba(239,68,68,0.6); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-alarm-fill"></i> Trễ ${lateMinutes} phút · chưa đăng</span><div style="margin-top:4px;"><button onclick="runDuePostsNow()" style="background:#ef4444;color:#fff;border:none;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">Đăng ngay</button></div>`
             : '<span style="background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-clock-history"></i> Đang hẹn lịch</span>';
         }
 
