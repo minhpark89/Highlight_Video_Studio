@@ -82,6 +82,12 @@ def next_paced_due_post(posts, now, *, global_seconds=90, token_seconds=900):
             last_by_token[token_id] = max(last_by_token.get(token_id, started), started)
         scheduled = parsed(post.get("scheduled_time"))
         if post.get("status") == "scheduled" and scheduled is not None and scheduled <= now:
+            if post.get("auto_first_comment") or post.get("type") == "reel":
+                url = str(post.get("article_url") or "").strip()
+                comment = str(post.get("first_comment") or "").strip()
+                website_ready = post.get("website_status") in (None, "", "ready")
+                if not (url and website_ready and url in comment):
+                    continue
             due.append((scheduled, str(post.get("id") or ""), post))
     if last_global is not None and now - last_global < timedelta(seconds=global_seconds):
         return None

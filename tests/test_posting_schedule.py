@@ -25,3 +25,15 @@ def test_backlog_releases_one_post_after_global_and_token_cooldowns():
     assert next_paced_due_post(posts, now) is None
     assert next_paced_due_post(posts, datetime(2026, 10, 3, 10, 2, 0))["id"] == "b"
     assert next_paced_due_post(posts, datetime(2026, 10, 3, 10, 15, 0))["id"] == "a"
+
+
+def test_unprepared_website_does_not_starve_other_due_pages():
+    now = datetime(2026, 10, 3, 10, 1, 0)
+    posts = [
+        {"id": "waiting", "status": "scheduled", "token_id": "a", "type": "reel",
+         "scheduled_time": "2026-10-03 09:00:00", "website_status": "pending_generation"},
+        {"id": "ready", "status": "scheduled", "token_id": "b", "type": "reel",
+         "scheduled_time": "2026-10-03 09:01:00", "website_status": "ready",
+         "article_url": "https://example.test/story", "first_comment": "https://example.test/story"},
+    ]
+    assert next_paced_due_post(posts, now)["id"] == "ready"
