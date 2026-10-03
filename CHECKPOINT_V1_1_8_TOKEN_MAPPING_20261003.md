@@ -20,6 +20,15 @@
 
 ## Verification
 
-- `113 passed` across token/page allocation, scheduling, and posting pacing tests.
+- `138 passed, 10 subtests passed` in the focused release guard, token/Page, scheduling, and posting pacing suites. Full installer build gate also passed its configured groups: 42 + 25 + 55 + 61 tests.
 - Live dry run: 100 Pages, effective limit 4, 31 active tokens.
 - Live assignment: 100 Pages, distribution 24?3 and 7?4; mapping health 100 verified, 31 mapped credentials, 0 unhealthy.
+
+## GitHub release
+
+- Source commit: `6cd87e5` on `release/v1.1.8`.
+- Tag: `v1.1.8-token-fix1`.
+- Installer: `Highlight_Desktop_Test_Setup_v1.1.8-token-fix1.exe`, 703229440 bytes.
+- SHA-256: `76b788ae77cd5d7fbb766619dd80cb082e7b9cce30bd0d7e69ddff3be080a6f1`.
+- Release asset verified as `uploaded` with matching size through GitHub API.
+- Live Meta publish remains to be validated by the operator's test; Meta can still reject a valid token/Page due to platform policy.
