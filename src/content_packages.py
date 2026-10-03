@@ -17,6 +17,7 @@ from multi_pc.json_io import replace_with_retry
 from multi_pc.data_root import ProcessLease, canonical_data_root
 from src.llm_response import chat_model_unavailable, chat_stream_incomplete, json_from_chat_response
 from src.text_llm_diagnostics import chat_endpoint, chat_failure
+from src.fallback_comments import fallback_first_comment
 
 DATA_ROOT = canonical_data_root()
 QUEUE_FILE = DATA_ROOT / "data" / "content_packages.json"
@@ -68,11 +69,7 @@ def fallback_package(title: str, summary: str = "", article_url: str = "") -> di
         "<h3>What remains open</h3><p>This no-LLM overview deliberately does not invent a result, a quote, a location or a cause. The full video is the reference for judging the selected moment; the article is a viewing guide rather than a reported account. If a decisive detail is not visible, describe the uncertainty instead of treating an attractive narrative as evidence.</p>"
     )
     link = str(article_url or "").strip()
-    comment = "👀 Watch the setup again—the detail just before the turning point explains everything."
-    if link:
-        comment += f" Full breakdown: {link}"
-    else:
-        comment = ""  # No First Comment without a newly published article.
+    comment = fallback_first_comment(clean, link)
     caption = f"🔥 {clean}\n\n{lead}\n\nWhat detail did you notice first?\n\n#highlight #viral #trending #mustwatch"
     return {
         "hero_title": hero,

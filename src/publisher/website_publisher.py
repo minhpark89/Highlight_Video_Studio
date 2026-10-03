@@ -989,10 +989,8 @@ def generate_curiosity_comment_with_llm(video_title: str, article_url: str, enab
     Sinh First Comment gây tò mò (Curiosity Gap) bằng AI LLM (Gemini-3-Flash) dẫn link web.
     Fallback về mẫu chuẩn cố định nếu tắt LLM hoặc lỗi mạng.
     """
-    fallback_comment = (
-        f"🔥 Watch the full uncut footage and breakdown here: {article_url}\n"
-        f"👉 Scroll down the article to stream the complete high-definition video!"
-    )
+    from src.fallback_comments import fallback_first_comment
+    fallback_comment = fallback_first_comment(video_title, article_url)
 
     if not enable_llm:
         return fallback_comment
