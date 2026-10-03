@@ -13,6 +13,7 @@ tokens are written or printed.
 
 import re
 import json
+import collections
 import tempfile
 import unittest
 from pathlib import Path
@@ -392,6 +393,36 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(rebound.get_json()["page_ids"], ["PAGE_A", "PAGE_B"])
         self.assertEqual(full.call_count, 0)
 
+    def test_group_save_uses_cached_bindings_and_rejects_duplicate_name(self):
+        self._seed_token()
+        self.pages.save_pages([{"page_id": "PAGE_A", "token_bindings": {"tok_test_1": {"status": "VERIFIED"}}}])
+        with mock.patch.object(self.vault, "refresh_token_pages") as graph:
+            first = self.client.post("/api/token-groups", json={
+                "name": "Pool", "token_ids": ["tok_test_1"], "sync_pages": False,
+            })
+            second = self.client.post("/api/token-groups", json={
+                "name": " pool ", "token_ids": ["tok_test_1"], "sync_pages": False,
+            })
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.get_json()["group"]["page_ids"], ["PAGE_A"])
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(len(self.appmod.load_token_groups()), 1)
+        graph.assert_not_called()
+
+    def test_bulk_delete_refuses_assigned_tokens_and_cleans_groups(self):
+        self._seed_token()
+        self.vault._save(self.vault.list_tokens(mask=False) + [{"id": "tok_other", "name": "Other", "token": "EAAB_other", "status": "ACTIVE"}])
+        self.pages.save_pages([{"page_id": "PAGE_A", "token_id": "tok_test_1", "token_bindings": {"tok_test_1": {}, "tok_other": {}}}])
+        self.appmod.save_token_groups([{"id": "g", "name": "Pool", "token_ids": ["tok_test_1", "tok_other"], "page_source_token_id": "tok_other"}])
+        refused = self.client.post("/api/tokens/bulk-delete", json={"token_ids": ["tok_test_1", "tok_other"]})
+        self.assertEqual(refused.status_code, 409)
+        self.assertEqual(len(self.vault.list_tokens(mask=False)), 2)
+        deleted = self.client.post("/api/tokens/bulk-delete", json={"token_ids": ["tok_other"]})
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(self.appmod.load_token_groups()[0]["token_ids"], ["tok_test_1"])
+        self.assertEqual(self.appmod.load_token_groups()[0]["page_source_token_id"], "")
+        self.assertNotIn("tok_other", self.pages.list_pages()[0]["token_bindings"])
+
     def test_token_group_rebind_rejects_unbound_group(self):
         self._seed_token()
         self.appmod.save_token_groups([{"id": "seed", "name": "Seed", "token_ids": []}])
@@ -658,6 +689,38 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json()["count"], 1)
         self.assertEqual(self.pages.list_pages()[0]["token_id"], "tok_1")
+
+    def test_31_tokens_balance_100_pages_as_three_or_four_each(self):
+        from src.publisher.meta_preflight import preflight_pages
+        tokens = [{"id": f"tok_{i}", "name": "Imported label", "owner_name": f"Autopost {i}",
+                   "token": f"EAAB_fixture_{i}", "status": "ACTIVE"} for i in range(31)]
+        self.vault._save(tokens)
+        pages = []
+        for index in range(100):
+            page_id = f"PAGE_{index}"
+            bindings = {token["id"]: {
+                "token_id": token["id"], "token_name": "Imported label",
+                "page_token": f"page_{index}_{token['id']}", "verified_page_id": page_id,
+                "credential_fingerprint": self.pages.credential_fingerprint(token["token"]),
+                "tasks": ["CREATE_CONTENT"], "status": "VERIFIED",
+            } for token in tokens}
+            pages.append({"page_id": page_id, "token_id": "old_deleted_id", "token_name": "Bm1",
+                          "token_bindings": bindings, "group_ids": []})
+        self.pages.save_pages(pages)
+        self.appmod.save_token_groups([{"id": "new", "name": "NEW", "token_ids": [t["id"] for t in tokens],
+                                        "page_ids": [p["page_id"] for p in pages]}])
+        response = self.client.post("/api/pages/batch_assign_token", json={
+            "token_group_id": "new", "max_pages_per_token": 3,
+        })
+        self.assertEqual(response.status_code, 200, response.get_json())
+        body = response.get_json()
+        self.assertEqual(body["count"], 100)
+        self.assertEqual(body["requested_limit"], 3)
+        self.assertEqual(body["effective_limit"], 4)
+        self.assertEqual(collections.Counter(body["loads"].values()), {3: 24, 4: 7})
+        assigned = self.pages.list_pages()
+        self.assertEqual({p["token_name"] for p in assigned}, {t["owner_name"] for t in tokens})
+        self.assertTrue(preflight_pages(assigned, self.vault, self.pages)["ok"])
 
     def test_group_allocation_respects_page_limit_without_partial_write(self):
         token = {"id": "tok_1", "name": "T1", "token": "EAAB_one", "status": "ACTIVE"}

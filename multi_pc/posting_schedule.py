@@ -39,8 +39,8 @@ def paced_offsets_by_token(token_ids, *, global_seconds=90, token_seconds=900):
     """
     from collections import deque
 
-    global_seconds = max(1, int(global_seconds))
-    token_seconds = max(global_seconds, int(token_seconds))
+    global_seconds = max(0, int(global_seconds))
+    token_seconds = max(1, int(token_seconds))
     buckets = {}
     for index, token_id in enumerate(token_ids):
         buckets.setdefault(str(token_id), deque()).append(index)
@@ -91,11 +91,15 @@ def next_paced_due_post(posts, now, *, global_seconds=90, token_seconds=900):
                     waiting.append((scheduled, str(post.get("id") or ""), post))
                     continue
             due.append((scheduled, str(post.get("id") or ""), post))
-    if last_global is not None and now - last_global < timedelta(seconds=global_seconds):
+    if global_seconds and last_global is not None and now - last_global < timedelta(seconds=global_seconds):
         return None
     for _, _, post in sorted(due, key=lambda item: (item[0], item[1])):
         previous = last_by_token.get(str(post.get("token_id") or ""))
-        if previous is None or now - previous >= timedelta(seconds=token_seconds):
+        try:
+            gap = max(1, int(post.get("token_gap_seconds") or token_seconds))
+        except (TypeError, ValueError):
+            gap = token_seconds
+        if previous is None or now - previous >= timedelta(seconds=gap):
             return post
     # Preserve the old worker's diagnostic/status updates when there is no
     # publish-ready work; a waiting row must not starve a ready Page.

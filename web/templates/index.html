@@ -1408,6 +1408,8 @@
               </div>
             </div>
 
+            <div id="token-allocation-message" style="grid-column:1/-1;color:#fbbf24;font-size:12px;display:none"></div>
+
             <!-- Box 3: Số bài chạy song song trên 1 trang -->
             <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
               <div>
@@ -1425,9 +1427,16 @@
             </div>
           </div>
             <div id="loha-token-group-pills" style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px;" aria-label="Token groups"></div>
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+              <button class="btn btn-secondary btn-sm" onclick="setAllTokenChecks(true)">Chọn tất cả</button>
+              <button class="btn btn-secondary btn-sm" onclick="setAllTokenChecks(false)">Bỏ tất cả</button>
+              <button class="btn btn-outline btn-sm" onclick="bulkDeleteTokens()" style="color:#f87171">Xóa token đã chọn</button>
+              <span id="token-selected-count" style="color:#94a3b8;font-size:12px">0 token đã chọn</span>
+            </div>
             <table class="table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;">
               <thead>
                 <tr style="background: rgba(15, 23, 42, 0.85); border-bottom: 2px solid var(--border); color: #94a3b8; font-weight: 700;">
+                  <th style="padding: 12px 16px; width: 50px;"><input type="checkbox" id="token-select-all" onchange="setAllTokenChecks(this.checked)" aria-label="Chọn tất cả token"></th>
                   <th style="padding: 12px 16px; width: 50px;">#</th>
                   <th style="padding: 12px 16px;">Tên Token</th>
                   <th style="padding: 12px 16px;">Mã Token (Masked)</th>
@@ -3819,13 +3828,13 @@
             <input type="checkbox" class="tgrp-token-check" value="${t.id}" style="width: 15px; height: 15px; accent-color: #f59e0b;">
             <span><b>#${idx+1} ${t.name}</b> <small style="color: #64748b;">(${t.token_masked || 'EAAayhOu...'})</small></span>
           </div>
-          <span class="badge" style="background: rgba(16,185,129,0.15); color: #34d399; font-size: 9.5px;">ACTIVE</span>
+          <span class="badge" style="color: ${t.status === 'ACTIVE' ? '#34d399' : '#f87171'}; font-size: 9.5px;">${t.status === 'ACTIVE' ? 'ACTIVE' : 'ERROR'}</span>
         </label>
       `).join('');
     }
 
-    await loadTokenGroupsList();
     m.style.display = 'flex';
+    loadTokenGroupsList();
   }
 
   function closeTokenGroupModal() {
@@ -3909,6 +3918,8 @@
   }
 
   async function submitCreateTokenGroup() {
+    const saveButton = document.querySelector('#modal-token-group button[onclick="submitCreateTokenGroup()"]');
+    if (saveButton?.disabled) return;
     const name = document.getElementById('tgrp-input-name')?.value.trim();
     const strategy = document.getElementById('tgrp-input-strategy')?.value || 'least_recently_used';
     const pageSourceTokenId = document.getElementById('tgrp-page-source-token')?.value || '';
@@ -3923,10 +3934,11 @@
       return;
     }
     try {
+      if (saveButton) { saveButton.disabled = true; saveButton.dataset.oldLabel = saveButton.innerHTML; saveButton.textContent = "Saving..."; }
       const res = await fetch('/api/token-groups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, strategy, token_ids: tokenIds, page_source_token_id: pageSourceTokenId, sync_pages: true })
+        body: JSON.stringify({ name, strategy, token_ids: tokenIds, page_source_token_id: pageSourceTokenId, sync_pages: false })
       });
       const data = await res.json();
       if (res.ok && data.success) {
@@ -3938,7 +3950,7 @@
       }
     } catch (e) {
       alert('Lỗi kết nối tạo nhóm token: ' + e.message);
-    }
+    } finally { if (saveButton) { saveButton.disabled = false; saveButton.innerHTML = saveButton.dataset.oldLabel || "Save"; } }
   }
 
   async function deleteTokenGroup(gid, gname) {
@@ -4029,13 +4041,37 @@
       });
       const result = await res.json();
       if (!res.ok || !result.success) {
-        const blocked = (result.blocked || []).map(item => item.page_id || item).join(', ');
-        alert((result.error || 'Allocation blocked') + (blocked ? `\nPages needing a verified binding: ${blocked}` : ''));
+        let summary = result.error || 'Kh?ng th? g?n Page.';
+        if (result.code === 'token_capacity') {
+          summary = `${result.selected_pages || '?'} Page cần phân bổ; ${result.eligible_tokens || 0} token có mapping hợp lệ. Giới hạn ${maxPages} Page/token không đủ; cần ít nhất ${result.minimum_limit || '?'} Page/token.`;
+        } else if (result.blocked_count) {
+          summary += ` Có ${result.blocked_count} Page thiếu mapping hợp lệ.`;
+        }
+        const message = document.getElementById('token-allocation-message');
+        if (message) {
+          message.textContent = summary;
+          if (result.code === 'token_capacity' && result.minimum_limit && result.minimum_limit <= 50) {
+            const retry = document.createElement('button');
+            retry.type = 'button'; retry.className = 'btn btn-sm btn-primary';
+            retry.style.marginLeft = '10px';
+            retry.textContent = `Gán lại với ${result.minimum_limit} Page/token`;
+            retry.onclick = () => {
+              document.getElementById('pages-per-token-input').value = result.minimum_limit;
+              rebalanceTokenPageAllocation();
+            };
+            message.appendChild(retry);
+          }
+          message.style.display = 'block';
+        }
+        else showToast(summary);
         return;
       }
-      showToast(`Đã gán ${result.count} Page, tối đa ${maxPages} Page/Token bằng mapping đã xác thực.`);
+      showToast(`Đã gán ${result.count} Page cho ${result.active_tokens_used} token; tối đa ${result.effective_limit} Page/token bằng mapping đã xác thực.`);
       await Promise.all([loadTokensOnly(), loadTokensAndPages()]);
-    } catch (err) { alert('Allocation request failed: ' + err.message); }
+    } catch (err) {
+      const message = document.getElementById('token-allocation-message');
+      if (message) { message.textContent = 'Không thể kết nối để gán Page: ' + err.message; message.style.display = 'block'; }
+    }
     finally { if (button) { button.disabled = false; button.innerHTML = oldLabel; } }
   }
 
@@ -4056,7 +4092,6 @@
   }
 
   async function loadTokensOnly() {
-    await Promise.all([loadTokenGroupsPills(), loadTokenAllocationGroups()]);
     try {
       const [resTok, resGrp] = await Promise.all([
         fetch('/api/tokens'),
@@ -4090,7 +4125,7 @@
       if (!tbody) return;
 
       if (tokens.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #64748b; padding: 40px;">Chưa có Token nào. Hãy bấm "+ Thêm Token Mới" ở trên!</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #64748b; padding: 40px;">Chưa có Token nào. Hãy bấm "+ Thêm Token Mới" ở trên!</td></tr>';
         return;
       }
 
@@ -4100,17 +4135,18 @@
         const tName = t.name || `AutoPool ${idx + 1}`;
         const pagesCount = t.pages_count || 0;
         const threads = t.max_threads || 10;
-        const statusBadge = `<span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #34d399; font-size: 11px; padding: 4px 8px; border: 1px solid rgba(16, 185, 129, 0.3);"><i class="bi bi-shield-check"></i> HOẠT ĐỘNG (VĨNH VIỄN)</span>`;
+        const statusBadge = t.status === "ACTIVE" ? `<span class="badge" style="color:#34d399">ACTIVE</span>` : `<span class="badge" style="color:#f87171" title="${escapeHtml(t.error_msg || 'Meta rejected')}">ERROR</span>`;
 
         rows += `
           <tr style="border-bottom: 1px solid var(--border); transition: background 0.15s ease;" onmouseover="this.style.background='rgba(255,255,255,0.02)'" onmouseout="this.style.background='transparent'">
+            <td style="padding:12px 16px"><input type="checkbox" class="token-row-check" value="${escapeHtml(t.id)}" onchange="updateTokenSelectedCount()"></td>
             <td style="padding: 12px 16px; color: #64748b; font-weight: 700;">${idx + 1}</td>
             <td style="padding: 12px 16px;">
               <div style="font-weight: 800; font-size: 13.5px; color: #fff; display: flex; align-items: center; gap: 8px;">
                 <i class="bi bi-key-fill" style="color: #f59e0b;"></i>
                 <span>${tName}</span>
               </div>
-              <div style="font-size: 11px; color: #64748b;">ID: ${t.id || 'system_user'}</div>
+              <div style="font-size: 11px; color: #64748b;">${t.identity_verified ? 'Meta đã xác minh' : 'Chưa xác minh tên với Meta'} · Nhãn nhập: ${escapeHtml(t.operator_label || '')} · ID: ${t.id || 'system_user'}</div>
             </td>
             <td style="padding: 12px 16px;">
               <code style="font-family: monospace; font-size: 12px; color: #f59e0b; background: rgba(245, 158, 11, 0.1); padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(245, 158, 11, 0.2);">${masked}</code>
@@ -4140,10 +4176,13 @@
       });
 
       tbody.innerHTML = rows;
+      updateTokenSelectedCount();
+      loadTokenGroupsPills();
+      loadTokenAllocationGroups();
     } catch (e) {
       console.error('Lỗi loadTokensOnly:', e);
       const tbody = document.getElementById('tokens-table-body');
-      if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="color: #ef4444; padding: 20px; text-align: center;">Lỗi tải token: ${e.message}</td></tr>`;
+      if (tbody) tbody.innerHTML = `<tr><td colspan="8" style="color: #ef4444; padding: 20px; text-align: center;">Lỗi tải token: ${e.message}</td></tr>`;
     }
   }
 
@@ -4161,6 +4200,33 @@
     } finally {
       if (button) { button.disabled = false; button.innerHTML = oldHtml; }
     }
+  }
+
+  function updateTokenSelectedCount() {
+    const checks = [...document.querySelectorAll('.token-row-check')];
+    const selected = checks.filter(c => c.checked).length;
+    const label = document.getElementById('token-selected-count');
+    if (label) label.textContent = `${selected} token đã chọn`;
+    const all = document.getElementById('token-select-all');
+    if (all) { all.checked = checks.length > 0 && selected === checks.length; all.indeterminate = selected > 0 && selected < checks.length; }
+  }
+
+  function setAllTokenChecks(checked) {
+    document.querySelectorAll('.token-row-check').forEach(c => { c.checked = checked; });
+    updateTokenSelectedCount();
+  }
+
+  async function bulkDeleteTokens() {
+    const ids = [...document.querySelectorAll('.token-row-check:checked')].map(c => c.value);
+    if (!ids.length) { showToast('H?y ch?n token c?n x?a.'); return; }
+    if (!confirm(`Xóa ${ids.length} token đã chọn? Nếu token đang gán Page, thao tác sẽ được từ chối.`)) return;
+    try {
+      const res = await fetch('/api/tokens/bulk-delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token_ids:ids})});
+      const data = await res.json();
+      if (!res.ok || !data.success) { showToast(data.error || 'Kh?ng th? x?a token'); return; }
+      showToast(`Đã xóa ${data.deleted_count} token.`);
+      await Promise.all([loadTokensOnly(), loadTokensAndPages()]);
+    } catch (e) { showToast('L?i x?a token: ' + e.message); }
   }
 
   async function deleteSingleToken(tokenId, tokenName) {
@@ -5120,9 +5186,11 @@
     try {
       const res = await fetch('/api/token-groups');
       const data = await res.json();
+      const previousValue = select.value;
       select.innerHTML = '<option value="">All verified mappings</option>' + (data.groups || []).map(g =>
         `<option value="${g.id}">${escapeHtml(g.name)} (${(g.page_ids || []).length} Pages)</option>`
       ).join('');
+      if ([...select.options].some(option => option.value === previousValue)) select.value = previousValue;
     } catch (e) { console.warn('Token groups unavailable:', e); }
   }
 
@@ -5748,10 +5816,8 @@
       ['facebook_publish', 'meta_preflight'].includes(p.retry_stage) && p.error &&
       !seenMetaPostErrors.has(`${p.id}:${p.error}`));
     failures.forEach(p => seenMetaPostErrors.add(`${p.id}:${p.error}`));
-    if (failures.length) {
-      alert('Meta báo lỗi trên ' + failures.length + ' bài:\n' +
-        failures.slice(0, 12).map(p => `${p.page_name || p.page_id || 'Page'}: ${p.error}`).join('\n') +
-        (failures.length > 12 ? '\nXem các lỗi còn lại trong Quản lý Bài Đăng.' : ''));
+    if (failures.length && document.getElementById('pane-posts')?.classList.contains('active')) {
+      showToast(`Meta báo lỗi trên ${failures.length} bài. Mở Quản lý Bài Đăng để xem chi tiết.`);
     }
   }
   async function pollMetaPostErrors() {
@@ -5764,7 +5830,7 @@
         const health = await (await fetch('/api/posts/health')).json();
         if (health.ledger_incomplete_suspected) {
           postLedgerWarningShown = true;
-          alert(health.message);
+          if (document.getElementById('pane-posts')?.classList.contains('active')) showToast(health.message);
         }
       }
     } catch (_) {}
@@ -5798,7 +5864,7 @@
             const health = await (await fetch('/api/posts/health')).json();
             if (health.ledger_empty_suspected) {
               postLedgerWarningShown = true;
-              alert(health.message);
+              showToast(health.message);
             }
           } catch (_) {}
         }

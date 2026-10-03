@@ -37,3 +37,18 @@ def test_unprepared_website_does_not_starve_other_due_pages():
          "article_url": "https://example.test/story", "first_comment": "https://example.test/story"},
     ]
     assert next_paced_due_post(posts, now)["id"] == "ready"
+
+
+def test_different_tokens_can_share_schedule_time_with_configured_token_gap():
+    offsets = paced_offsets_by_token(["a", "b", "a", "b"], global_seconds=0, token_seconds=360)
+    assert offsets == [0, 0, 360, 360]
+    now = datetime(2026, 10, 3, 10, 5, 0)
+    posts = [
+        {"id": "done", "status": "published", "token_id": "a", "publish_started_at": "2026-10-03 10:00:00"},
+        {"id": "a", "status": "scheduled", "token_id": "a", "token_gap_seconds": 360,
+         "scheduled_time": "2026-10-03 09:00:00"},
+        {"id": "b", "status": "scheduled", "token_id": "b", "token_gap_seconds": 360,
+         "scheduled_time": "2026-10-03 09:00:00"},
+    ]
+    assert next_paced_due_post(posts, now, global_seconds=0)["id"] == "b"
+    assert next_paced_due_post(posts, datetime(2026, 10, 3, 10, 6, 0), global_seconds=0)["id"] == "a"

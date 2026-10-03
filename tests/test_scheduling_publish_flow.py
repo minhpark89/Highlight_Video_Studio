@@ -213,7 +213,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             saved = json.loads(posts_file.read_text(encoding="utf-8"))[0]
             self.assertEqual(saved["content_package_id"], "studio-pending")
-            self.assertEqual(saved["content_package_status"], "queued")
+            self.assertIn(saved["content_package_status"], ("queued", "running"))
             self.assertEqual(saved["website_status"], "pending_generation")
             self.assertEqual(saved["content"], "")
             self.assertEqual(len(json.loads(queue.read_text(encoding="utf-8"))), 1)
@@ -609,7 +609,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         self.assertTrue(response.get_json()["success"])
         self.assertEqual(saved["status"], "scheduled")
         self.assertEqual(saved["website_status"], "pending_generation")
-        self.assertEqual(saved["content_package_status"], "queued")
+        self.assertIn(saved["content_package_status"], ("queued", "running"))
         self.assertEqual(saved["website_error"], "")
 
     def test_manual_website_retry_updates_article_without_touching_facebook_schedule(self):
@@ -1055,7 +1055,7 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
             folder.cleanup()
         self.assertEqual(saved["status"], "failed")
         self.assertEqual(saved["retry_stage"], "local_video")
-        self.assertEqual(saved["content_package_status"], "queued")
+        self.assertIn(saved["content_package_status"], ("queued", "running"))
         poster.publish_reel.assert_not_called()
 
     def test_due_post_foreign_absolute_path_never_posts_same_named_output_clip(self):

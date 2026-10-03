@@ -190,11 +190,11 @@ def _process_scheduled_posts_once(
     from src.publisher.website_publisher import generate_curiosity_comment_with_llm, publish_clip_to_website_cms
     from src.content_packages import scheduled_video_path
 
-    poster = poster or MetaReelPoster()
     website_publisher = website_publisher or publish_clip_to_website_cms
     comment_generator = comment_generator or generate_curiosity_comment_with_llm
     page_manager = PageManager(BASE_DIR)
     token_vault = TokenVault(BASE_DIR)
+    poster = poster or MetaReelPoster(token_vault=token_vault)
     current_dt = now or datetime.now()
     now_ts = current_dt.timestamp()
 
@@ -289,7 +289,7 @@ def _process_scheduled_posts_once(
             })
         recovered += 1
 
-    selected_due = next_paced_due_post(posts, current_dt, global_seconds=90, token_seconds=900)
+    selected_due = next_paced_due_post(posts, current_dt, global_seconds=0, token_seconds=900)
     claimed_posts = []
     for post in posts:
         if post.get("status") != "scheduled":
@@ -346,7 +346,11 @@ def _process_scheduled_posts_once(
         # queues instead of letting an unrelated cached Page record block them.
         try:
             if post.get("token_id"):
-                verdict = preflight_pages([page_record], token_vault, page_manager) if page_record else {"ok": False, "blocked": {"code": "missing_page", "stage": "mapping", "action": "Sync Page before publishing."}}
+                # Revalidate the exact token selected when the post was queued;
+                # a later auto-rebalance must not silently switch credentials.
+                bound_page = dict(page_record or {})
+                bound_page["token_id"] = str(post.get("token_id") or "")
+                verdict = preflight_pages([bound_page], token_vault, page_manager) if page_record else {"ok": False, "blocked": {"code": "missing_page", "stage": "mapping", "action": "Sync Page before publishing."}}
                 blocked = verdict.get("blocked") or {}
                 verified = verdict["ready"][0] if verdict.get("ok") else None
             else:
@@ -419,6 +423,7 @@ def _process_scheduled_posts_once(
                 video_path=str(video_path),
                 description=f"{title}\n\n{content}",
                 first_comment="",
+                token_id=post.get("token_id"),
                 reconcile_seconds=12,
             )
             facebook_id = result.get("video_id") or result.get("reel_id")

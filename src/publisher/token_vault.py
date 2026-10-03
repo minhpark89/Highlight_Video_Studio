@@ -138,11 +138,25 @@ class TokenVault:
         try:
             with open(self.vault_file, "r", encoding="utf-8") as f:
                 tokens = json.load(f)
+            before = len(tokens)
             tokens = [t for t in tokens if t.get("id") != token_id]
+            if len(tokens) == before:
+                return False
             self._save(tokens)
             return True
         except Exception:
             return False
+
+    def delete_tokens(self, token_ids):
+        """Remove a validated set in one vault write; return the IDs removed."""
+        with open(self.vault_file, "r", encoding="utf-8") as f:
+            tokens = json.load(f)
+        ids = set(token_ids)
+        found = {str(item.get("id")) for item in tokens} & ids
+        if found != ids:
+            raise ValueError("Token không tồn tại: " + ", ".join(sorted(ids - found)))
+        self._save([item for item in tokens if str(item.get("id")) not in ids])
+        return sorted(found)
 
     def verify_identity(self, token_str):
         """Validate a token without enumerating its managed Pages."""

@@ -1434,21 +1434,11 @@ def api_llm_detect():
 
 # ================= QUẢN LÝ NHÓM TOKEN (LOHA TOKEN GROUPS) =================
 TOKEN_GROUPS_FILE = BASE_DIR / "token_groups.json"
+_token_group_lock = threading.RLock()
 
 def load_token_groups():
     if not TOKEN_GROUPS_FILE.exists():
-        # Mặc định tạo Nhóm AutoPool 31 Token
-        default_groups = [{
-            "id": "tgrp_autopool",
-            "name": "Nhóm AutoPool Chính (31 Token)",
-            "strategy": "least_recently_used", # round_robin | least_recently_used | random
-            "token_ids": [t.get("id") for t in token_vault.list_tokens(mask=False)],
-            "note": "Xoay vòng 31 token chống quá tải Meta",
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }]
-        with open(TOKEN_GROUPS_FILE, "w", encoding="utf-8") as f:
-            json.dump(default_groups, f, indent=2, ensure_ascii=False)
-        return default_groups
+        return []
     try:
         with open(TOKEN_GROUPS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -1456,8 +1446,12 @@ def load_token_groups():
         return []
 
 def save_token_groups(groups):
-    with open(TOKEN_GROUPS_FILE, "w", encoding="utf-8") as f:
+    tmp = TOKEN_GROUPS_FILE.with_name(f".{TOKEN_GROUPS_FILE.name}.{uuid.uuid4().hex}.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(groups, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, TOKEN_GROUPS_FILE)
 
 @app.route("/api/token-groups", methods=["GET"])
 def api_list_token_groups():
@@ -1516,32 +1510,32 @@ def api_save_token_group():
         return jsonify({"error": "Token không tồn tại trong Vault: " + ", ".join(unknown_ids)}), 404
     if page_source_token_id and page_source_token_id not in vault_ids:
         return jsonify({"error": "Token nguồn Page không tồn tại trong Vault"}), 404
+    # The UI saves from cache. Explicit API callers may still request discovery.
     sync_errors = _sync_group_credentials(token_ids) if data.get("sync_pages") is True else []
-    page_ids = _group_page_ids(token_ids, page_source_token_id) if data.get("sync_pages") is True else _pages_for_source_token(page_source_token_id)
+    page_ids = _group_page_ids(token_ids, page_source_token_id)
 
-    groups = load_token_groups()
-    existing = next((g for g in groups if g.get("id") == gid), None)
-    if existing:
-        existing["name"] = name
-        existing["token_ids"] = token_ids
-        existing["strategy"] = strategy
-        existing["note"] = note
-        if has_source or not existing.get("page_source_token_id") or data.get("sync_pages") is True:
-            existing["page_source_token_id"] = page_source_token_id
-            existing["page_ids"] = page_ids
-        existing["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    else:
-        groups.append({
-            "id": gid,
-            "name": name,
-            "strategy": strategy,
-            "token_ids": token_ids,
-            "note": note,
-            "page_source_token_id": page_source_token_id,
-            "page_ids": page_ids,
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
-    save_token_groups(groups)
+    with _token_group_lock:
+        groups = load_token_groups()
+        existing = next((g for g in groups if g.get("id") == gid), None)
+        duplicate = next((g for g in groups if g.get("name", "").strip().casefold() == name.casefold() and g.get("id") != gid), None)
+        if duplicate:
+            return jsonify({"success": False, "error": "Tên nhóm đã tồn tại", "group": duplicate}), 409
+        if existing:
+            existing["name"] = name
+            existing["token_ids"] = token_ids
+            existing["strategy"] = strategy
+            existing["note"] = note
+            if has_source or not existing.get("page_source_token_id"):
+                existing["page_source_token_id"] = page_source_token_id
+                existing["page_ids"] = page_ids
+            existing["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            groups.append({"id": gid, "name": name, "strategy": strategy,
+                           "token_ids": token_ids, "note": note,
+                           "page_source_token_id": page_source_token_id,
+                           "page_ids": page_ids,
+                           "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+        save_token_groups(groups)
     saved = next((g for g in groups if g.get("id") == gid), None) or {}
     return jsonify({
         "success": True,
@@ -1596,6 +1590,8 @@ def api_list_tokens():
             page_counts[token_id] = page_counts.get(token_id, 0) + 1
     for token in tokens:
         token["pages_count"] = page_counts.get(str(token.get("id")), 0)
+        token["operator_label"] = token.get("name") or ""
+        token["identity_verified"] = bool(token.get("owner_name"))
         # Bulk-imported tokens can all carry the same operator label (e.g. Bm1).
         # Show the verified Meta owner so each credential remains identifiable.
         token["display_name"] = token.get("owner_name") or token.get("name") or token.get("id")
@@ -1627,71 +1623,15 @@ def api_token_health_sync():
         token.update({"status": "ACTIVE" if ok else "ERROR", "error_msg": error,
                       "last_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
     token_vault._save(tokens)
-    if not healthy:
-        return jsonify({"success": False, "error": "Meta từ chối toàn bộ credential; không thay đổi Page mapping.",
-                        "blocked_tokens": len(blocked)}), 409
-    assignments = {}
-    page_failures = []
-    counts = {token_id: 0 for token_id in healthy}
-    token_lookup = {str(token.get("id")): token for token in tokens}
+    # Health checks update credential status only. Page ownership is an explicit
+    # operator choice and must never change as a side effect of scheduling.
     pages = page_manager.list_pages()
-    for page in pages:
-        if str(page.get("token_id") or "") in healthy:
-            counts[str(page.get("token_id"))] += 1
-    # Page bindings were created by /me/accounts discovery. Reuse those exact
-    # bindings after the owning credential probe; probing 100 Page tokens here
-    # would make the health action exceed desktop request timeouts.
-    for page in pages:
-        canonical_ok = str(page.get("token_id") or "") in healthy
-        current = str(page.get("token_id") or "")
-        if canonical_ok:
-            continue
-        candidates = sorted((str(tid) for tid in (page.get("token_bindings") or {}) if str(tid) in healthy and str(tid) != current),
-                            key=lambda tid: (counts[tid], tid))
-        for token_id in candidates:
-            binding, reason = page_manager.resolve_verified_mapping(str(page.get("page_id")), token_lookup[token_id])
-            if binding and not reason:
-                assignments[str(page.get("page_id"))] = token_id
-                counts[token_id] += 1
-                break
-        else:
-            page_failures.append(str(page.get("page_id")))
-    def check_page(selection):
-        page, token_id = selection
-        binding = (page.get("token_bindings") or {}).get(token_id) or {}
-        if not binding.get("page_token"):
-            return False
-        try:
-            response = requests.get("https://graph.facebook.com/v22.0/me",
-                                    params={"access_token": binding["page_token"], "fields": "id"}, timeout=8)
-            payload = response.json()
-            return response.ok and str(payload.get("id")) == str(page.get("page_id"))
-        except Exception:
-            return False
-    selections = [(page, assignments.get(str(page.get("page_id")), str(page.get("token_id") or ""))) for page in pages]
-    with ThreadPoolExecutor(max_workers=12) as pool:
-        verified_pages = list(pool.map(check_page, selections))
-    for (page, selected_id), verified_page in zip(selections, verified_pages):
-        if verified_page or str(page.get("page_id")) in page_failures:
-            continue
-        alternatives = sorted((str(tid) for tid in (page.get("token_bindings") or {})
-                               if str(tid) in healthy and str(tid) != selected_id), key=lambda tid: (counts[tid], tid))
-        for token_id in alternatives:
-            binding, reason = page_manager.resolve_verified_mapping(str(page.get("page_id")), token_lookup[token_id])
-            if binding and not reason and check_page((page, token_id)):
-                assignments[str(page.get("page_id"))] = token_id
-                counts[token_id] += 1
-                break
-        else:
-            page_failures.append(str(page.get("page_id")))
-    if page_failures:
-        return jsonify({"success": False, "error": "Một số Page không có Page token nào được Meta chấp nhận; chưa đổi mapping.",
-                        "page_ids": page_failures, "healthy_tokens": len(healthy), "blocked_tokens": len(blocked)}), 409
-    page_manager.activate_bindings(assignments)
+    stale_assignments = sum(str(page.get("token_id") or "") not in healthy for page in pages)
     global _last_meta_health_sync
     _last_meta_health_sync = time.monotonic()
-    return jsonify({"success": True, "healthy_tokens": len(healthy), "blocked_tokens": len(blocked),
-                    "reassigned_pages": len(assignments), "blocked_token_ids": sorted(blocked)})
+    return jsonify({"success": True, "healthy_tokens": len(healthy),
+                    "blocked_tokens": len(blocked), "stale_assignments": stale_assignments,
+                    "reassigned_pages": 0, "blocked_token_ids": sorted(blocked)})
 
 _last_meta_health_sync = 0.0
 
@@ -1837,8 +1777,39 @@ def api_refresh_token_pages(token_id):
 
 @app.route("/api/tokens/<token_id>", methods=["DELETE"])
 def api_delete_token(token_id):
-    ok = token_vault.delete_token(token_id)
-    return jsonify({"success": ok})
+    return _delete_token_set([token_id])
+
+@app.route("/api/tokens/bulk-delete", methods=["POST"])
+def api_bulk_delete_tokens():
+    ids = (request.json or {}).get("token_ids")
+    if not isinstance(ids, list) or not ids or len(ids) != len(set(map(str, ids))):
+        return jsonify({"success": False, "error": "Chọn token hợp lệ để xóa"}), 400
+    return _delete_token_set([str(item) for item in ids])
+
+def _delete_token_set(token_ids):
+    ids = set(token_ids)
+    vault_ids = {str(t.get("id")) for t in token_vault.list_tokens(mask=False)}
+    if ids - vault_ids:
+        return jsonify({"success": False, "error": "Một số token không còn trong kho"}), 404
+    pages = page_manager.list_pages()
+    assigned = [str(p.get("page_id")) for p in pages if str(p.get("token_id")) in ids]
+    if assigned:
+        return jsonify({"success": False, "error": f"{len(assigned)} Page đang gán cho token đã chọn. Hãy gán Page sang token khác trước khi xóa.", "assigned_pages": len(assigned)}), 409
+    with _token_group_lock:
+        removed = token_vault.delete_tokens(ids)
+        groups = load_token_groups()
+        for group in groups:
+            group["token_ids"] = [tid for tid in group.get("token_ids", []) if tid not in ids]
+            if group.get("page_source_token_id") in ids:
+                group["page_source_token_id"] = ""
+        save_token_groups(groups)
+    for page in pages:
+        bindings = page.get("token_bindings")
+        if isinstance(bindings, dict):
+            for tid in ids:
+                bindings.pop(tid, None)
+    page_manager.save_pages(pages)
+    return jsonify({"success": True, "deleted_count": len(removed)})
 
 @app.route("/api/pages", methods=["GET"])
 def api_list_pages():
@@ -1871,7 +1842,9 @@ def api_list_pages():
     for page in pages:
         item = dict(page)
         pid = str(item.get("page_id") or "").strip()
-        item["token_name"] = token_names.get(str(item.get("token_id") or ""), item.get("token_name") or "")
+        assigned_id = str(item.get("token_id") or "")
+        item["token_assignment_valid"] = assigned_id in token_names
+        item["token_name"] = token_names.get(assigned_id, "Chưa gán token hiện tại")
         item.update(stats.get(pid, {"published_count": 0, "scheduled_count": 0, "publishing_count": 0}))
         # Never display a deleted/stale group label as if it still existed.
         group_ids = [str(gid) for gid in (item.get("group_ids") or []) if str(gid) in valid_groups]
@@ -2093,7 +2066,7 @@ def api_publish_reel():
     scheduled_offsets = paced_offsets_by_token(
         [next((ready["token_id"] for record, ready in schedule_target_pages
                if str(record.get("page_id")) == pid), pid) for pid in target_page_ids],
-        global_seconds=max(90, int(stagger_minutes * 60 / posting_threads)),
+        global_seconds=0,
         token_seconds=stagger_minutes * 60,
     ) if schedule_time else []
 
@@ -2163,6 +2136,7 @@ def api_publish_reel():
                 "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "token": p_token,
                 "token_id": verified["token_id"],
+                "token_gap_seconds": stagger_minutes * 60,
             }
             scheduled_posts.append(post_entry)
             success_count += 1
@@ -2847,7 +2821,7 @@ def api_distribute_batch():
     posting_threads = max(1, min(50, int(sched_cfg.get("posting_threads") or posting_threads)))
     scheduled_offsets = paced_offsets_by_token(
         [verified_token_ids[pid] for pid in page_ids],
-        global_seconds=max(90, int(group_stagger * 60 / posting_threads)),
+        global_seconds=0,
         token_seconds=group_stagger * 60,
     )
 
@@ -3033,6 +3007,7 @@ def api_distribute_batch():
                 "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "token": page_token,
                 "token_id": verified_token_ids.get(pid, ""),
+                "token_gap_seconds": group_stagger * 60,
             }
             posts.append(post_entry)
             assigned_clips.append(clip_fn)
@@ -3425,6 +3400,26 @@ def api_batch_assign_token():
         blocked = []
         planned = []
         loads = {tid: 0 for tid in token_ids}
+        eligible_ids = {
+            tid for tid in token_ids
+            if vault_map.get(tid) and vault_map[tid].get("status") == "ACTIVE"
+            and any(
+                (page.get("token_bindings") or {}).get(tid)
+                and (page.get("token_bindings") or {}).get(tid, {}).get("status") == "VERIFIED"
+                and (page.get("token_bindings") or {}).get(tid, {}).get("page_token")
+                and str((page.get("token_bindings") or {}).get(tid, {}).get("verified_page_id") or "") == str(page.get("page_id"))
+                and (page.get("token_bindings") or {}).get(tid, {}).get("credential_fingerprint") == page_manager.credential_fingerprint(vault_map[tid].get("token"))
+                for page in candidates
+            )
+        }
+        effective_limit = max_pages_per_token
+        if max_pages_per_token and eligible_ids:
+            required_limit = (len(candidates) + len(eligible_ids) - 1) // len(eligible_ids)
+            # A request such as 3 Page/token with 31 tokens and 100 Pages is
+            # intentionally balanced as 3–4 Page/token. Do not reject the
+            # remainder when it is only one Page above the requested target.
+            if max_pages_per_token >= 3 and len(eligible_ids) >= 2 and required_limit <= max_pages_per_token + 1:
+                effective_limit = required_limit
         for page in candidates:
             pid = str(page.get("page_id"))
             choices = []
@@ -3442,8 +3437,8 @@ def api_batch_assign_token():
             if not choices:
                 blocked.append({"page_id": pid, "code": "missing_mapping"})
                 continue
-            if max_pages_per_token:
-                choices = [choice for choice in choices if loads[choice[0]] < max_pages_per_token]
+            if effective_limit:
+                choices = [choice for choice in choices if loads[choice[0]] < effective_limit]
             if not choices:
                 blocked.append({"page_id": pid, "code": "token_capacity"})
                 continue
@@ -3452,18 +3447,26 @@ def api_batch_assign_token():
             loads[tid] += 1
         if blocked:
             capacity_blocked = any(item["code"] == "token_capacity" for item in blocked)
+            minimum_limit = (len(candidates) + len(eligible_ids) - 1) // len(eligible_ids) if eligible_ids else None
             return jsonify({"success": False, "stage": "mapping", "code": "token_capacity" if capacity_blocked else "missing_mapping",
                             "error": (f"Không đủ Token đã xác thực cho giới hạn {max_pages_per_token} Page/Token." if capacity_blocked else "Some selected Pages have no active verified Token mapping in this group. Sync only the blocked Pages with a credential that manages them."),
-                            "blocked": blocked, "sync_errors": sync_errors, "count": 0}), 409
+                            "blocked": blocked, "blocked_count": len(blocked), "eligible_tokens": len(eligible_ids),
+                            "selected_pages": len(candidates), "minimum_limit": minimum_limit,
+                            "sync_errors": sync_errors, "count": 0}), 409
         for page, tid, binding, credential in planned:
-            page["token_id"] = tid
-            page["token_name"] = credential.get("name", "System User")
-            page["page_token"] = binding["page_token"]
-            page["mapping_status"] = "VERIFIED"
-            page["mapping_verified_at"] = binding.get("verified_at", "")
+            if data.get("dry_run") is not True:
+                page["token_id"] = tid
+                page["token_name"] = credential.get("owner_name") or credential.get("name", "System User")
+                page["page_token"] = binding["page_token"]
+                page["mapping_status"] = "VERIFIED"
+                page["mapping_verified_at"] = binding.get("verified_at", "")
         assigned = len(planned)
-        page_manager.save_pages(pages)
+        if data.get("dry_run") is not True:
+            page_manager.save_pages(pages)
         return jsonify({"success": True, "count": assigned, "loads": loads,
+                        "requested_limit": max_pages_per_token, "effective_limit": effective_limit,
+                        "active_tokens_used": sum(1 for count in loads.values() if count),
+                        "dry_run": data.get("dry_run") is True,
                         "over_four": {tid: count for tid, count in loads.items() if count > 4},
                         "sync_errors": sync_errors,
                         "message": f"Assigned {assigned} Pages to verified group Tokens."})
