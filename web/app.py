@@ -91,7 +91,7 @@ from src.publisher.meta_preflight import (
     preflight_pages,
     resolve_page_token,
 )
-from src.llm_response import chat_text_from_response
+from src.llm_response import chat_text_from_response, chat_model_unavailable, chat_stream_incomplete
 from core.text_encoding import repair_mojibake
 
 
@@ -1324,6 +1324,12 @@ def api_llm_test():
                 "error": f"Model có trong danh sách nhưng gọi chat thất bại (HTTP {response.status_code}): {detail}",
                 "latency_ms": latency_ms,
             }), 502
+        if chat_model_unavailable(response):
+            return jsonify({"success": False, "error": "Model Text LLM đã ngừng hoạt động trên endpoint này; hãy chọn model khác.",
+                            "latency_ms": latency_ms}), 502
+        if chat_stream_incomplete(response):
+            return jsonify({"success": False, "error": "Provider trả luồng chat chưa hoàn tất; hãy thử lại hoặc chọn model khác.",
+                            "latency_ms": latency_ms}), 502
         content = chat_text_from_response(response)
         if not content:
             return jsonify({"success": False, "error": "Provider trả HTTP 200 nhưng không có nội dung chat"}), 502

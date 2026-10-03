@@ -127,6 +127,21 @@ class ReleaseGuardTests(unittest.TestCase):
             self.assertEqual(result.status_code, 502)
             self.assertIn("No active credentials", result.get_json()["error"])
 
+    def test_chat_probe_rejects_retired_model_notice_with_http_200(self):
+        from web.app import app
+        app.config["TESTING"] = True
+        client = app.test_client()
+        retired = FakeResponse(200, {"choices": [{"message": {
+            "content": "Gemini 3.5 Flash is no longer available. Please switch to Gemini 3.7 Flash in the API."
+        }}]})
+        with mock.patch("web.app.requests.post", return_value=retired):
+            response = client.post("/api/llm/test", json={
+                "api_base": "https://router.test/v1", "api_key": "k", "model": "ag/gemini-3.5-flash-low"
+            })
+        self.assertEqual(response.status_code, 502)
+        self.assertFalse(response.get_json()["success"])
+        self.assertIn("ngừng hoạt động", response.get_json()["error"])
+
     def test_first_comment_queue_survives_and_retries(self):
         from src.publisher import first_comment_queue as queue
         with tempfile.TemporaryDirectory() as folder:
