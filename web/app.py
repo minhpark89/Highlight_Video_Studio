@@ -91,6 +91,12 @@ from src.publisher.meta_preflight import (
     preflight_pages,
     resolve_page_token,
 )
+from src.first_comment_profiles import (
+    builtin_profiles,
+    load_profile_store,
+    normalize_profile,
+    save_profile_store,
+)
 from src.llm_response import chat_text_from_response, chat_model_unavailable, chat_stream_incomplete
 from core.text_encoding import repair_mojibake
 
@@ -116,6 +122,7 @@ TEMP_DIR = DATA_ROOT / "temp"
 JOBS_FILE = DATA_ROOT / "jobs.json"
 POSTS_FILE = DATA_ROOT / "posts.json"
 CRAWLED_VIDEOS_FILE = DATA_ROOT / "crawled_videos.json"
+FIRST_COMMENT_PROFILES_FILE = DATA_ROOT / "data" / "first_comment_profiles.json"
 
 
 def prioritize_scheduled_packages(package_ids):
@@ -1461,7 +1468,37 @@ def save_token_groups(groups):
 
 @app.route("/api/token-groups", methods=["GET"])
 def api_list_token_groups():
-    return jsonify({"success": True, "groups": load_token_groups()})
+    vault_entries = token_vault.list_tokens(mask=False)
+    vault_counts = {}
+    for token in vault_entries:
+        token_id = str(token.get("id") or "")
+        vault_counts[token_id] = vault_counts.get(token_id, 0) + 1
+    vault_ids = {token_id for token_id, count in vault_counts.items() if count == 1}
+    pages = page_manager.list_pages()
+    posts = load_posts()
+    groups = []
+    for raw in load_token_groups():
+        group = dict(raw)
+        token_ids = {str(tid) for tid in group.get("token_ids", [])}
+        page_ids = {str(pid) for pid in group.get("page_ids", [])}
+        group_pages = [page for page in pages if str(page.get("page_id") or "") in page_ids]
+        bound_pages = [page for page in group_pages if token_ids.intersection((page.get("token_bindings") or {}).keys())]
+        stale_binding = any(
+            str(page.get("token_id") or "") not in vault_ids
+            or not token_ids.intersection((page.get("token_bindings") or {}).keys())
+            for page in group_pages
+        )
+        group["health"] = {
+            "pages_bound": len({str(page.get("page_id")) for page in bound_pages}),
+            "vault_present": len(token_ids & vault_ids),
+            "vault_total": len(token_ids),
+            "duplicate_ids": sorted(token_id for token_id in token_ids if vault_counts.get(token_id, 0) > 1),
+            "scheduled_posts": sum(1 for post in posts if post.get("status") == "scheduled" and str(post.get("token_id") or "") in token_ids),
+            "processing_posts": sum(1 for post in posts if post.get("status") in ("processing", "publishing") and str(post.get("token_id") or "") in token_ids),
+            "rebind_required": bool(token_ids - vault_ids) or stale_binding or (bool(page_ids) and not group_pages),
+        }
+        groups.append(group)
+    return jsonify({"success": True, "groups": groups})
 
 def _pages_for_source_token(page_source_token_id):
     """Return the cached Page ids owned by one vault token, in stable order."""
@@ -1563,7 +1600,11 @@ def api_rebind_token_group_pages(gid):
         return jsonify({"success": False, "error": "Nhóm này chưa binding Page set"}), 400
     if token_vault.get_token_by_id(source_id) is None:
         return jsonify({"success": False, "error": "Token nguồn không còn tồn tại trong Vault"}), 404
-    page_ids = _pages_for_source_token(source_id)
+    missing_ids = [str(tid) for tid in group.get("token_ids", []) if token_vault.get_token_by_id(str(tid)) is None]
+    if missing_ids:
+        return jsonify({"success": False, "code": "token_group_unsynced", "missing_token_ids": missing_ids,
+                        "error": "Nhóm còn token thiếu trong Vault; khôi phục token rồi Sync Page trước."}), 409
+    page_ids = _group_page_ids([str(tid) for tid in group.get("token_ids", [])], source_id)
     if not page_ids:
         return jsonify({
             "success": False,
@@ -1573,6 +1614,24 @@ def api_rebind_token_group_pages(gid):
     group["pages_synced_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     save_token_groups(groups)
     return jsonify({"success": True, "page_ids": page_ids, "group": group})
+
+
+@app.route("/api/token-groups/<gid>/sync-pages", methods=["POST"])
+def api_sync_token_group_pages(gid):
+    groups = load_token_groups()
+    group = next((g for g in groups if str(g.get("id")) == str(gid)), None)
+    if group is None:
+        return jsonify({"success": False, "error": "Token group not found."}), 404
+    token_ids = [str(tid) for tid in group.get("token_ids", [])]
+    missing_ids = [tid for tid in token_ids if token_vault.get_token_by_id(tid) is None]
+    if missing_ids:
+        return jsonify({"success": False, "code": "token_group_unsynced", "missing_token_ids": missing_ids,
+                        "error": "Restore the missing exact Token Vault entries before syncing this group."}), 409
+    errors = _sync_group_credentials(token_ids)
+    if errors:
+        return jsonify({"success": False, "code": "page_sync_failed", "sync_errors": errors,
+                        "error": "Some group tokens could not sync Pages; the Page set was not rebound."}), 409
+    return jsonify({"success": True, "synced_token_count": len(token_ids)})
 
 @app.route("/api/token-groups/<gid>", methods=["DELETE"])
 def api_delete_token_group(gid):
@@ -1783,38 +1842,132 @@ def api_refresh_token_pages(token_id):
 
 @app.route("/api/tokens/<token_id>", methods=["DELETE"])
 def api_delete_token(token_id):
-    return _delete_token_set([token_id])
+    data = request.get_json(silent=True) or {}
+    return _delete_token_set([token_id], migration_token_id=str(data.get("migration_token_id") or ""))
 
 @app.route("/api/tokens/bulk-delete", methods=["POST"])
 def api_bulk_delete_tokens():
     ids = (request.json or {}).get("token_ids")
     if not isinstance(ids, list) or not ids or len(ids) != len(set(map(str, ids))):
         return jsonify({"success": False, "error": "Chọn token hợp lệ để xóa"}), 400
-    return _delete_token_set([str(item) for item in ids])
+    data = request.get_json(silent=True) or {}
+    return _delete_token_set([str(item) for item in ids], migration_token_id=str(data.get("migration_token_id") or ""))
 
-def _delete_token_set(token_ids):
+def _delete_token_set(token_ids, migration_token_id=""):
     ids = set(token_ids)
     vault_ids = {str(t.get("id")) for t in token_vault.list_tokens(mask=False)}
     if ids - vault_ids:
         return jsonify({"success": False, "error": "Một số token không còn trong kho"}), 404
     pages = page_manager.list_pages()
-    assigned = [str(p.get("page_id")) for p in pages if str(p.get("token_id")) in ids]
-    if assigned:
-        return jsonify({"success": False, "error": f"{len(assigned)} Page đang gán cho token đã chọn. Hãy gán Page sang token khác trước khi xóa.", "assigned_pages": len(assigned)}), 409
+    assigned_pages = [p for p in pages if str(p.get("token_id") or "") in ids]
+    referenced_pages = [p for p in pages if str(p.get("token_id") or "") in ids
+                        or ids.intersection({str(tid) for tid, binding in (p.get("token_bindings") or {}).items() if binding})]
+    posts = load_posts()
+    referenced_posts = [p for p in posts if str(p.get("token_id") or "") in ids and (
+        p.get("status") in ("scheduled", "publishing", "processing", "meta_scheduled")
+        or (p.get("status") == "failed" and p.get("retryable") and p.get("retry_stage") == "meta_preflight")
+    )]
+    pending_comment_file = BASE_DIR / "data" / "pending_first_comments.json"
+    try:
+        pending_comments = json.loads(pending_comment_file.read_text(encoding="utf-8")) if pending_comment_file.exists() else []
+        if not isinstance(pending_comments, list):
+            raise ValueError
+    except (OSError, ValueError, json.JSONDecodeError):
+        return jsonify({"success": False, "code": "pending_comment_queue_unreadable",
+                        "error": "Cannot verify pending First Comment credentials; token deletion is paused."}), 409
+    referenced_comments = [item for item in pending_comments if item.get("status") in ("pending", "verification_pending")
+                           and str(item.get("token_id") or "") in ids]
+    migration_token_id = str(migration_token_id or "").strip()
+    if migration_token_id:
+        if migration_token_id in ids:
+            return jsonify({"success": False, "code": "invalid_migration_target", "error": "Migration target must be a different token."}), 400
+        target = token_vault.get_token_by_id(migration_token_id)
+        if not target or target.get("status") != "ACTIVE":
+            return jsonify({"success": False, "code": "invalid_migration_target", "error": "Migration target must exist and be active."}), 409
+        unsafe_posts = [p for p in referenced_posts if p.get("status") in ("publishing", "processing", "meta_scheduled")]
+        if unsafe_posts:
+            return jsonify({"success": False, "code": "token_in_use", "migration_required": True,
+                            "error": "Meta outcome or handed-off schedule is unresolved; reconcile it with the original credential before deleting.",
+                            "post_ids": [str(p.get("id") or "") for p in unsafe_posts]}), 409
+        for page in referenced_pages:
+            verdict = resolve_page_token({**page, "token_id": migration_token_id}, token_vault, page_manager)
+            if not verdict.get("ok"):
+                return jsonify({"success": False, "code": "migration_target_unverified", "page_id": str(page.get("page_id") or ""),
+                                "error": verdict.get("action") or "Target token has no verified mapping for this Page."}), 409
+        page_by_id = {str(page.get("page_id") or ""): page for page in pages}
+        for post in referenced_posts:
+            page = page_by_id.get(str(post.get("page_id") or ""))
+            if not page:
+                return jsonify({"success": False, "code": "migration_target_unverified", "post_id": str(post.get("id") or ""),
+                                "error": "Could not verify a Page mapping for a queued post."}), 409
+            verdict = resolve_page_token({**page, "token_id": migration_token_id}, token_vault, page_manager)
+            if not verdict.get("ok"):
+                return jsonify({"success": False, "code": "migration_target_unverified", "post_id": str(post.get("id") or ""),
+                                "error": verdict.get("action") or "Target token has no verified mapping for this scheduled Page."}), 409
+            post["token_id"] = migration_token_id
+            post["token"] = verdict["token"]
+            post["token_name"] = verdict.get("token_name") or target.get("name") or migration_token_id
+            post["token_migrated_from"] = next(iter(ids)) if len(ids) == 1 else "bulk_migration"
+            post["token_migrated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        posts_by_id = {str(post.get("id") or ""): post for post in posts}
+        for item in referenced_comments:
+            post = posts_by_id.get(str(item.get("post_id") or ""))
+            page = page_by_id.get(str((post or {}).get("page_id") or "")) if "page_by_id" in locals() else None
+            if not page:
+                page = next((entry for entry in pages if any(
+                    str(binding.get("page_token") or "") == str(item.get("page_token") or "")
+                    for binding in (entry.get("token_bindings") or {}).values()
+                )), None)
+            if not page:
+                return jsonify({"success": False, "code": "migration_target_unverified",
+                                "post_id": str(item.get("post_id") or ""),
+                                "error": "Could not verify the Page for a pending First Comment."}), 409
+            verdict = resolve_page_token({**page, "token_id": migration_token_id}, token_vault, page_manager)
+            if not verdict.get("ok"):
+                return jsonify({"success": False, "code": "migration_target_unverified",
+                                "post_id": str(item.get("post_id") or ""),
+                                "error": verdict.get("action") or "Target token has no verified mapping for this comment's Page."}), 409
+            item["token_id"] = migration_token_id
+            item["page_token"] = verdict["token"]
+        for page in assigned_pages:
+            verdict = resolve_page_token({**page, "token_id": migration_token_id}, token_vault, page_manager)
+            page["token_id"] = migration_token_id
+            page["token_name"] = target.get("name") or migration_token_id
+            page["page_token"] = verdict["token"]
+            page["mapping_status"] = "VERIFIED"
+            page["mapping_verified_at"] = verdict.get("verified_at", "")
+    elif referenced_pages or referenced_posts or referenced_comments:
+        affected_pages = sorted({str(p.get("page_id") or "") for p in referenced_pages} - {""})
+        affected_posts = [str(p.get("id") or "") for p in referenced_posts]
+        return jsonify({"success": False, "code": "token_in_use", "migration_required": True,
+                        "error": "Token is referenced by Page bindings or queued posts. Choose a verified migration target; processing Meta outcomes cannot be migrated.",
+                        "assigned_pages": len(affected_pages), "queued_posts": len(affected_posts),
+                        "pending_first_comments": len(referenced_comments),
+                        "page_ids": affected_pages, "post_ids": affected_posts}), 409
+    if migration_token_id:
+        # Persist verified replacements before removing the old credential.
+        page_manager.save_pages(pages)
+        save_posts(posts)
+        if referenced_comments:
+            pending_comment_file.parent.mkdir(parents=True, exist_ok=True)
+            pending_comment_file.write_text(json.dumps(pending_comments, indent=2, ensure_ascii=False), encoding="utf-8")
     with _token_group_lock:
-        removed = token_vault.delete_tokens(ids)
         groups = load_token_groups()
         for group in groups:
-            group["token_ids"] = [tid for tid in group.get("token_ids", []) if tid not in ids]
+            if migration_token_id and ids.intersection({str(tid) for tid in group.get("token_ids", [])}):
+                group["token_ids"] = list(dict.fromkeys([str(tid) for tid in group.get("token_ids", []) if str(tid) not in ids] + [migration_token_id]))
+            else:
+                group["token_ids"] = [tid for tid in group.get("token_ids", []) if tid not in ids]
             if group.get("page_source_token_id") in ids:
-                group["page_source_token_id"] = ""
+                group["page_source_token_id"] = migration_token_id
         save_token_groups(groups)
-    for page in pages:
-        bindings = page.get("token_bindings")
-        if isinstance(bindings, dict):
-            for tid in ids:
-                bindings.pop(tid, None)
-    page_manager.save_pages(pages)
+        for page in pages:
+            bindings = page.get("token_bindings")
+            if isinstance(bindings, dict):
+                for tid in ids:
+                    bindings.pop(tid, None)
+        page_manager.save_pages(pages)
+        removed = token_vault.delete_tokens(ids)
     return jsonify({"success": True, "deleted_count": len(removed)})
 
 @app.route("/api/pages", methods=["GET"])
@@ -1824,6 +1977,7 @@ def api_list_pages():
     valid_groups = {str(g.get("id")): g for g in groups if g.get("id")}
     token_names = {str(t.get("id")): (t.get("owner_name") or t.get("name") or t.get("id"))
                    for t in token_vault.list_tokens(mask=True)}
+    token_groups = load_token_groups()
     # Page mapping stores the last successful publish counter, while the post
     # queue is the authoritative source for work scheduled during the current
     # run. Expose both so the UI never shows a misleading zero during a batch.
@@ -1851,6 +2005,8 @@ def api_list_pages():
         assigned_id = str(item.get("token_id") or "")
         item["token_assignment_valid"] = assigned_id in token_names
         item["token_name"] = token_names.get(assigned_id, "Chưa gán token hiện tại")
+        item["token_group_ids"] = [str(group.get("id")) for group in token_groups
+                                   if assigned_id and assigned_id in {str(tid) for tid in group.get("token_ids", [])}]
         item.update(stats.get(pid, {"published_count": 0, "scheduled_count": 0, "publishing_count": 0}))
         # Never display a deleted/stale group label as if it still existed.
         group_ids = [str(gid) for gid in (item.get("group_ids") or []) if str(gid) in valid_groups]
@@ -1935,6 +2091,7 @@ def api_delete_group(group_id):
 @app.route("/api/publish/reel", methods=["POST"])
 def api_publish_reel():
     from src.content_packages import scheduled_video_path
+    from multi_pc.meta_scheduling import MetaScheduleTimeError, parse_meta_schedule_time
     data = request.json or {}
     if data.get("schedule_time"):
         blocked = _ensure_recent_meta_health()
@@ -1949,9 +2106,19 @@ def api_publish_reel():
     first_comment = data.get("first_comment", "")
     article_url = str(data.get("article_url") or data.get("website_url") or "").strip()
     first_comment = str(first_comment or "").strip()
-    if article_url and article_url not in first_comment:
+    if article_url and first_comment and article_url not in first_comment:
         first_comment = f"{first_comment}\n{article_url}".strip()
     schedule_time = data.get("schedule_time") # ISO or "YYYY-MM-DD HH:MM" or timestamp
+    publish_mode = str(data.get("publish_mode") or "app_queue").strip().lower()
+    token_group_id = str(data.get("token_group_id") or "").strip()
+    profile_store = load_profile_store(FIRST_COMMENT_PROFILES_FILE)
+    first_comment_profile_id = str(data.get("first_comment_profile_id") or profile_store.get("default_profile_id") or "builtin_general")
+    if first_comment_profile_id not in {str(profile.get("id")) for profile in profile_store.get("profiles", [])}:
+        return jsonify({"success": False, "code": "first_comment_profile_missing", "error": "First Comment profile not found."}), 400
+    if publish_mode not in ("app_queue", "meta_scheduled"):
+        return jsonify({"success": False, "code": "invalid_publish_mode", "error": "publish_mode must be app_queue or meta_scheduled."}), 400
+    if publish_mode == "meta_scheduled" and not schedule_time:
+        return jsonify({"success": False, "code": "schedule_time_required", "error": "Meta scheduling requires a future publish time."}), 400
     stagger_minutes = max(1, int(data.get("stagger_minutes", 15)))
     posting_threads = max(1, min(50, int(data.get("posting_threads", 10))))
 
@@ -1982,6 +2149,26 @@ def api_publish_reel():
                 pid = str(pid).strip()
                 if pid not in target_page_ids:
                     target_page_ids.append(pid)
+
+    selected_token_group = None
+    if token_group_id:
+        selected_token_group = next((g for g in load_token_groups() if str(g.get("id")) == token_group_id), None)
+        if selected_token_group is None:
+            return jsonify({"success": False, "code": "token_group_missing", "error": "Token group not found."}), 404
+        missing_group_tokens = [str(token_id) for token_id in selected_token_group.get("token_ids", [])
+                                if token_vault.get_token_by_id(str(token_id)) is None]
+        if missing_group_tokens:
+            return jsonify({"success": False, "code": "credential_missing", "missing_token_ids": missing_group_tokens,
+                            "error": "Nhóm có credential thiếu hoặc ID trùng trong Token Vault; khôi phục và Sync Page trước khi lên lịch."}), 409
+        token_page_ids = {str(pid).strip() for pid in selected_token_group.get("page_ids", []) if str(pid).strip()}
+        if not token_page_ids:
+            return jsonify({"success": False, "code": "token_group_unsynced", "error": "Nhóm này chưa có Page đã đồng bộ; hãy Sync Page trước."}), 409
+        requested_pages = {str(page_id).strip()} if page_id else {str(pid).strip() for pid in page_ids if str(pid).strip()}
+        outside = requested_pages - token_page_ids
+        if outside:
+            return jsonify({"success": False, "code": "page_outside_token_group", "page_ids": sorted(outside),
+                            "error": "Page đã chọn không thuộc nhóm token này."}), 409
+        target_page_ids = [pid for pid in target_page_ids if pid in token_page_ids]
 
     if not target_page_ids:
         return jsonify({"error": "Vui lòng chọn ít nhất 1 Fanpage hoặc 1 Nhóm Page để đăng"}), 400
@@ -2032,6 +2219,27 @@ def api_publish_reel():
             if page_record is None:
                 continue
             schedule_target_pages.append((page_record, ready))
+        if selected_token_group:
+            allowed_tokens = {str(tid) for tid in selected_token_group.get("token_ids", [])}
+            outside = [ready["page_id"] for _page, ready in schedule_target_pages if str(ready["token_id"]) not in allowed_tokens]
+            if outside:
+                return jsonify({"success": False, "code": "page_token_outside_group", "page_ids": outside,
+                                "error": "Page không có mapping đã xác minh thuộc nhóm token đã chọn."}), 409
+        if publish_mode == "meta_scheduled":
+            try:
+                parsed_schedule_ts = parse_meta_schedule_time(parsed_schedule_ts)
+            except MetaScheduleTimeError as exc:
+                return jsonify({"success": False, "code": exc.code, "error": str(exc)}), 400
+            # Validate every staggered Page before the first upload begins.
+            offsets = paced_offsets_by_token(
+                [ready["token_id"] for _page, ready in schedule_target_pages],
+                global_seconds=0, token_seconds=stagger_minutes * 60,
+            )
+            try:
+                for offset in offsets:
+                    parse_meta_schedule_time(parsed_schedule_ts + offset)
+            except MetaScheduleTimeError as exc:
+                return jsonify({"success": False, "code": exc.code, "error": str(exc)}), 400
 
     # A direct publish must never report success without a Website-linked
     # First Comment. Scheduled posts may wait for their content package.
@@ -2051,6 +2259,24 @@ def api_publish_reel():
             "error": "Lịch đăng cần link bài Website hoặc bật tự động tạo bài và First Comment.",
             "code": "website_article_required",
         }), 400
+    if publish_mode == "meta_scheduled":
+        if article_url_valid and not first_comment:
+            try:
+                from src.first_comment_profiles import profile_first_comment
+                generated = generate_curiosity_comment_with_llm(
+                    title, article_url, enable_llm=bool(data.get("use_llm_comment", True)),
+                    profile_id=first_comment_profile_id,
+                )
+                first_comment = str(generated or "").strip()
+                fallback_value = profile_first_comment(title, article_url, first_comment_profile_id, profile_store)
+                data["first_comment_source"] = "template_fallback" if first_comment == fallback_value else "llm"
+            except Exception as exc:
+                return jsonify({"success": False, "code": "first_comment_generation_failed", "error": sanitize_error(exc)}), 502
+        if not article_url_valid or not first_comment or article_url not in first_comment:
+            return jsonify({"success": False, "code": "meta_schedule_comment_required",
+                            "error": "Meta scheduling needs a verified Website URL and a ready First Comment that contains that URL."}), 400
+        if first_comment.count(article_url) != 1:
+            return jsonify({"success": False, "code": "first_comment_url_count", "error": "First Comment must contain the exact Website URL once."}), 400
 
     # The website article is generated asynchronously from the content queue; the
     # schedule call must not block on CMS or LLM latency.
@@ -2109,7 +2335,7 @@ def api_publish_reel():
             duplicate = next((post for post in scheduled_posts if
                 post.get("page_id") == pid and
                 (post.get("media_file") or post.get("clip_filename")) == clip_filename and
-                post.get("status") in ("scheduled", "publishing", "processing", "published")
+                post.get("status") in ("scheduled", "meta_scheduled", "publishing", "processing", "published")
             ), None)
             if duplicate:
                 results.append({
@@ -2121,6 +2347,85 @@ def api_publish_reel():
                 })
                 continue
             scheduled_dt = datetime.fromtimestamp(curr_sched).strftime("%Y-%m-%d %H:%M:%S")
+            post_id = f"post_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+            if publish_mode == "meta_scheduled":
+                # Persist the exact token binding and an ambiguous-outcome guard
+                # before sending the irreversible upload/finish requests.
+                post_entry = {
+                    "id": post_id, "title": title, "content": caption,
+                    "page_id": pid, "page_name": p_info.get("page_name", pid), "type": "reel",
+                    "media_file": clip_filename, "first_comment": first_comment,
+                    "first_comment_snapshot": first_comment,
+                    "first_comment_profile_id": first_comment_profile_id,
+                    "first_comment_source": str(data.get("first_comment_source") or "manual"),
+                    "first_comment_status": "ready", "article_url": article_url,
+                    "website_status": "ready", "auto_first_comment": False,
+                    "status": "processing", "publish_mode": "meta_scheduled", "scheduled_time": scheduled_dt,
+                    "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "token_id": verified["token_id"], "token_group_id": token_group_id,
+                    "meta_scheduled_publish_time": curr_sched,
+                    "meta_schedule_status": "upload_started", "meta_schedule_verified_at": "",
+                    "meta_reconcile_attempts": 0, "meta_next_check_at": time.time() + 60,
+                    "retryable": False, "retry_stage": "meta_schedule_verification",
+                    "error": "Meta schedule upload started; do not retry until read-only reconciliation completes.",
+                }
+                scheduled_posts.insert(0, post_entry)
+                save_posts(scheduled_posts)
+                def persist_upload_id(meta_video_id):
+                    post_entry.update({"meta_upload_video_id": meta_video_id, "meta_video_id": meta_video_id,
+                                       "meta_schedule_status": "upload_initialized"})
+                    save_posts(scheduled_posts)
+                res = reel_poster.publish_reel(
+                    page_id=pid, page_token=p_token, video_path=str(video_path),
+                    description=full_description, first_comment=first_comment,
+                    schedule_time=curr_sched, token_id=verified["token_id"],
+                    post_id=post_id,
+                    on_upload_initialized=persist_upload_id,
+                )
+                if res.get("success") and res.get("status") == "SCHEDULED" and res.get("meta_video_id"):
+                    post_entry.update({
+                        "status": "meta_scheduled", "meta_video_id": str(res["meta_video_id"]),
+                        "meta_post_id": str(res.get("meta_post_id") or ""),
+                        "meta_upload_video_id": str(res.get("meta_video_id") or ""),
+                        "meta_scheduled_publish_time": int(res.get("scheduled_publish_time") or curr_sched),
+                        "meta_schedule_status": "scheduled",
+                        "outcome_unknown": False,
+                        "meta_schedule_verified_at": res.get("meta_schedule_verified_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "first_comment_status": "pending" if (res.get("comment_result") or {}).get("success") else "queue_failed",
+                        "first_comment_queue_id": (res.get("comment_result") or {}).get("queue_id") or "",
+                        "error": "", "retryable": False,
+                    })
+                    success_count += 1
+                    results.append({"page_id": pid, "page_name": p_info.get("page_name"), "success": True,
+                                    "status": "META_SCHEDULED", "post_id": post_id,
+                                    "meta_video_id": post_entry["meta_video_id"],
+                                    "scheduled_publish_time": post_entry["meta_scheduled_publish_time"],
+                                    "meta_schedule_status": "scheduled",
+                                    "first_comment_status": post_entry["first_comment_status"]})
+                elif res.get("outcome_unknown"):
+                    post_entry.update({
+                        "status": "processing", "outcome_unknown": True, "retryable": False,
+                        "meta_post_id": str(res.get("meta_post_id") or ""),
+                        "meta_upload_video_id": str(res.get("upload_video_id") or post_entry.get("meta_upload_video_id") or ""),
+                        "meta_video_id": str(res.get("meta_video_id") or res.get("upload_video_id") or post_entry.get("meta_video_id") or ""),
+                        "meta_schedule_status": str(res.get("meta_schedule_status") or "verification_pending"),
+                        "error": str(res.get("error") or "Meta outcome unknown; reconcile before retry."),
+                    })
+                    results.append({"page_id": pid, "page_name": p_info.get("page_name"), "success": False,
+                                    "processing": True, "outcome_unknown": True, "post_id": post_id,
+                                    "meta_schedule_status": post_entry["meta_schedule_status"],
+                                    "error": "Meta outcome is being reconciled; do not retry."})
+                else:
+                    post_entry.update({"status": "failed", "meta_schedule_status": "rejected",
+                                       "retryable": not bool(res.get("outcome_unknown")),
+                                       "retry_stage": "meta_schedule_rejected",
+                                       "outcome_unknown": bool(res.get("outcome_unknown")),
+                                       "error": str(res.get("error") or "Meta rejected the schedule request.")})
+                    results.append({"page_id": pid, "page_name": p_info.get("page_name"), "success": False,
+                                    "post_id": post_id, "meta_schedule_status": post_entry["meta_schedule_status"],
+                                    "outcome_unknown": post_entry["outcome_unknown"], "error": post_entry["error"]})
+                save_posts(scheduled_posts)
+                continue
             post_entry = {
                 "id": f"post_{int(time.time())}_{uuid.uuid4().hex[:6]}",
                 "title": title,
@@ -2130,6 +2435,9 @@ def api_publish_reel():
                 "type": "reel",
                 "media_file": clip_filename,
                 "first_comment": first_comment,
+                "first_comment_snapshot": first_comment,
+                "first_comment_profile_id": first_comment_profile_id,
+                "first_comment_source": str(data.get("first_comment_source") or ("llm" if first_comment else "manual")),
                 "first_comment_status": "ready" if first_comment else "not_configured",
                 "first_comment_error": "",
                 "article_url": str(data.get("article_url") or data.get("website_url") or "").strip(),
@@ -2138,10 +2446,12 @@ def api_publish_reel():
                 "auto_first_comment": bool(data.get("auto_first_comment", False)),
                 "use_llm_comment": bool(data.get("use_llm_comment", True)),
                 "status": "scheduled",
+                "publish_mode": "app_queue",
                 "scheduled_time": scheduled_dt,
                 "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "token": p_token,
                 "token_id": verified["token_id"],
+                "token_group_id": token_group_id,
                 "token_gap_seconds": stagger_minutes * 60,
             }
             scheduled_posts.append(post_entry)
@@ -2166,6 +2476,7 @@ def api_publish_reel():
                     video_url=str(post_entry.get("video_url") or post_entry.get("youtube_url") or ""),
                     create_website_article=not post_entry.get("article_url"),
                     source_job_id=meta.get("job_id", ""), source_clip_id=meta.get("clip_index", ""),
+                    first_comment_profile_id=first_comment_profile_id,
                 )
                 post_entry["content_package_id"] = package["id"]
                 post_entry["content_package_status"] = package["status"]
@@ -2242,8 +2553,11 @@ def api_publish_reel():
                     queued = enqueue_first_comment(
                         facebook_id, p_token, first_comment, int(time.time()) + 30,
                         token_id=verified["token_id"], post_id=post_id,
+                        outcome_unknown=bool(comment_result.get("outcome_unknown")),
                     )
-                    comment_status = "pending_retry" if queued.get("success") else "queue_failed"
+                    comment_status = "verification_pending" if queued.get("outcome_unknown") else ("pending_retry" if queued.get("success") else "queue_failed")
+                    if queued.get("outcome_unknown"):
+                        comment_error = "First Comment outcome unknown; queue is paused until Meta verification."
                     comment_queue_id = queued.get("queue_id") or ""
                     if not queued.get("success"):
                         comment_error = str(queued.get("error") or comment_error)
@@ -2751,6 +3065,10 @@ def api_distribute_batch():
     auto_first_comment = data.get("auto_first_comment", True)
     use_llm_comment = data.get("use_llm_comment", True)
     configured_first_comment = str(data.get("first_comment") or "").strip()
+    profile_store = load_profile_store(FIRST_COMMENT_PROFILES_FILE)
+    first_comment_profile_id = str(data.get("first_comment_profile_id") or profile_store.get("default_profile_id") or "builtin_general")
+    if first_comment_profile_id not in {str(profile.get("id")) for profile in profile_store.get("profiles", [])}:
+        return jsonify({"success": False, "code": "first_comment_profile_missing", "error": "First Comment profile not found."}), 400
     configured_website_url = str(data.get("article_url") or data.get("website_url") or "").strip()
     if configured_website_url and configured_website_url not in configured_first_comment:
         configured_first_comment = f"{configured_first_comment}\n{configured_website_url}".strip()
@@ -3004,6 +3322,9 @@ def api_distribute_batch():
                 "website_status": "ready" if configured_website_url else ("pending_generation" if auto_first_comment else "not_configured"),
                 "website_error": "",
                 "first_comment": configured_first_comment,
+                "first_comment_snapshot": configured_first_comment,
+                "first_comment_profile_id": first_comment_profile_id,
+                "first_comment_source": "manual" if configured_first_comment else "pending",
                 "first_comment_status": "ready" if configured_first_comment else "not_configured",
                 "first_comment_error": "",
                 "auto_first_comment": bool(auto_first_comment),
@@ -3013,6 +3334,7 @@ def api_distribute_batch():
                 "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "token": page_token,
                 "token_id": verified_token_ids.get(pid, ""),
+                "token_group_id": token_group_id,
                 "token_gap_seconds": group_stagger * 60,
             }
             posts.append(post_entry)
@@ -3041,6 +3363,7 @@ def api_distribute_batch():
                 video_url=str(post_entry.get("video_url") or post_entry.get("youtube_url") or ""),
                 create_website_article=bool(auto_first_comment) and not post_entry.get("article_url"),
                 source_job_id=meta.get("job_id", ""), source_clip_id=meta.get("clip_index", ""),
+                first_comment_profile_id=first_comment_profile_id,
             )
             post_entry["content_package_id"] = package["id"]
             post_entry["content_package_status"] = package["status"]
@@ -3710,8 +4033,11 @@ def apply_ready_package_to_post(post, package):
     post["website_status"] = package.get("website_status", post.get("website_status"))
     post["website_error"] = package.get("website_error", "")
     post["website_embed_status"] = package.get("embed_status") or "unknown"
-    post["first_comment"] = result.get("first_comment") or post.get("first_comment", "")
+    if not (post.get("status") == "published" and post.get("first_comment_status") == "posted") and not post.get("first_comment_snapshot"):
+        post["first_comment"] = result.get("first_comment") or post.get("first_comment", "")
     if post["first_comment"]:
+        post["first_comment_snapshot"] = post["first_comment"]
+        post["first_comment_profile_id"] = package.get("first_comment_profile_id") or result.get("first_comment_profile_id") or post.get("first_comment_profile_id", "")
         post["first_comment_status"] = "ready"
 
 # ---------------------------------------------------------------------------
@@ -3753,6 +4079,106 @@ def api_content_studio_queue():
         "circuit": circuit_status(),
     })
 
+
+@app.route("/api/first-comment-profiles", methods=["GET"])
+def api_first_comment_profiles():
+    store = load_profile_store(FIRST_COMMENT_PROFILES_FILE)
+    if not FIRST_COMMENT_PROFILES_FILE.exists():
+        store["profiles"] = builtin_profiles()
+    return jsonify({"success": True, **store, "niches": ["police", "sports", "news", "rescue", "reality", "general"]})
+
+
+@app.route("/api/first-comment-profiles", methods=["POST"])
+def api_create_first_comment_profile():
+    data = request.json or {}
+    store = load_profile_store(FIRST_COMMENT_PROFILES_FILE)
+    if not FIRST_COMMENT_PROFILES_FILE.exists():
+        store["profiles"] = builtin_profiles()
+    data.setdefault("lead_ins", next((p["lead_ins"] for p in store["profiles"] if p.get("niche") == data.get("niche")), store["profiles"][-1]["lead_ins"]))
+    try:
+        profile = normalize_profile(data)
+        if any(item.get("name", "").casefold() == profile["name"].casefold() for item in store["profiles"]):
+            return jsonify({"success": False, "error": "Profile name already exists."}), 409
+        store["profiles"].append(profile)
+        if data.get("make_default") or len(store["profiles"]) == 1:
+            store["default_profile_id"] = profile["id"]
+        saved = save_profile_store(FIRST_COMMENT_PROFILES_FILE, store)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    return jsonify({"success": True, "profile": profile, **saved}), 201
+
+
+@app.route("/api/first-comment-profiles/<profile_id>", methods=["PUT", "DELETE"])
+def api_update_first_comment_profile(profile_id):
+    store = load_profile_store(FIRST_COMMENT_PROFILES_FILE)
+    if not FIRST_COMMENT_PROFILES_FILE.exists():
+        store["profiles"] = builtin_profiles()
+    index = next((i for i, item in enumerate(store["profiles"]) if item.get("id") == profile_id), None)
+    if index is None:
+        return jsonify({"success": False, "error": "Profile not found."}), 404
+    if request.method == "DELETE":
+        if len(store["profiles"]) <= 1:
+            return jsonify({"success": False, "error": "At least one First Comment profile must remain."}), 409
+        del store["profiles"][index]
+        if store["default_profile_id"] == profile_id:
+            store["default_profile_id"] = store["profiles"][0]["id"]
+        saved = save_profile_store(FIRST_COMMENT_PROFILES_FILE, store)
+        return jsonify({"success": True, **saved})
+    data = request.json or {}
+    try:
+        profile = normalize_profile(data, profile_id=profile_id)
+        if any(i != index and item.get("name", "").casefold() == profile["name"].casefold()
+               for i, item in enumerate(store["profiles"])):
+            return jsonify({"success": False, "error": "Profile name already exists."}), 409
+        store["profiles"][index] = profile
+        if data.get("make_default"):
+            store["default_profile_id"] = profile_id
+        saved = save_profile_store(FIRST_COMMENT_PROFILES_FILE, store)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    return jsonify({"success": True, "profile": profile, **saved})
+
+
+@app.route("/api/first-comment-profiles/<profile_id>/regenerate", methods=["POST"])
+def api_regenerate_first_comment_profile(profile_id):
+    store = load_profile_store(FIRST_COMMENT_PROFILES_FILE)
+    if not FIRST_COMMENT_PROFILES_FILE.exists():
+        store["profiles"] = builtin_profiles()
+    profile = next((item for item in store["profiles"] if item.get("id") == profile_id), None)
+    if not profile:
+        return jsonify({"success": False, "error": "Profile not found."}), 404
+    try:
+        from src.content_builder import get_llm_candidates, _get_task_model
+        from src.llm_response import json_from_chat_response
+        cfg = get_llm_candidates()
+        endpoint = str(cfg.get("configured_base") or "").strip()
+        model = _get_task_model("first_comment") or cfg.get("model")
+        if not endpoint or not model or not cfg.get("api_key"):
+            return jsonify({"success": False, "error": "Configure a text LLM endpoint, model, and key before generating profile samples."}), 400
+        prompt = (
+            "Return JSON only as {\"templates\":[30 distinct strings]}. Write short reusable First Comment lead-ins "
+            "for niche=" + profile["niche"] + ". Keep every line factual and generic: no named people, event claims, "
+            "outcomes, dates, invented details, questions implying an event, or URLs. Each line should invite the reader "
+            "to open the article for more context. Lead-in only; the verified article URL is appended later."
+        )
+        headers = {"Content-Type": "application/json", "Accept": "application/json",
+                   "Authorization": f"Bearer {cfg['api_key']}"}
+        response = requests.post(f"{endpoint.rstrip('/')}/chat/completions", headers=headers,
+                                 json={"model": model, "messages": [{"role": "user", "content": prompt}],
+                                       "max_tokens": 1800, "temperature": 0.65}, timeout=45)
+        if response.status_code != 200:
+            raise RuntimeError(f"Text LLM returned HTTP {response.status_code}.")
+        result = json_from_chat_response(response)
+        samples = result.get("templates") if isinstance(result, dict) else None
+        profile = normalize_profile({**profile, "lead_ins": samples}, profile_id=profile_id)
+        store["profiles"] = [profile if item.get("id") == profile_id else item for item in store["profiles"]]
+        saved = save_profile_store(FIRST_COMMENT_PROFILES_FILE, store)
+    except (ValueError, RuntimeError) as exc:
+        return jsonify({"success": False, "error": sanitize_error(exc)}), 502
+    except Exception as exc:
+        return jsonify({"success": False, "error": sanitize_error(exc) if isinstance(exc, (ValueError, RuntimeError)) else type(exc).__name__}), 502
+    return jsonify({"success": True, "profile": profile, **saved})
+
 @app.route("/api/content-studio/generate", methods=["POST"])
 def api_content_studio_generate():
     payload = request.json or {}
@@ -3774,6 +4200,7 @@ def api_content_studio_generate():
             str(payload.get("video_url") or ""),
             mode=mode,
             component=component,
+            profile_id=str(payload.get("first_comment_profile_id") or ""),
         )
     except Exception as exc:
         return jsonify({"success": False, "error": sanitize_error(exc)}), 502
@@ -3795,6 +4222,7 @@ def api_content_studio_enqueue():
         post_ids=list(payload.get("post_ids") or []),
         article_url=str(payload.get("article_url") or ""),
         create_website_article=bool(payload.get("create_website_article")),
+        first_comment_profile_id=str(payload.get("first_comment_profile_id") or ""),
     )
     start_content_package_worker()
     return jsonify({"success": True, "item": item})
@@ -3870,6 +4298,7 @@ def api_content_studio_batch():
         created_item = enqueue_content_package(
             clip_filename=str(clip_path), title=title, mode=mode,
             create_website_article=bool(payload.get("create_website_article")),
+            first_comment_profile_id=str(payload.get("first_comment_profile_id") or ""),
         )
         created.append(created_item)
         existing_keys.update(keys)

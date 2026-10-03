@@ -70,9 +70,9 @@ class TokenVault:
         try:
             with open(self.vault_file, "r", encoding="utf-8") as f:
                 tokens = json.load(f)
-            for t in tokens:
-                if t.get("id") == token_id:
-                    return t.get("token")
+            matches = [t for t in tokens if t.get("id") == token_id]
+            if len(matches) == 1:
+                return matches[0].get("token")
         except Exception:
             pass
         return None
@@ -81,9 +81,9 @@ class TokenVault:
         try:
             with open(self.vault_file, "r", encoding="utf-8") as f:
                 tokens = json.load(f)
-            for t in tokens:
-                if t.get("id") == token_id:
-                    return t
+            matches = [t for t in tokens if t.get("id") == token_id]
+            if len(matches) == 1:
+                return matches[0]
         except Exception:
             pass
         return None
@@ -100,7 +100,8 @@ class TokenVault:
                 tokens = []
 
         status_info = self.verify_token(token_str) if discover_pages else self.verify_identity(token_str)
-        token_id = f"tok_{int(datetime.now().timestamp())}_{len(tokens)+1}"
+        existing = next((item for item in tokens if item.get("token") == token_str), None)
+        token_id = str((existing or {}).get("id") or f"tok_{uuid.uuid4().hex}")
         owner_name = status_info.get("owner_name", "").strip()
         resolved_name = name.strip() if name and name.strip() else (owner_name or f"Token {len(tokens)+1}")
 
@@ -127,6 +128,13 @@ class TokenVault:
             "last_used": None
         }
 
+        if existing:
+            # Re-importing the same credential refreshes its verification data,
+            # while preserving IDs already referenced by Pages and queued posts.
+            for field in ("created_at", "total_calls", "call_count_hour", "usage_window_start",
+                          "last_used", "app_usage_pct", "cputime_pct", "time_pct", "rate_status"):
+                if field in existing:
+                    entry[field] = existing[field]
         tokens = [t for t in tokens if t.get("token") != token_str]
         tokens.append(entry)
         self._save(tokens)

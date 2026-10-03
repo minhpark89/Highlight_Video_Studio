@@ -43,6 +43,10 @@ chrome_data/
 # Runtime first-comment retry queue (contains short-lived page access tokens)
 data/pending_first_comments.json
 data/scheduler_heartbeat.json
+data/content_packages.json
+data/first_comment_profiles.json
+data/run/
+run/
 
 # Installer/build artifacts
 dist/

@@ -23,6 +23,14 @@ $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $pythonZip = Join-Path $buildRoot "python-3.11.7-embed-amd64.zip"
 $payload = Join-Path $buildRoot ("Highlight_Desktop_Test_Package_v$Version-" + [Guid]::NewGuid().ToString("N") + ".zip")
 
+function Assert-BuildCleanupPath([string]$TargetPath) {
+    $absoluteTarget = [IO.Path]::GetFullPath($TargetPath)
+    $buildBoundary = [IO.Path]::GetFullPath($buildRoot).TrimEnd('\') + '\'
+    if (-not $absoluteTarget.StartsWith($buildBoundary, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Unsafe build cleanup target: $absoluteTarget"
+    }
+}
+
 if (-not (Test-Path -LiteralPath $csc)) { throw "C# compiler not found: $csc" }
 
 if (-not $SkipTests) {
@@ -32,7 +40,8 @@ if (-not $SkipTests) {
             @("tests/test_multi_pc_hardware.py", "tests/test_multi_pc_local_mvp.py", "tests/test_multi_pc_phase1.py"),
             @("tests/test_release_guards.py"),
             @("tests/test_page_token_sync.py"),
-            @("tests/test_youtube_embed_publish.py", "tests/test_scheduling_publish_flow.py")
+            @("tests/test_youtube_embed_publish.py", "tests/test_scheduling_publish_flow.py"),
+            @("tests/test_meta_native_handoff.py", "tests/test_meta_scheduling_profiles.py", "tests/test_fallback_comments.py", "tests/test_preview26_source_metadata.py", "tests/test_preview28_long_article_fallback.py")
         )
         foreach ($group in $testGroups) {
             & python -m pytest @group -q --no-header
@@ -81,6 +90,7 @@ $buildIdentity = @{
     bind_host = "127.0.0.1"
     port = "ephemeral-loopback-never-5080"
     source_commit = (git -C $root rev-parse HEAD).Trim()
+    source_dirty = [bool](git -C $root status --porcelain --untracked-files=normal)
     built_at_utc = [DateTime]::UtcNow.ToString("o")
 }
 $buildIdentity | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage "build_identity.json") -Encoding UTF8
@@ -110,7 +120,10 @@ else {
     if ($LASTEXITCODE -ne 0) { throw "Portable runtime dependency install failed" }
     Set-Content -LiteralPath (Join-Path $runtimeDir "python311._pth") -Encoding ASCII -Value @("python311.zip", ".", "..", "Lib\site-packages", "import site")
     Set-Content -LiteralPath $runtimeLock -Encoding ASCII -Value "python=3.11.7`nrequirements=$((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'requirements.txt')).Hash.ToLowerInvariant())"
-    if (Test-Path -LiteralPath $lockedRuntime) { Remove-Item -LiteralPath $lockedRuntime -Recurse -Force }
+    if (Test-Path -LiteralPath $lockedRuntime) {
+        Assert-BuildCleanupPath $lockedRuntime
+        Remove-Item -LiteralPath $lockedRuntime -Recurse -Force
+    }
     Copy-Item -LiteralPath $runtimeDir -Destination $lockedRuntime -Recurse -Force
 }
 
@@ -194,7 +207,10 @@ $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvaria
 $hashFile = Join-Path $release "Highlight_Desktop_Test_Setup_v$releaseLabel.sha256"
 Set-Content -LiteralPath $hashFile -Encoding ASCII -Value "$hash  $setupName"
 try { Remove-Item -LiteralPath $payload -Force -ErrorAction Stop } catch { Write-Warning "Could not remove temporary payload: $payload" }
-try { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction Stop } catch { Write-Warning "Could not remove temporary stage: $stage" }
+try {
+    Assert-BuildCleanupPath $stage
+    Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction Stop
+} catch { Write-Warning "Could not remove temporary stage: $stage" }
 Write-Host "Release built: $setup"
 Write-Host "SHA256: $hash"
 

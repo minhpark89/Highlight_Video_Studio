@@ -960,13 +960,15 @@ Output strictly valid JSON only:
 
     return seo_title, body_html
 
-def generate_curiosity_comment_with_llm(video_title: str, article_url: str, enable_llm: bool = True) -> str:
+def generate_curiosity_comment_with_llm(video_title: str, article_url: str, enable_llm: bool = True, profile_id: str = "") -> str:
     """
     Sinh First Comment gây tò mò (Curiosity Gap) bằng AI LLM (Gemini-3-Flash) dẫn link web.
     Fallback về mẫu chuẩn cố định nếu tắt LLM hoặc lỗi mạng.
     """
-    from src.fallback_comments import fallback_first_comment
-    fallback_comment = fallback_first_comment(video_title, article_url)
+    from src.first_comment_profiles import load_profile_store, profile_first_comment
+    from multi_pc.data_root import canonical_data_root
+    profile_store = load_profile_store(canonical_data_root() / "data" / "first_comment_profiles.json")
+    fallback_comment = profile_first_comment(video_title, article_url, profile_id, profile_store)
 
     if not enable_llm:
         return fallback_comment
@@ -999,9 +1001,11 @@ Rules:
             comment = chat_text_from_response(resp).strip()
             if not comment:
                 raise ValueError("LLM comment response is empty")
+            if comment.count(article_url) > 1:
+                return fallback_comment
             if comment.startswith('"') and comment.endswith('"'):
                 comment = comment[1:-1].strip()
-            if article_url not in comment:
+            if comment.count(article_url) == 0:
                 comment += f"\n👉 Full uncut video: {article_url}"
             # Facebook accepts longer comments, but keeping this compact gives
             # the requested high-CTR first-comment format.

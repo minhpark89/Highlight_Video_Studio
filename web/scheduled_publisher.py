@@ -198,21 +198,48 @@ def _process_scheduled_posts_once(
     current_dt = now or datetime.now()
     now_ts = current_dt.timestamp()
 
-    queue_result = process_due_first_comments(poster, now=int(current_dt.timestamp()))
     posts = load_posts()
     posts_by_id = {post.get("id"): post for post in posts}
+    def prepare_first_comment(item):
+        linked_post = posts_by_id.get(item.get("post_id"))
+        exact_token_id = str(item.get("token_id") or (linked_post or {}).get("token_id") or "")
+        page_token = item.get("page_token")
+        if exact_token_id:
+            page = next((page for page in page_manager.list_pages()
+                         if str(page.get("page_id")) == str((linked_post or {}).get("page_id"))), None)
+            exact_page = {**page, "token_id": exact_token_id} if page else None
+            verdict = preflight_pages([exact_page], token_vault, page_manager) if exact_page else {"ok": False}
+            if not verdict.get("ok"):
+                return {"ready": False, "error": "Exact First Comment credential unavailable; restore and Sync Page."}
+            page_token = verdict["ready"][0]["token"]
+        if linked_post and linked_post.get("publish_mode") == "meta_scheduled":
+            check = MetaReelPoster(token_vault=token_vault).check_processing_reel(
+                item.get("meta_video_id") or item.get("object_id"), page_token, exact_token_id or None,
+            )
+            if not check.get("verified"):
+                return {"ready": False, "error": "Waiting for independently verified Meta publication."}
+        return {"ready": bool(page_token), "page_token": page_token}
+    queue_result = process_due_first_comments(poster, now=int(current_dt.timestamp()), prepare=prepare_first_comment)
     reconciled = 0
     for post in posts:
-        if post.get("status") != "processing" or not (post.get("meta_upload_video_id") or post.get("meta_post_id")):
+        if post.get("status") not in ("processing", "meta_scheduled") or not (post.get("meta_video_id") or post.get("meta_upload_video_id") or post.get("meta_post_id")):
             continue
+        meta_scheduled = post.get("publish_mode") == "meta_scheduled" or bool(post.get("meta_scheduled_publish_time"))
+        if meta_scheduled:
+            publish_at = float(post.get("meta_scheduled_publish_time") or 0)
+            if post.get("status") == "meta_scheduled" and publish_at and now_ts < publish_at + 90:
+                continue
+            if now_ts < float(post.get("meta_next_check_at") or 0):
+                continue
         attempts = int(post.get("meta_reconcile_attempts") or 0)
-        if attempts >= 6 and post.get("meta_reconcile_version") == 2:
+        if not meta_scheduled and attempts >= 6 and post.get("meta_reconcile_version") == 2:
             continue
         if now_ts < float(post.get("meta_next_check_at") or 0) and post.get("meta_reconcile_version") == 2:
             continue
         # New records require the same exact Page/token mapping as publishing.
         page = next((p for p in page_manager.list_pages() if str(p.get("page_id")) == str(post.get("page_id"))), None)
-        verdict = preflight_pages([page], token_vault, page_manager) if page and post.get("token_id") else {"ok": False}
+        exact_page = {**page, "token_id": post["token_id"]} if page and post.get("token_id") else None
+        verdict = preflight_pages([exact_page], token_vault, page_manager) if exact_page else {"ok": False}
         if not verdict.get("ok"):
             post["meta_reconcile_error"] = "Exact Page credential unavailable; read-only verification paused."
             continue
@@ -222,24 +249,59 @@ def _process_scheduled_posts_once(
         # The upload video_id is the actual Reel object and is read first.
         poster_for_check = _MetaReelPoster(token_vault=token_vault)
         check = {"verified": False}
-        for candidate in dict.fromkeys((post.get("meta_upload_video_id"), post.get("meta_post_id"))):
+        for candidate in dict.fromkeys((post.get("meta_video_id"), post.get("meta_upload_video_id"), post.get("meta_post_id"))):
             if candidate:
-                check = poster_for_check.check_processing_reel(
-                    candidate, credential["token"], credential["token_id"]
-                )
+                if meta_scheduled:
+                    check = poster_for_check.check_scheduled_reel(
+                        candidate, credential["token"], post.get("meta_scheduled_publish_time"), credential["token_id"]
+                    )
+                    if check.get("status") == "published" and not check.get("verified"):
+                        public_check = poster_for_check.check_processing_reel(
+                            candidate, credential["token"], credential["token_id"]
+                        )
+                        if public_check.get("verified"):
+                            check = {**public_check, "verified": True, "status": "published"}
+                else:
+                    check = poster_for_check.check_processing_reel(
+                        candidate, credential["token"], credential["token_id"]
+                    )
                 if check.get("verified"):
                     break
         post["meta_reconcile_attempts"] = (attempts + 1) if post.get("meta_reconcile_version") == 2 else 1
         post["meta_reconcile_version"] = 2
-        post["meta_next_check_at"] = now_ts + 60
+        post["meta_next_check_at"] = now_ts + (300 if meta_scheduled else 60)
         reconciled += 1
         if check.get("verified"):
             post["post_fb_id"] = check["video_id"]
-            post["fb_url"] = check["fb_url"]
+            if check.get("fb_url"):
+                post["fb_url"] = check["fb_url"]
+            if meta_scheduled and check.get("status") == "scheduled":
+                post.update({
+                    "status": "meta_scheduled",
+                    "meta_video_id": check["video_id"],
+                    "meta_schedule_status": "scheduled",
+                    "meta_schedule_verified_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "meta_scheduled_publish_time": check.get("publish_time") or post.get("meta_scheduled_publish_time"),
+                    "outcome_unknown": False,
+                    "error": "",
+                })
+                if post.get("first_comment") and post.get("first_comment_status") not in ("posted", "pending"):
+                    try:
+                        queued = enqueue_first_comment(
+                            check["video_id"], credential["token"], post["first_comment"],
+                            int(post["meta_scheduled_publish_time"]) + 30,
+                            token_id=credential["token_id"], post_id=post.get("id"),
+                        )
+                        post["first_comment_status"] = "pending" if queued.get("success") else "queue_failed"
+                        post["first_comment_queue_id"] = queued.get("queue_id") or ""
+                    except Exception as exc:
+                        post["first_comment_status"] = "queue_failed"
+                        post["first_comment_error"] = sanitize_error(exc)
+                continue
             # Ledger and post state must agree before displaying confirmed success.
             try:
                 _record_posted_clip(post.get("media_file") or post.get("clip_filename"))
-                post.update({"status": "published", "published_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"), "error": ""})
+                post.update({"status": "published", "published_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"), "meta_schedule_status": "published" if meta_scheduled else post.get("meta_schedule_status", ""), "error": ""})
             except Exception as exc:
                 post["ledger_error"] = sanitize_error(exc)
             if post.get("first_comment") and post.get("first_comment_status") not in ("posted", "pending"):
@@ -252,6 +314,19 @@ def _process_scheduled_posts_once(
                 except Exception as exc:
                     post["first_comment_status"] = "queue_failed"
                     post["first_comment_error"] = sanitize_error(exc)
+        elif meta_scheduled and check.get("status") in ("error", "failed", "rejected", "schedule_mismatch"):
+            post.update({
+                "status": "failed", "meta_schedule_status": "rejected" if check.get("status") != "schedule_mismatch" else "schedule_mismatch",
+                "retryable": False, "retry_stage": "meta_schedule_rejected",
+                "error": "Meta did not confirm the requested scheduled state; inspect the Meta object before taking action.",
+            })
+        elif meta_scheduled and check.get("status") == "scheduled":
+            post.update({
+                "status": "meta_scheduled",
+                "meta_schedule_status": "scheduled",
+                "meta_schedule_verified_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "meta_next_check_at": max(now_ts + 300, float(post.get("meta_scheduled_publish_time") or now_ts) + 90),
+            })
     for outcome in queue_result.get("outcomes", []):
         post = posts_by_id.get(outcome.get("post_id"))
         if not post:
@@ -473,8 +548,11 @@ def _process_scheduled_posts_once(
                             facebook_id, page_token, first_comment,
                             int(current_dt.timestamp()) + 30,
                             token_id=post.get("token_id"), post_id=post_id,
+                            outcome_unknown=bool(comment_result.get("outcome_unknown")),
                         )
-                        post["first_comment_status"] = "pending_retry" if queued.get("success") else "queue_failed"
+                        post["first_comment_status"] = "verification_pending" if queued.get("outcome_unknown") else ("pending_retry" if queued.get("success") else "queue_failed")
+                        if queued.get("outcome_unknown"):
+                            post["first_comment_error"] = "First Comment outcome unknown; queue is paused until Meta verification."
                         post["first_comment_error"] = comment_result.get("error", "Không thể đăng First Comment")
                         post["first_comment_queue_id"] = queued.get("queue_id")
                 except Exception as exc:
@@ -483,8 +561,9 @@ def _process_scheduled_posts_once(
                             facebook_id, page_token, first_comment,
                             int(current_dt.timestamp()) + 30,
                             token_id=post.get("token_id"), post_id=post_id,
+                            outcome_unknown=True,
                         )
-                        post["first_comment_status"] = "pending_retry" if queued.get("success") else "queue_failed"
+                        post["first_comment_status"] = "verification_pending" if queued.get("success") else "queue_failed"
                         post["first_comment_queue_id"] = queued.get("queue_id")
                     except Exception:
                         post["first_comment_status"] = "queue_failed"

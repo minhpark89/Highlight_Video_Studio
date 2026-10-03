@@ -18,6 +18,7 @@ from multi_pc.data_root import ProcessLease, canonical_data_root
 from src.llm_response import chat_model_unavailable, chat_stream_incomplete, json_from_chat_response
 from src.text_llm_diagnostics import chat_endpoint, chat_failure
 from src.fallback_comments import fallback_first_comment
+from src.first_comment_profiles import load_profile_store, profile_first_comment
 
 DATA_ROOT = canonical_data_root()
 QUEUE_FILE = DATA_ROOT / "data" / "content_packages.json"
@@ -56,7 +57,7 @@ def _now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def fallback_package(title: str, summary: str = "", article_url: str = "") -> dict:
+def fallback_package(title: str, summary: str = "", article_url: str = "", profile_id: str = "", profile_store=None) -> dict:
     clean = " ".join(str(title or "Untold Highlight").split()).strip()
     context = " ".join(str(summary or "").split()).strip()
     hero = clean[:110]
@@ -69,7 +70,7 @@ def fallback_package(title: str, summary: str = "", article_url: str = "") -> di
         "<h3>What remains open</h3><p>This no-LLM overview deliberately does not invent a result, a quote, a location or a cause. The full video is the reference for judging the selected moment; the article is a viewing guide rather than a reported account. If a decisive detail is not visible, describe the uncertainty instead of treating an attractive narrative as evidence.</p>"
     )
     link = str(article_url or "").strip()
-    comment = fallback_first_comment(clean, link)
+    comment = profile_first_comment(clean, link, profile_id, profile_store) if link else ""
     caption = f"🔥 {clean}\n\n{lead}\n\nWhat detail did you notice first?\n\n#highlight #viral #trending #mustwatch"
     return {
         "hero_title": hero,
@@ -167,8 +168,8 @@ def _llm_package(title, summary, video_url="", article_url=""):
                 raise ValueError("LLM returned an incomplete content package")
             if not isinstance(data.get("first_comment"), str):
                 raise ValueError("LLM returned an incomplete content package")
-            if article_url and article_url not in data["first_comment"]:
-                raise ValueError("LLM First Comment omitted the verified article URL")
+            if article_url and data["first_comment"].count(article_url) != 1:
+                raise ValueError("LLM First Comment must contain the verified article URL exactly once")
             if not isinstance(data.get("hashtags"), list) or not all(
                 isinstance(tag, str) for tag in data["hashtags"]
             ):
@@ -194,8 +195,9 @@ class QuotaError(RuntimeError):
     pass
 
 
-def generate_package(title, summary="", video_url="", mode="auto", article_url="", component=""):
-    fallback = fallback_package(title, summary, article_url)
+def generate_package(title, summary="", video_url="", mode="auto", article_url="", component="", profile_id="", profile_store=None):
+    profile_store = profile_store or load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json")
+    fallback = fallback_package(title, summary, article_url, profile_id, profile_store)
     selected_mode = str(mode or "auto").lower()
     if selected_mode == "no_llm":
         result = fallback
@@ -219,12 +221,22 @@ def generate_package(title, summary="", video_url="", mode="auto", article_url="
     if component:
         if component not in fallback:
             raise ValueError("Unknown content component")
-        return {component: result.get(component) or fallback[component], "source": result.get("source")}
+        return {component: result.get(component) or fallback[component], "source": result.get("source"),
+                "first_comment_profile_id": profile_id or profile_store.get("default_profile_id", "builtin_general")}
+    if article_url and result.get("first_comment"):
+        result.setdefault("first_comment_profile_id", profile_id or profile_store.get("default_profile_id", "builtin_general"))
+        result.setdefault("first_comment_source", "template_fallback" if str(result.get("source") or "").startswith("no_llm") else "llm")
     return result
 
 
 def enqueue_content_package(*, clip_filename, title, summary="", video_url="", mode="auto", post_ids=None,
-                            components=None, article_url="", create_website_article=False, source_job_id="", source_clip_id=""):
+                            components=None, article_url="", create_website_article=False, source_job_id="", source_clip_id="",
+                            first_comment_profile_id=""):
+    profile_store = load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json")
+    selected_profile_id = str(first_comment_profile_id or profile_store.get("default_profile_id") or "builtin_general")
+    selected_profile = next((profile for profile in profile_store["profiles"] if profile["id"] == selected_profile_id), None)
+    if not selected_profile:
+        raise ValueError("First Comment profile not found.")
     with _LOCK:
         items = _read(QUEUE_FILE, [])
         item = {
@@ -239,6 +251,8 @@ def enqueue_content_package(*, clip_filename, title, summary="", video_url="", m
             "components": components or ["hero_title", "article_html", "first_comment", "caption"],
             "post_ids": list(post_ids or []),
             "article_url": str(article_url or ""),
+            "first_comment_profile_id": selected_profile_id,
+            "first_comment_profile_store": {"default_profile_id": selected_profile_id, "profiles": [selected_profile]},
             "embed_status": "ready" if str(video_url or "").strip() else "pending_generation",
             "video_url": str(video_url or ""),
             "create_website_article": bool(create_website_article),
@@ -458,7 +472,9 @@ def _apply_to_posts(item):
         post["content_package_id"] = item["id"]
         post["content_package_status"] = item.get("status", "ready")
         post["content_package_source"] = result.get("source")
-        post["first_comment_source"] = result.get("first_comment_source") or post.get("first_comment_source", "")
+        if not post.get("first_comment_snapshot") and post.get("first_comment_status") != "posted":
+            post["first_comment_source"] = result.get("first_comment_source") or post.get("first_comment_source", "")
+            post["first_comment_profile_id"] = item.get("first_comment_profile_id") or result.get("first_comment_profile_id") or post.get("first_comment_profile_id", "")
         post["content"] = result.get("caption") or post.get("content", "")
         if result.get("hero_title"):
             post["title"] = result["hero_title"]
@@ -469,9 +485,12 @@ def _apply_to_posts(item):
         post["video_url"] = item.get("video_url") or ""
         post["website_status"] = item.get("website_status", post.get("website_status"))
         post["website_error"] = item.get("website_error", "")
-        if result.get("first_comment"):
+        if result.get("first_comment") and not (
+            post.get("status") == "published" and post.get("first_comment_status") == "posted"
+        ) and not post.get("first_comment_snapshot"):
             previous_comment_status = post.get("first_comment_status")
             post["first_comment"] = result["first_comment"]
+            post["first_comment_snapshot"] = result["first_comment"]
             # A package may finish after Facebook published without a comment.
             # Do not suggest that an already-published post still has a pending
             # comment dispatch or trigger an implicit second publishing attempt.
@@ -554,9 +573,15 @@ def retry_package_component(package_id, component, mode=None):
         snapshot.get("title", ""), snapshot.get("summary", ""), snapshot.get("video_url", ""),
         mode=mode or snapshot.get("mode", "auto"), component=component,
         article_url=snapshot.get("article_url", ""),
+        profile_id=snapshot.get("first_comment_profile_id", ""),
+        profile_store=snapshot.get("first_comment_profile_store"),
     )
-    if component == "first_comment" and snapshot["article_url"] not in str(result.get(component) or ""):
-        result[component] = fallback_package(snapshot.get("title", ""), snapshot.get("summary", ""), snapshot["article_url"])[component]
+    if component == "first_comment" and str(result.get(component) or "").count(snapshot["article_url"]) != 1:
+        result[component] = fallback_package(
+            snapshot.get("title", ""), snapshot.get("summary", ""), snapshot["article_url"],
+            snapshot.get("first_comment_profile_id", ""),
+            snapshot.get("first_comment_profile_store") or load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json"),
+        )[component]
         result["source"] = "template_fallback"
     with _LOCK:
         items = _read(QUEUE_FILE, [])
@@ -673,15 +698,21 @@ def _process_new_content_package(item):
             result = generate_package(
                 item["title"], item.get("summary", ""), item.get("video_url", ""),
                 item.get("mode", "auto"), article_url=article_url,
+                profile_id=item.get("first_comment_profile_id", ""),
+                profile_store=item.get("first_comment_profile_store"),
             )
         if requires_comment:
             comment = str(result.get("first_comment") or "").strip()
-            if not comment or article_url not in comment:
-                result["first_comment"] = fallback_package(item["title"], item.get("summary", ""), article_url)["first_comment"]
+            if not comment or comment.count(article_url) != 1:
+                result["first_comment"] = fallback_package(
+                    item["title"], item.get("summary", ""), article_url,
+                    item.get("first_comment_profile_id", ""),
+                    item.get("first_comment_profile_store") or load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json"),
+                )["first_comment"]
                 result["first_comment_source"] = "template_fallback"
             elif not result.get("first_comment_source"):
                 result["first_comment_source"] = "template_fallback" if str(result.get("source") or "").startswith("no_llm") else "llm"
-            if not result.get("first_comment") or article_url not in result["first_comment"]:
+            if not result.get("first_comment") or result["first_comment"].count(article_url) != 1:
                 raise RuntimeError("First Comment không chứa đúng URL bài CMS mới")
         retryable = str(result.get("source") or "").startswith("no_llm_quota_fallback")
         item.update({"status": "retryable" if retryable else "ready", "result": result, "error": "" if not retryable else "LLM quota exhausted; sẽ tự retry khi quota khả dụng.", "completed_at": _now()})

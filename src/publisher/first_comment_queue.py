@@ -31,17 +31,18 @@ def _save_unlocked(items):
     temporary.replace(QUEUE_FILE)
 
 
-def enqueue_first_comment(object_id, page_token, comment_text, due_at, token_id=None, post_id=None):
+def enqueue_first_comment(object_id, page_token, comment_text, due_at, token_id=None, post_id=None, meta_video_id=None, outcome_unknown=False):
     text = str(comment_text or "").strip()
     item = {
         "id": f"fc_{uuid.uuid4().hex[:12]}",
         "object_id": str(object_id),
+        "meta_video_id": str(meta_video_id or object_id),
         "page_token": str(page_token),
         "token_id": str(token_id or ""),
         "comment_text": text,
         "due_at": int(due_at),
         "attempts": 0,
-        "status": "pending",
+        "status": "verification_pending" if outcome_unknown else "pending",
         "last_error": "",
         "post_id": str(post_id or ""),
     }
@@ -49,16 +50,17 @@ def enqueue_first_comment(object_id, page_token, comment_text, due_at, token_id=
         items = _load_unlocked()
         if post_id:
             existing = next((entry for entry in items if entry.get("post_id") == str(post_id)
-                             and entry.get("status") in ("pending", "posted")), None)
+                             and entry.get("status") in ("pending", "posted", "verification_pending")), None)
             if existing:
                 return {"success": True, "pending": existing.get("status") == "pending",
                         "queue_id": existing["id"], "due_at": existing.get("due_at")}
         items.append(item)
         _save_unlocked(items)
-    return {"success": True, "pending": True, "queue_id": item["id"], "due_at": item["due_at"]}
+    return {"success": True, "pending": not outcome_unknown, "outcome_unknown": outcome_unknown,
+            "queue_id": item["id"], "due_at": item["due_at"]}
 
 
-def process_due_first_comments(poster, now=None):
+def process_due_first_comments(poster, now=None, prepare=None):
     current = int(now or time.time())
     changed = False
     completed = 0
@@ -68,6 +70,18 @@ def process_due_first_comments(poster, now=None):
         for item in items:
             if item.get("status") != "pending" or int(item.get("due_at") or 0) > current:
                 continue
+            if prepare is not None:
+                try:
+                    readiness = prepare(item)
+                except Exception:
+                    readiness = {"ready": False, "error": "Exact credential or publication verification unavailable."}
+                if not readiness.get("ready"):
+                    item["last_error"] = readiness.get("error", "Waiting for verified Reel publication.")
+                    item["due_at"] = current + 60
+                    changed = True
+                    continue
+                if readiness.get("page_token"):
+                    item["page_token"] = readiness["page_token"]
             try:
                 result = poster.post_first_comment(
                     item.get("object_id"),
@@ -85,6 +99,9 @@ def process_due_first_comments(poster, now=None):
                 # Do not retain access tokens after the comment succeeds.
                 item["page_token"] = ""
                 completed += 1
+            elif result.get("outcome_unknown"):
+                item["status"] = "verification_pending"
+                item["last_error"] = "Comment request outcome is unknown; verify on Meta before retrying."
             elif item["attempts"] >= 8:
                 item["status"] = "failed"
                 item["last_error"] = result.get("error", "Unknown error")

@@ -928,6 +928,7 @@
 
           <!-- Banner cảnh báo bài quá hạn chưa đăng -->
           <div id="scheduler-overdue-banner" style="display: none; margin-bottom: 14px; padding: 12px 16px; border-radius: 10px; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.45); color: #fca5a5; font-size: 13px;">
+            QUÁ HẠN
           </div>
 
           <!-- Bảng danh sách bài đăng chuẩn LoHa -->
@@ -1530,6 +1531,7 @@
                 <input type="text" id="page-search-input" class="form-control form-control-sm" placeholder="Tìm theo tên trang hoặc dán Page ID..." oninput="filterPagesList()" style="background: #0b1329; border-color: #23304d; padding-left: 32px; font-size: 13px;">
                 <i class="bi bi-search" style="position: absolute; left: 10px; top: 7px; color: #64748b;"></i>
               </div>
+              <select id="page-filter-token-group" class="form-select form-select-sm" onchange="filterPagesList()" aria-label="Nhóm token"><option value="">Nhóm token: Tất cả</option></select>
               <select id="page-filter-group" class="form-select form-select-sm" onchange="filterPagesList()" style="width: 180px; background: #0b1329; border-color: #23304d; font-size: 12.5px;">
                 <option value="all">Tất cả nhóm</option>
               </select>
@@ -1820,6 +1822,11 @@
                 <option value="llm">llm — bắt buộc LLM, báo lỗi nếu không gọi được</option>
                 <option value="no_llm">no_llm — không gọi LLM (tất định)</option>
               </select>
+              <label class="form-label">First Comment niche</label>
+              <div style="display:flex;gap:8px;margin-bottom:12px;">
+                <select id="cs-first-comment-profile" class="form-control"></select>
+                <button type="button" class="btn btn-secondary" onclick="openFirstCommentProfileEditor()">Manage</button>
+              </div>
               <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                 <button class="btn btn-primary" onclick="generateContentPackage()"><i class="bi bi-stars"></i> Tạo nội dung</button>
                 <button class="btn btn-secondary" onclick="enqueueContentPackage()"><i class="bi bi-inboxes"></i> Đưa vào hàng đợi</button>
@@ -3430,6 +3437,11 @@
     const pagination = document.getElementById('pages-pagination');
 
     let filtered = cachedPagesList.filter(p => {
+      const tokenGroupId = document.getElementById('page-filter-token-group')?.value || '';
+      if (tokenGroupId) {
+        const tokenGroup = cachedTokenGroups.find(group => String(group.id) === tokenGroupId);
+        if (!tokenGroup || !(tokenGroup.page_ids || []).map(String).includes(String(p.page_id))) return false;
+      }
       const pName = (p.page_name || p.name || '').toLowerCase();
       const pId = String(p.page_id || p.id || '');
       // Match search
@@ -3877,6 +3889,9 @@
                   ? `Ảnh chụp (snapshot) Page set từ token nguồn · ${escapeHtml(groupSourceLabel(g))}${g.pages_synced_at ? ' · lúc ' + escapeHtml(g.pages_synced_at) : ''}`
                   : 'Chưa binding Page set (không giữ Page nào)'}
               </div>
+              <div style="font-size:10.5px;color:${g.health?.rebind_required ? '#fbbf24' : '#94a3b8'};margin-top:4px;">
+                Pages bound ${g.health?.pages_bound ?? (g.page_ids || []).length} · Vault ${g.health?.vault_present ?? (g.token_ids || []).length}/${g.health?.vault_total ?? (g.token_ids || []).length} · scheduled ${g.health?.scheduled_posts ?? 0} · processing ${g.health?.processing_posts ?? 0}${g.health?.rebind_required ? ' · Rebind required' : ''}
+              </div>
             </div>
             <div style="display: flex; gap: 6px;">
               ${g.page_source_token_id ? `<button class="btn btn-secondary btn-sm" onclick="rebindTokenGroupPages('${g.id}', '${g.name}')" style="font-size: 11px; padding: 3px 8px;" title="Cập nhật Page set từ cache, không gọi Graph API">
@@ -3904,11 +3919,17 @@
 
   async function rebindTokenGroupPages(gid, gname) {
     try {
+      const syncRes = await fetch('/api/token-groups/' + encodeURIComponent(gid) + '/sync-pages', { method: 'POST' });
+      const syncData = await syncRes.json();
+      if (!syncRes.ok || !syncData.success) {
+        alert('Sync Page thất bại: ' + (syncData.error || 'Server error'));
+        return;
+      }
       const res = await fetch('/api/token-groups/' + encodeURIComponent(gid) + '/rebind-pages', { method: 'POST' });
       const data = await res.json();
       if (res.ok && data.success) {
         showToast(`Đã cập nhật Page set cho nhóm '${gname}': ${data.page_ids.length} Page`);
-        await loadTokenGroupsList();
+        await Promise.all([loadTokenGroupsList(), loadTokensAndPages()]);
       } else {
         alert('Không cập nhật được Page set: ' + (data.error || 'Server error'));
       }
@@ -4223,7 +4244,18 @@
     try {
       const res = await fetch('/api/tokens/bulk-delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token_ids:ids})});
       const data = await res.json();
-      if (!res.ok || !data.success) { showToast(data.error || 'Kh?ng th? x?a token'); return; }
+      if (!res.ok || !data.success) {
+        if (data.migration_required && data.post_ids?.length === 0) {
+          const target = prompt('Token đang được dùng. Nhập token ID đích đã xác minh để migration (để trống để hủy):');
+          if (target) {
+            const retry = await fetch('/api/tokens/bulk-delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token_ids:ids, migration_token_id:target.trim()})});
+            const retryData = await retry.json();
+            if (retry.ok && retryData.success) { showToast(`Đã migration và xóa ${retryData.deleted_count} token.`); await Promise.all([loadTokensOnly(), loadTokensAndPages()]); return; }
+            showToast(retryData.error || 'Migration thất bại'); return;
+          }
+        }
+        showToast(data.error || 'Không thể xóa token'); return;
+      }
       showToast(`Đã xóa ${data.deleted_count} token.`);
       await Promise.all([loadTokensOnly(), loadTokensAndPages()]);
     } catch (e) { showToast('L?i x?a token: ' + e.message); }
@@ -4239,6 +4271,15 @@
         await loadTokensOnly();
         await loadTokensAndPages();
       } else {
+        if (d.migration_required && (!d.post_ids || d.post_ids.length === 0)) {
+          const target = prompt('Token đang được dùng. Nhập token ID đích đã xác minh để migration:');
+          if (target) {
+            const retry = await fetch('/api/tokens/' + encodeURIComponent(tokenId), { method:'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({migration_token_id:target.trim()}) });
+            const retryData = await retry.json();
+            if (retry.ok && retryData.success) { alert(`Đã migration và xóa token '${tokenName}'.`); await Promise.all([loadTokensOnly(), loadTokensAndPages()]); return; }
+            alert(retryData.error || 'Migration thất bại'); return;
+          }
+        }
         alert('Lỗi xóa token: ' + (d.error || 'Server error'));
       }
     } catch (e) {
@@ -4267,6 +4308,14 @@
       cachedGroupsList = groups;
       const grpBtnCount = document.getElementById('btn-group-count'); if (grpBtnCount) grpBtnCount.textContent = groups.length;
       cachedPagesList = pages;
+      const tokenGroupData = await (await fetch('/api/token-groups')).json();
+      cachedTokenGroups = tokenGroupData.groups || [];
+      const tokenGroupPicker = document.getElementById('page-filter-token-group');
+      if (tokenGroupPicker) {
+        const previousGroupId = tokenGroupPicker.value;
+        tokenGroupPicker.innerHTML = '<option value="">Nhóm token: Tất cả</option>' + cachedTokenGroups.map(group => '<option value="' + escapeHtml(group.id) + '">' + escapeHtml(group.name) + (group.health?.rebind_required ? ' · Sync Page trước' : '') + '</option>').join('');
+        if (cachedTokenGroups.some(group => String(group.id) === previousGroupId)) tokenGroupPicker.value = previousGroupId;
+      }
 
       // Update counters & metrics
       if (document.getElementById('stat-total-tokens')) document.getElementById('stat-total-tokens').textContent = tokens.length;
@@ -4809,6 +4858,8 @@
   };
   let globalPagesCatalog = [];
   let globalGroupsCatalog = [];
+  let globalTokenGroupsCatalog = [];
+  let globalFirstCommentProfiles = [];
   function openDirectPublishModal(filename, title) {
     currentPublishContext = {
       filename: filename,
@@ -4864,14 +4915,32 @@
       if (data.success) {
         globalPagesCatalog = data.pages || [];
         globalGroupsCatalog = data.groups || [];
+        try {
+          const tg = await (await fetch('/api/token-groups')).json();
+          globalTokenGroupsCatalog = tg.groups || [];
+          const tokenSel = document.getElementById('pub-select-token-group');
+          if (tokenSel) tokenSel.innerHTML = '<option value="">-- Tất cả mapping hiện tại --</option>' + globalTokenGroupsCatalog.map(g => {
+            const h = g.health || {};
+            const health = h.rebind_required ? ' · Sync Page trước' : '';
+            return `<option value="${escapeHtml(g.id)}">${escapeHtml(g.name)} (${h.pages_bound || g.page_ids?.length || 0} Page${health})</option>`;
+          }).join('');
+        } catch (_) {}
+        try {
+          const profiles = await (await fetch('/api/first-comment-profiles')).json();
+          globalFirstCommentProfiles = profiles.profiles || [];
+          const profileSel = document.getElementById('pub-first-comment-profile');
+          if (profileSel) profileSel.innerHTML = globalFirstCommentProfiles.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.niche)})</option>`).join('');
+          if (profileSel) profileSel.value = profiles.default_profile_id || profileSel.value;
+        } catch (_) {}
         // Fill single page select
         const pSel = document.getElementById('pub-select-single-page');
         pSel.innerHTML = '<option value="">-- Chọn 1 Fanpage cụ thể --</option>' +
-          globalPagesCatalog.map(p => `<option value="${p.page_id}">${p.page_name} (ID: ${p.page_id})</option>`).join('');
+          globalPagesCatalog.map(p => `<option value="${escapeHtml(p.page_id)}">${escapeHtml(p.page_name)} · Token: ${escapeHtml(p.token_name || 'Chưa gán')} (ID: ${escapeHtml(p.page_id)})</option>`).join('');
         // Fill group select
         const gSel = document.getElementById('pub-select-group');
         gSel.innerHTML = '<option value="">-- Chọn nhóm trang vệ tinh --</option>' +
-          globalGroupsCatalog.map(g => `<option value="${g.id}">${g.name} (${(g.page_ids || []).length} Pages)</option>`).join('');
+        globalGroupsCatalog.map(g => `<option value="${g.id}">${g.name} (${(g.page_ids || []).length} Pages)</option>`).join('');
+        refreshPubTargetOptions();
         onPubGroupChanged();
       }
     } catch (e) {
@@ -4901,12 +4970,15 @@
   }
   function onPubGroupChanged() {
     const gVal = document.getElementById('pub-select-group').value;
+    const tokenGroupId = document.getElementById('pub-select-token-group')?.value || '';
+    const tokenGroup = globalTokenGroupsCatalog.find(g => String(g.id) === String(tokenGroupId));
+    const allowedPages = tokenGroup ? new Set((tokenGroup.page_ids || []).map(String)) : null;
     const summary = document.getElementById('pub-pages-target-summary');
     if (gVal) {
       const grp = globalGroupsCatalog.find(g => g.id === gVal);
       if (grp) {
-        const count = (grp.page_ids || []).length;
-        summary.innerHTML = `<i class="bi bi-collection-fill text-warning"></i> Đã chọn nhóm <strong>${grp.name}</strong> (${count} Fanpage). Video sẽ được tự động đăng lần lượt lên tất cả các trang!`;
+        const count = (grp.page_ids || []).filter(pid => !allowedPages || allowedPages.has(String(pid))).length;
+        summary.innerHTML = `<i class="bi bi-collection-fill text-warning"></i> Đã chọn nhóm <strong>${escapeHtml(grp.name)}</strong> (${count} Fanpage${tokenGroup ? ` trong nhóm token ${escapeHtml(tokenGroup.name)}` : ''}).` + ((tokenGroup && !(tokenGroup.page_ids || []).length) ? ' Nhóm chưa sync; hãy Sync Page trước.' : '');
         return;
       }
     }
@@ -4924,6 +4996,41 @@
     }
     onPubGroupChanged();
   });
+  function refreshPubTargetOptions() {
+    const tokenGroupId = document.getElementById('pub-select-token-group')?.value || '';
+    const selected = globalTokenGroupsCatalog.find(g => String(g.id) === String(tokenGroupId));
+    const allowed = selected ? new Set((selected.page_ids || []).map(String)) : null;
+    const pageSel = document.getElementById('pub-select-single-page');
+    const groupSel = document.getElementById('pub-select-group');
+    const priorPage = pageSel?.value || '';
+    const priorGroup = groupSel?.value || '';
+    const pages = globalPagesCatalog.filter(p => !allowed || allowed.has(String(p.page_id)));
+    const groupPageBox = document.getElementById('pub-token-group-pages');
+    const groupPageList = document.getElementById('pub-token-group-page-list');
+    if (groupPageBox) groupPageBox.style.display = tokenGroup ? 'block' : 'none';
+    if (groupPageList) groupPageList.innerHTML = tokenGroup ? pages.map(page => '<label style="display:block;"><input type="checkbox" class="pub-token-group-page" value="' + escapeHtml(page.page_id) + '"> ' + escapeHtml(page.page_name) + ' · Token: ' + escapeHtml(page.token_name || 'Chưa gán') + '</label>').join('') : '';
+    if (pageSel) pageSel.innerHTML = '<option value="">-- Chọn 1 Fanpage cụ thể --</option>' + pages.map(p =>
+      `<option value="${escapeHtml(p.page_id)}">${escapeHtml(p.page_name)} · Token: ${escapeHtml(p.token_name || 'Chưa gán')} (ID: ${escapeHtml(p.page_id)})</option>`
+    ).join('');
+    if (groupSel) groupSel.innerHTML = '<option value="">-- Chọn nhóm trang vệ tinh --</option>' + globalGroupsCatalog.map(g => {
+      const count = (g.page_ids || []).filter(pid => !allowed || allowed.has(String(pid))).length;
+      return count ? `<option value="${escapeHtml(g.id)}">${escapeHtml(g.name)} (${count} Pages)</option>` : '';
+    }).join('');
+    if (pageSel && pages.some(p => String(p.page_id) === String(priorPage))) pageSel.value = priorPage;
+    if (groupSel && [...groupSel.options].some(option => option.value === priorGroup)) groupSel.value = priorGroup;
+  }
+  document.addEventListener('change', event => {
+    if (event.target?.id !== 'pub-select-token-group') return;
+    refreshPubTargetOptions();
+    onPubGroupChanged();
+  });
+  function setPubTokenGroupPages(checked) {
+    document.querySelectorAll('.pub-token-group-page').forEach(checkbox => { checkbox.checked = checked; });
+    document.getElementById('pub-select-group').value = '';
+    document.getElementById('pub-select-single-page').value = '';
+    const selectedCount = document.querySelectorAll('.pub-token-group-page:checked').length;
+    document.getElementById('pub-pages-target-summary').textContent = 'Đã chọn ' + selectedCount + ' Page trong nhóm token.';
+  }
   async function insertWebsiteLinkToFirstComment() {
     try {
       const res = await fetch('/api/website-config');
@@ -4954,7 +5061,8 @@
     const scheduleDt = document.getElementById('pub-schedule-datetime').value;
     const stagger = parseInt(document.getElementById('pub-schedule-stagger').value || '15', 10);
     const postingThreads = parseInt(document.getElementById('loha-token-threads')?.value || '10', 10);
-    if (!groupId && !singlePageId) {
+    const selectedTokenPages = Array.from(document.querySelectorAll('.pub-token-group-page:checked')).map(checkbox => checkbox.value);
+    if (!groupId && !singlePageId && !selectedTokenPages.length) {
       alert('Vui lòng chọn ít nhất 1 Fanpage hoặc 1 Nhóm Trang để xuất bản!');
       return;
     }
@@ -4976,9 +5084,13 @@
       caption: caption,
       first_comment: firstComment,
       article_url: articleUrl,
+      publish_mode: (mode === 'schedule' && document.getElementById('pub-mode-meta')?.checked) ? 'meta_scheduled' : 'app_queue',
+      token_group_id: document.getElementById('pub-select-token-group')?.value || '',
+      first_comment_profile_id: document.getElementById('pub-first-comment-profile')?.value || '',
       auto_first_comment: mode === 'schedule',
       use_llm_comment: true,
       group_id: groupId || null,
+      page_ids: selectedTokenPages,
       page_id: singlePageId || null,
       schedule_time: (mode === 'schedule') ? scheduleDt : null,
       stagger_minutes: stagger,
@@ -5719,6 +5831,7 @@
   let postsAutoRefreshTimer = null;
   let postsTableLoading = false;
   const postsOverdue = new Map();
+  const postsOverdueIds = postsOverdue;
   let schedulerCycleActive = false;
 
   async function refreshSchedulerStatus() {
@@ -5916,6 +6029,8 @@
               ` : ''}
             </div>
           `;
+        } else if (p.status === 'meta_scheduled') {
+          statusBadge = `<span style="background:rgba(56,189,248,0.15);color:#38bdf8;border:1px solid #0ea5e9;padding:3px 8px;border-radius:6px;font-size:11px;">Đã giao Meta · chờ Meta đăng</span>`;
         } else if (p.status === 'processing') {
           statusBadge = `<span style="background:rgba(245,158,11,0.15);color:#fbbf24;border:1px solid #b45309;padding:3px 8px;border-radius:6px;font-size:11px;" title="${escapeHtml(p.error || '')}">Meta processing · awaiting verification · do not retry</span>`;
         } else if (p.status === 'failed') {
@@ -5923,7 +6038,7 @@
         } else if (p.status === 'publishing') {
           statusBadge = '<span style="background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-arrow-repeat spin"></i> Đang đăng...</span>';
         } else {
-          const isOverdue = postsOverdue.has(p.id) && p.status === 'scheduled';
+          const isOverdue = postsOverdueIds.has(p.id) && p.status === 'scheduled';
           const lateMinutes = postsOverdue.get(p.id) || 0;
           statusBadge = isOverdue
             ? schedulerCycleActive
@@ -5938,7 +6053,9 @@
           const oldTemplate = String(p.first_comment || '').startsWith('👀 Watch the setup again—the detail just before the turning point explains everything.');
           const commentOrigin = p.first_comment_source || (oldTemplate ? 'template_fallback' : (p.content_package_source === 'llm' ? 'Không rõ nguồn — kiểm tra Content Studio' : (String(p.content_package_source || '').startsWith('no_llm') ? 'template_fallback' : 'Chưa rõ nguồn')));
           commentSnippet += `<div style="color:${commentOrigin === 'llm' ? '#4ade80' : '#fbbf24'};font-size:10px;">${commentOrigin === 'llm' ? 'First Comment do LLM tạo' : escapeHtml(commentOrigin === 'template_fallback' ? 'First Comment mẫu fallback' : commentOrigin)}</div>`;
-          if (p.status === 'published' && p.first_comment_status === 'posted') {
+          if (p.status === 'meta_scheduled' && ['pending', 'pending_retry'].includes(p.first_comment_status)) {
+            commentSnippet += '<div style="color:#f59e0b;font-size:10px;">Comment chờ xử lý sau giờ đăng</div>';
+          } else if (p.status === 'published' && p.first_comment_status === 'posted') {
             commentSnippet += '<div style="color:#22c55e;font-size:10px;">First Comment đã đăng</div>';
           } else if (p.status === 'published' && ['pending', 'pending_retry'].includes(p.first_comment_status)) {
             commentSnippet += '<div style="color:#f59e0b;font-size:10px;">First Comment đang chờ Meta xử lý</div>';
@@ -6098,6 +6215,86 @@
       button.removeAttribute('aria-busy');
     }
   }
+  let firstCommentProfileStore = { profiles: [], default_profile_id: 'builtin_general' };
+  function fcShowProfile(profileId) {
+    const profile = firstCommentProfileStore.profiles.find(item => String(item.id) === String(profileId)) || firstCommentProfileStore.profiles[0];
+    if (!profile) return;
+    document.getElementById('fc-profile-pick').value = profile.id;
+    document.getElementById('fc-profile-name').value = profile.name || '';
+    document.getElementById('fc-profile-niche').value = profile.niche || 'general';
+    document.getElementById('fc-profile-default').checked = profile.id === firstCommentProfileStore.default_profile_id;
+    document.getElementById('fc-profile-lead-ins').value = (profile.lead_ins || []).join('\n');
+  }
+  async function fcRefreshProfiles(preferredId) {
+    const response = await fetch('/api/first-comment-profiles');
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || 'Could not load profiles');
+    firstCommentProfileStore = { profiles: data.profiles || [], default_profile_id: data.default_profile_id || 'builtin_general' };
+    const picker = document.getElementById('fc-profile-pick');
+    if (picker) picker.innerHTML = firstCommentProfileStore.profiles.map(profile => `<option value="${csEscape(profile.id)}">${csEscape(profile.name)} · ${csEscape(profile.niche)}</option>`).join('');
+    const contentPicker = document.getElementById('cs-first-comment-profile');
+    if (contentPicker) {
+      contentPicker.innerHTML = firstCommentProfileStore.profiles.map(profile => `<option value="${csEscape(profile.id)}">${csEscape(profile.name)} · ${csEscape(profile.niche)}</option>`).join('');
+      contentPicker.value = preferredId || firstCommentProfileStore.default_profile_id;
+    }
+    if (picker) fcShowProfile(preferredId || firstCommentProfileStore.default_profile_id);
+    return firstCommentProfileStore;
+  }
+  window.openFirstCommentProfileEditor = async function() {
+    try { await fcRefreshProfiles(); document.getElementById('modal-first-comment-profile').style.display = 'flex'; }
+    catch (e) { alert('First Comment profiles: ' + e.message); }
+  };
+  window.closeFirstCommentProfileEditor = function() { document.getElementById('modal-first-comment-profile').style.display = 'none'; };
+  window.selectFirstCommentProfile = function() { fcShowProfile(document.getElementById('fc-profile-pick').value); };
+  window.newFirstCommentProfile = function() {
+    const niche = document.getElementById('fc-profile-niche').value || 'general';
+    const source = firstCommentProfileStore.profiles.find(p => p.niche === niche) || firstCommentProfileStore.profiles[0];
+    document.getElementById('fc-profile-pick').value = '';
+    document.getElementById('fc-profile-name').value = niche[0].toUpperCase() + niche.slice(1) + ' custom';
+    document.getElementById('fc-profile-default').checked = false;
+    document.getElementById('fc-profile-lead-ins').value = (source?.lead_ins || []).join('\n');
+    document.getElementById('fc-profile-msg').textContent = 'New profile draft. Save it before asking the LLM to generate samples.';
+  };
+  window.saveFirstCommentProfile = async function() {
+    const picker = document.getElementById('fc-profile-pick');
+    const profileId = picker.value;
+    const body = {
+      name: document.getElementById('fc-profile-name').value.trim(),
+      niche: document.getElementById('fc-profile-niche').value,
+      lead_ins: document.getElementById('fc-profile-lead-ins').value.split(/\r?\n/).map(x => x.trim()).filter(Boolean),
+      make_default: document.getElementById('fc-profile-default').checked,
+    };
+    const response = await fetch(profileId ? `/api/first-comment-profiles/${encodeURIComponent(profileId)}` : '/api/first-comment-profiles', {
+      method: profileId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || 'Save failed');
+    await fcRefreshProfiles(data.profile?.id || profileId);
+    document.getElementById('fc-profile-msg').textContent = 'Saved. New posts will use the selected default profile.';
+  };
+  window.regenerateFirstCommentProfile = async function() {
+    let profileId = document.getElementById('fc-profile-pick').value;
+    if (!profileId) { await window.saveFirstCommentProfile(); profileId = document.getElementById('fc-profile-pick').value; }
+    const feedback = document.getElementById('fc-profile-msg');
+    feedback.textContent = 'Asking the configured text LLM for 30 samples...';
+    try {
+      const response = await fetch(`/api/first-comment-profiles/${encodeURIComponent(profileId)}/regenerate`, { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Generation failed');
+      await fcRefreshProfiles(profileId);
+      feedback.textContent = 'Generated and saved 30 distinct lead-ins.';
+    } catch (e) { feedback.textContent = 'LLM generation failed: ' + e.message; }
+  };
+  window.deleteFirstCommentProfile = async function() {
+    const profileId = document.getElementById('fc-profile-pick').value;
+    if (!profileId) return;
+    const response = await fetch(`/api/first-comment-profiles/${encodeURIComponent(profileId)}`, { method: 'DELETE' });
+    const data = await response.json();
+    if (!response.ok || !data.success) { document.getElementById('fc-profile-msg').textContent = data.error || 'Delete failed'; return; }
+    await fcRefreshProfiles(data.default_profile_id);
+    document.getElementById('fc-profile-msg').textContent = 'Profile deleted. Scheduled posts keep their comment snapshot.';
+  };
+  fcRefreshProfiles().catch(() => {});
   window.loadContentStudioQueue = async function() {
     const tbody = document.getElementById('cs-queue-tbody');
     const stats = document.getElementById('cs-queue-stats');
@@ -6158,7 +6355,7 @@
     const msg = document.getElementById('cs-generate-msg');
     msg.style.color = '#94a3b8'; msg.textContent = '\u0110ang t\u1ea1o n\u1ed9i dung...';
     try {
-      const res = await fetch('/api/content-studio/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clip_filename: document.getElementById('cs-clip-filename').value.trim(), title: document.getElementById('cs-title').value.trim(), mode: document.getElementById('cs-mode').value }) });
+      const res = await fetch('/api/content-studio/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clip_filename: document.getElementById('cs-clip-filename').value.trim(), title: document.getElementById('cs-title').value.trim(), mode: document.getElementById('cs-mode').value, first_comment_profile_id: document.getElementById('cs-first-comment-profile').value }) });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'T\u1ea1o n\u1ed9i dung th\u1ea5t b\u1ea1i');
       const pkg = data.package || {};
@@ -6172,7 +6369,7 @@
     const msg = document.getElementById('cs-generate-msg');
     msg.style.color = '#94a3b8'; msg.textContent = '\u0110ang \u0111\u01b0a v\u00e0o h\u00e0ng \u0111\u1ee3i...';
     try {
-      const res = await fetch('/api/content-studio/enqueue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clip_filename: document.getElementById('cs-clip-filename').value.trim(), title: document.getElementById('cs-title').value.trim(), mode: document.getElementById('cs-mode').value, create_website_article: true }) });
+      const res = await fetch('/api/content-studio/enqueue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clip_filename: document.getElementById('cs-clip-filename').value.trim(), title: document.getElementById('cs-title').value.trim(), mode: document.getElementById('cs-mode').value, create_website_article: true, first_comment_profile_id: document.getElementById('cs-first-comment-profile').value }) });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Kh\u00f4ng x\u1ebfp h\u00e0ng \u0111\u01b0\u1ee3c');
       msg.style.color = '#4ade80'; msg.textContent = '\u0110\u00e3 \u0111\u01b0a v\u00e0o h\u00e0ng \u0111\u1ee3i: ' + data.item.id; window.loadContentStudioQueue();
@@ -7036,19 +7233,42 @@
 </div>
 
   <!-- Direct Meta publish modal -->
+  <div id="modal-first-comment-profile" class="app-modal-overlay" style="display:none;z-index:1300;">
+    <div class="app-modal-box" style="max-width:720px;">
+      <div class="app-modal-header"><div><h4>First Comment Studio</h4><span style="color:#94a3b8;">Edit niche samples. Existing scheduled comments keep their saved snapshot.</span></div><button type="button" onclick="closeFirstCommentProfileEditor()">X</button></div>
+      <div class="app-modal-body">
+        <label>Profile</label><select id="fc-profile-pick" class="form-control" onchange="selectFirstCommentProfile()"></select>
+        <label>Name</label><input id="fc-profile-name" class="form-control" maxlength="80">
+        <label>Niche</label><select id="fc-profile-niche" class="form-control"><option value="police">Police</option><option value="sports">Sports</option><option value="news">News</option><option value="rescue">Rescue</option><option value="reality">Reality</option><option value="general">General</option></select>
+        <label><input id="fc-profile-default" type="checkbox"> Set as default for new posts</label>
+        <label>30 reusable factual lead-ins (one per line; URL is appended after generation)</label><textarea id="fc-profile-lead-ins" class="form-control" rows="14" spellcheck="false"></textarea>
+        <div id="fc-profile-msg" role="status" aria-live="polite"></div>
+      </div>
+      <div class="app-modal-footer" style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+        <button type="button" class="btn btn-secondary" onclick="newFirstCommentProfile()">New profile</button>
+        <button type="button" class="btn btn-secondary" onclick="regenerateFirstCommentProfile()">LLM create 30 samples</button>
+        <button type="button" class="btn btn-secondary" onclick="deleteFirstCommentProfile()">Delete</button>
+        <button type="button" class="btn btn-primary" onclick="saveFirstCommentProfile()">Save profile</button>
+      </div>
+    </div>
+  </div>
+
   <div id="modal-publish-reel" class="app-modal-overlay" style="display:none;">
     <div class="app-modal-box" style="max-width:680px;">
       <div class="app-modal-header"><div><h4 id="pub-clip-title">Clip Highlight</h4><span id="pub-clip-filename"></span></div><button type="button" onclick="closePublishModal()">X</button></div>
       <div class="app-modal-body">
         <label>Page</label><select id="pub-select-single-page" class="form-control" onchange="onPubGroupChanged()"><option value="">Select Page</option></select>
         <label>Page group</label><select id="pub-select-group" class="form-control" onchange="onPubGroupChanged()"><option value="">Select group</option></select>
+        <label>Nhóm token</label><select id="pub-select-token-group" class="form-control"><option value="">-- Tất cả mapping hiện tại --</option></select>
+        <div id="pub-token-group-pages" style="display:none;"><button type="button" onclick="setPubTokenGroupPages(true)">Chọn tất cả trong nhóm</button><button type="button" onclick="setPubTokenGroupPages(false)">Bỏ tất cả</button><div id="pub-token-group-page-list"></div></div>
         <div id="pub-pages-target-summary"></div>
         <label>Caption</label><textarea id="pub-caption" class="form-control" rows="4"></textarea>
         <label>First comment</label><textarea id="pub-first-comment" class="form-control" rows="3"></textarea>
         <label>Link bài Website cho First Comment</label><input id="pub-article-url" class="form-control" type="url" placeholder="https://.../blog/bai-viet"><small>Đăng ngay cần link bài viết. Khi lên lịch, ứng dụng có thể tự tạo bài và comment.</small>
         <label><input type="radio" name="pub_mode" value="now" checked onchange="toggleScheduleOptions()"> Publish now</label>
         <label><input type="radio" name="pub_mode" value="schedule" onchange="toggleScheduleOptions()"> Schedule</label>
-        <div id="pub-schedule-box" style="display:none;"><label>Time</label><input id="pub-schedule-datetime" type="datetime-local" class="form-control"><label>Stagger minutes</label><input id="pub-schedule-stagger" type="number" class="form-control" value="15" min="0"></div>
+        <div id="pub-schedule-box" style="display:none;"><label>Time</label><input id="pub-schedule-datetime" type="datetime-local" class="form-control"><label>Stagger minutes</label><input id="pub-schedule-stagger" type="number" class="form-control" value="15" min="0"><label><input id="pub-mode-meta" type="checkbox"> Giao lịch trực tiếp cho Meta (hơn 10 phút, trong 29 ngày)</label></div>
+        <label>First Comment profile</label><select id="pub-first-comment-profile" class="form-control"><option value="">General</option></select>
         <div id="pub-status-banner" role="status" aria-live="polite" style="display:none;"></div>
       </div>
       <div class="app-modal-footer"><button type="button" onclick="closePublishModal()">Cancel</button><button id="btn-execute-publish" class="btn btn-primary" type="button" onclick="executePublishReel()">Publish now</button></div>
