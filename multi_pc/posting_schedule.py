@@ -56,3 +56,37 @@ def paced_offsets_by_token(token_ids, *, global_seconds=90, token_seconds=900):
         if not buckets[chosen]:
             del buckets[chosen]
     return offsets
+
+
+def next_paced_due_post(posts, now, *, global_seconds=90, token_seconds=900):
+    """Return one eligible due row; a backlog never becomes an upload burst."""
+    from datetime import datetime, timedelta
+
+    def parsed(value):
+        try:
+            stamp = datetime.fromisoformat(str(value))
+            return stamp if stamp.tzinfo == now.tzinfo else None
+        except (TypeError, ValueError):
+            return None
+
+    last_global = None
+    last_by_token = {}
+    due = []
+    for post in posts:
+        if not isinstance(post, dict):
+            continue
+        started = parsed(post.get("publish_started_at"))
+        if started is not None:
+            last_global = max(last_global, started) if last_global else started
+            token_id = str(post.get("token_id") or "")
+            last_by_token[token_id] = max(last_by_token.get(token_id, started), started)
+        scheduled = parsed(post.get("scheduled_time"))
+        if post.get("status") == "scheduled" and scheduled is not None and scheduled <= now:
+            due.append((scheduled, str(post.get("id") or ""), post))
+    if last_global is not None and now - last_global < timedelta(seconds=global_seconds):
+        return None
+    for _, _, post in sorted(due, key=lambda item: (item[0], item[1])):
+        previous = last_by_token.get(str(post.get("token_id") or ""))
+        if previous is None or now - previous >= timedelta(seconds=token_seconds):
+            return post
+    return None

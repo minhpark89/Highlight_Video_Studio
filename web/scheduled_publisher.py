@@ -13,6 +13,7 @@ except ImportError:
     from posts_store import canonical_posts_file
 
 from multi_pc.data_root import ProcessLease
+from multi_pc.posting_schedule import next_paced_due_post
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 POSTS_FILE = canonical_posts_file()
@@ -288,6 +289,7 @@ def _process_scheduled_posts_once(
             })
         recovered += 1
 
+    selected_due = next_paced_due_post(posts, current_dt, global_seconds=90, token_seconds=900)
     claimed_posts = []
     for post in posts:
         if post.get("status") != "scheduled":
@@ -301,7 +303,7 @@ def _process_scheduled_posts_once(
         if scheduled_dt is None:
             post["schedule_error"] = "Thời gian lên lịch không hợp lệ"
             continue
-        if scheduled_dt <= current_dt:
+        if scheduled_dt <= current_dt and post is selected_due:
             post["status"] = "publishing"
             post["claimed_at"] = current_dt.strftime("%Y-%m-%d %H:%M:%S")
             claimed_posts.append(post)
