@@ -72,6 +72,7 @@ def next_paced_due_post(posts, now, *, global_seconds=90, token_seconds=900):
     last_global = None
     last_by_token = {}
     due = []
+    waiting = []
     for post in posts:
         if not isinstance(post, dict):
             continue
@@ -87,6 +88,7 @@ def next_paced_due_post(posts, now, *, global_seconds=90, token_seconds=900):
                 comment = str(post.get("first_comment") or "").strip()
                 website_ready = post.get("website_status") in (None, "", "ready")
                 if not (url and website_ready and url in comment):
+                    waiting.append((scheduled, str(post.get("id") or ""), post))
                     continue
             due.append((scheduled, str(post.get("id") or ""), post))
     if last_global is not None and now - last_global < timedelta(seconds=global_seconds):
@@ -95,4 +97,8 @@ def next_paced_due_post(posts, now, *, global_seconds=90, token_seconds=900):
         previous = last_by_token.get(str(post.get("token_id") or ""))
         if previous is None or now - previous >= timedelta(seconds=token_seconds):
             return post
+    # Preserve the old worker's diagnostic/status updates when there is no
+    # publish-ready work; a waiting row must not starve a ready Page.
+    if waiting:
+        return min(waiting, key=lambda item: (item[0], item[1]))[2]
     return None
