@@ -67,6 +67,8 @@ class LongArticleFallbackTests(unittest.TestCase):
         self.assertIn("How to examine the original sequence", body)
 
     def test_portrait_original_rejected_even_when_crop_would_be_horizontal(self):
+        if not p.HAS_CV2:
+            self.skipTest("OpenCV unavailable; ffprobe landscape path verified separately")
         capture = mock.Mock()
         capture.isOpened.return_value = True
         capture.get.side_effect = [720, 1280]
@@ -106,23 +108,23 @@ class LongArticleFallbackTests(unittest.TestCase):
             config = root / "cms.json"
             config.write_text("{}", encoding="utf-8")
             svc = mock.Mock()
-            svc._presign_and_upload.return_value = "https://cdn.test/source.jpg"
+            svc._presign_and_upload.side_effect = lambda _session, path: f"https://cdn.test/{Path(path).stem}.jpg"
             svc.publish_article.return_value = {"status": "success", "article_url": "https://cms.test/article"}
-            metadata = {"video_title": "Fixture original video", "youtube_url": "https://youtu.be/abcdefghijk", "source_video_path": str(source)}
+            metadata = {"video_title": "Fixture original video", "youtube_url": "https://youtu.be/abcdefghijk", "source_video_path": str(source), "clip_start": 10, "clip_end": 40}
             with mock.patch.object(p, "HVS_DIR", root), mock.patch.object(p, "get_website_config", return_value=({}, config)), mock.patch.object(
                 p, "get_clip_metadata", return_value=metadata
             ), mock.patch.object(p, "get_image_provider_config", return_value={"model": "__video_frame__"}), mock.patch.object(
                 p, "get_llm_config", return_value={}
             ), mock.patch.object(p, "WebsiteArticleService", return_value=svc), mock.patch.object(
                 p, "_BackendSession"
-            ), mock.patch.object(p, "select_smart_video_frame", return_value=str(frame)) as select, mock.patch.object(
+            ), mock.patch.object(p, "select_smart_video_frame", side_effect=lambda source, start, end, output: output) as select, mock.patch.object(
                 p, "_valid_image_file", return_value=True
             ), mock.patch.object(p, "upload_long_video_to_public_stream") as video_upload:
                 url, hero = p.publish_clip_to_website_cms("portrait.mp4")
-            self.assertEqual((url, hero), ("https://cms.test/article", "https://cdn.test/source.jpg"))
-            self.assertEqual(select.call_count, 2)
+            self.assertEqual((url, hero), ("https://cms.test/article", "https://cdn.test/source_frame_portrait_0.jpg"))
+            self.assertEqual(select.call_count, 3)
             self.assertTrue(all(call.args[0] == str(source) for call in select.call_args_list))
-            self.assertEqual(svc._presign_and_upload.call_count, 2)
+            self.assertEqual(svc._presign_and_upload.call_count, 3)
             video_upload.assert_not_called()
             body = svc.publish_article.call_args.kwargs["body_html"]
             self.assertGreaterEqual(len(re.findall(r"\b[A-Za-z]+\b", re.sub(r"<[^>]*>", " ", body))), 500)

@@ -72,7 +72,7 @@ class YouTubeEmbedPublishTests(unittest.TestCase):
         }), mock.patch.object(
             publisher, "upload_long_video_to_public_stream"
         ) as upload, mock.patch.object(
-            publisher, "extract_and_upload_article_assets", return_value=("https://img.test/hero.jpg", [])
+            publisher, "extract_and_upload_article_assets", return_value=("https://img.test/hero.jpg", ["https://img.test/one.jpg", "https://img.test/two.jpg"])
         ), mock.patch.object(
             publisher, "get_llm_config", return_value={}
         ), mock.patch.object(
@@ -106,7 +106,7 @@ class YouTubeEmbedPublishTests(unittest.TestCase):
             "video_title": "Fixture Original Story", "youtube_id": "invalid",
             "youtube_url": f"https://youtu.be/{video_id}",
         }), mock.patch.object(publisher, "upload_long_video_to_public_stream") as upload, mock.patch.object(
-            publisher, "extract_and_upload_article_assets", return_value=("", [])
+            publisher, "extract_and_upload_article_assets", return_value=("https://img.test/hero.jpg", ["https://img.test/one.jpg", "https://img.test/two.jpg"])
         ), mock.patch.object(publisher, "get_llm_config", return_value={}), mock.patch.object(
             publisher, "WebsiteArticleService", return_value=service
         ):

@@ -64,7 +64,7 @@ class ForeignSourceMetadataTests(unittest.TestCase):
         with mock.patch.object(publisher, "get_website_config", return_value=(
             {"base_url": "https://example.test"}, mock.Mock(exists=mock.Mock(return_value=True))
         )), mock.patch.object(publisher.requests, "get", return_value=mock.Mock(status_code=404)), mock.patch.object(publisher, "upload_long_video_to_public_stream") as upload, mock.patch.object(
-            publisher, "extract_and_upload_article_assets", return_value=("https://img.test/hero.jpg", [])
+            publisher, "extract_and_upload_article_assets", return_value=("https://img.test/hero.jpg", ["https://img.test/one.jpg", "https://img.test/two.jpg"])
         ), mock.patch.object(publisher, "WebsiteArticleService", return_value=service):
             url, _ = publisher.publish_clip_to_website_cms(name)
         self.assertEqual(url, "https://example.test/blog/source")

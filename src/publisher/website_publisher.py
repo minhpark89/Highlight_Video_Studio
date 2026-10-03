@@ -274,7 +274,8 @@ def get_clip_metadata(clip_filename: str) -> dict:
                     and path.parent.resolve(strict=False) == (jobs_file.parent / "output").resolve(strict=False)
                     and str(path.resolve(strict=False)).lower() == requested_resolved)
         # A bare job clip name is meaningful only inside its own output directory.
-        return (requested.parent.resolve(strict=False) == (jobs_file.parent / "output").resolve(strict=False)
+        return (requested.is_file()
+                and requested.parent.resolve(strict=False) == (jobs_file.parent / "output").resolve(strict=False)
                 and path.name.lower() == requested_name and path.name == candidate)
 
     if jobs_file.exists():
