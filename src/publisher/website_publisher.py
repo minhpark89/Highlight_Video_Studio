@@ -701,7 +701,7 @@ def upload_long_video_to_public_stream(meta: dict, clip_filename: str) -> str:
     return public_url
 
 def extract_and_upload_article_assets(clip_filename: str, video_title: str) -> tuple:
-    """Use the original long-form source for non-AI hero and article images."""
+    """Upload three landscape frames from the original long video only."""
     _, cfg_file = get_website_config()
     if not HAS_WEBSITE_SVC or not cfg_file.exists():
         return "", []
@@ -709,22 +709,12 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str) -> t
     sess = _BackendSession(svc.cfg)
     svc._ensure_session(sess)
     meta = get_clip_metadata(clip_filename)
-    youtube_id = extract_youtube_video_id(meta.get("youtube_id") or meta.get("youtube_url"))
     clip_path = Path(str(clip_filename or ""))
     if not clip_path.is_absolute():
         clip_path = _runtime_data_root() / "output" / clip_path
     source_path = next((str(path) for path in (
         meta.get("source_video_path"), meta.get("long_video_path")
     ) if path and Path(path).is_file() and Path(path).resolve() != clip_path.resolve()), "")
-    hero = ""
-    if get_image_provider_config()["model"] != "__video_frame__":
-        generated = generate_llm_hook_image(video_title)
-        if generated and _valid_image_file(generated, landscape=True):
-            try:
-                hero = svc._presign_and_upload(sess, generated) or ""
-            except Exception as exc:
-                logger.warning("AI hook upload failed: %s", exc)
-
     images = []
     if source_path:
         # Sample three different windows from the horizontal original video.
@@ -746,32 +736,17 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str) -> t
         for index, (start, end) in enumerate(windows):
             frame = select_smart_video_frame(source_path, start, end,
                 str(HVS_DIR / "temp" / f"source_frame_{Path(clip_filename).stem}_{index}.jpg"))
-            if not frame:
+            if not frame or not _valid_image_file(frame, landscape=True):
                 continue
             try:
                 url = svc._presign_and_upload(sess, frame)
-                if url:
+                if url and url not in images:
                     images.append(url)
             except Exception as exc:
                 logger.warning("Original-source frame upload failed: %s", exc)
-    if not hero and images:
-        hero = images.pop(0)
-    if not hero and youtube_id:
-        hero = f"https://i.ytimg.com/vi/{youtube_id}/hqdefault.jpg"
-    if not hero:
-        raise WebsiteServiceError("Không có ảnh ngang từ video gốc hoặc YouTube; không dùng frame clip dọc")
-    if youtube_id:
-        # Keep three real, non-empty visual references even when the original
-        # horizontal source is unavailable. These are stable YouTube thumbnails.
-        variants = [
-            f"https://i.ytimg.com/vi/{youtube_id}/hqdefault.jpg",
-            f"https://i.ytimg.com/vi/{youtube_id}/mqdefault.jpg",
-            f"https://i.ytimg.com/vi/{youtube_id}/0.jpg",
-        ]
-        images = (images + [url for url in variants if url not in images and url != hero])[:2]
-        if not hero:
-            hero = variants[0]
-    return hero, [url for url in images[:2] if str(url).strip()]
+    if len(images) < 3:
+        raise WebsiteServiceError("Cần 3 ảnh ngang từ video gốc; không dùng ảnh AI, thumbnail YouTube hoặc clip dọc")
+    return images[0], images[1:3]
 
 def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: list, video_stream_url: str = "", youtube_id: str = "", source_summary: str = "") -> tuple:
     """
@@ -1097,19 +1072,6 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
 
     # 4. Tạo ảnh và bài viết sau khi biết chắc slug chưa được đăng.
     hero_img, body_imgs = extract_and_upload_article_assets(clip_filename, video_title)
-    if youtube_id:
-        fallback_images = [
-            f"https://i.ytimg.com/vi/{youtube_id}/maxresdefault.jpg",
-            f"https://i.ytimg.com/vi/{youtube_id}/hqdefault.jpg",
-            f"https://i.ytimg.com/vi/{youtube_id}/0.jpg",
-        ]
-        hero_img = hero_img or fallback_images[0]
-        body_imgs = list(body_imgs or [])
-        for image in fallback_images:
-            if image != hero_img and image not in body_imgs:
-                body_imgs.append(image)
-            if len(body_imgs) >= 2:
-                break
     if len({url for url in [hero_img, *body_imgs] if str(url).strip()}) < 3:
         raise WebsiteServiceError("Article requires three distinct source images before CMS publication")
     seo_title, body_html = generate_deep_article_content(

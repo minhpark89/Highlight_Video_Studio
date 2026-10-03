@@ -70,18 +70,18 @@ class ImageSourceTests(unittest.TestCase):
             ), mock.patch.object(publisher, "get_clip_metadata", return_value={"source_video_path": str(source), "clip_start": 10, "clip_end": 20}), mock.patch.object(publisher, "get_image_provider_config", return_value={"model": "__video_frame__"}), mock.patch.object(
                 publisher, "generate_llm_hook_image"
             ) as generate, mock.patch.object(
-                publisher, "select_smart_video_frame", side_effect=lambda path, *args: str(root / "wide.jpg")
-            ) as select:
+                publisher, "select_smart_video_frame", side_effect=lambda path, *args: args[-1]
+            ) as select, mock.patch.object(publisher, "_valid_image_file", return_value=True):
                 service.return_value._presign_and_upload.side_effect = lambda _session, path: uploaded.append(path) or f"https://cdn.test/{Path(path).name}"
                 hero, body = publisher.extract_and_upload_article_assets("portrait-clip.mp4", "Story")
-            self.assertEqual(select.call_count, 2)
+            self.assertEqual(select.call_count, 3)
             self.assertTrue(all(call.args[0] == str(source) for call in select.call_args_list))
             self.assertTrue(hero.startswith("https://cdn.test/"))
             self.assertEqual(len(body), 2)
-            self.assertEqual(len(uploaded), 2)
+            self.assertEqual(len(uploaded), 3)
             generate.assert_not_called()
 
-    def test_missing_local_long_video_uses_original_youtube_thumbnail(self):
+    def test_missing_local_long_video_rejects_youtube_thumbnail(self):
         from src.publisher import website_publisher as publisher
 
         with tempfile.TemporaryDirectory() as folder:
@@ -94,9 +94,8 @@ class ImageSourceTests(unittest.TestCase):
             ), mock.patch.object(publisher, "get_image_provider_config", return_value={"model": "__video_frame__"}), mock.patch.object(
                 publisher, "select_smart_video_frame"
             ) as select:
-                hero, body = publisher.extract_and_upload_article_assets("portrait-clip.mp4", "Story")
-        self.assertEqual(hero, "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg")
-        self.assertEqual(body, [hero])
+                with self.assertRaises(publisher.WebsiteServiceError):
+                    publisher.extract_and_upload_article_assets("portrait-clip.mp4", "Story")
         select.assert_not_called()
 
 

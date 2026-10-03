@@ -5717,6 +5717,7 @@
 
   // ================= SCHEDULER WORKER HEALTH & AUTO REFRESH =================
   let postsAutoRefreshTimer = null;
+  let postsTableLoading = false;
   const postsOverdueIds = new Set();
   let schedulerCycleActive = false;
 
@@ -5802,8 +5803,7 @@
     postsAutoRefreshTimer = setInterval(() => {
       const pane = document.getElementById('pane-posts');
       if (pane && pane.classList.contains('active')) {
-        refreshSchedulerStatus();
-        loadPostsTable();
+        refreshSchedulerStatus().then(() => loadPostsTable({quiet: true}));
       }
     }, 15000);
   }
@@ -5839,11 +5839,12 @@
     pollMetaPostErrors();
     setInterval(pollMetaPostErrors, 15000);
   });
-  async function loadPostsTable() {
+  async function loadPostsTable({quiet = false} = {}) {
     const tbody = document.getElementById('posts-table-body');
-    if (!tbody) return;
+    if (!tbody || postsTableLoading) return;
+    postsTableLoading = true;
 
-    tbody.innerHTML = `
+    if (!quiet && !tbody.querySelector('tr[data-post-id]')) tbody.innerHTML = `
       <tr>
         <td colspan="8" style="text-align: center; padding: 30px; color: #94a3b8;">
           <i class="bi bi-arrow-repeat spin" style="font-size: 24px; display: inline-block;"></i>
@@ -5958,7 +5959,7 @@
           : `<div style="margin-top:5px;color:#94a3b8;font-size:11px;">${p.local_video_removed_after_publish ? 'Video đã xóa sau khi đăng thành công' : 'Không tìm thấy file video local'}</div>`;
 
         html += `
-          <tr style="border-bottom: 1px solid var(--border); transition: background 0.15s ease;" onmouseover="this.style.background='rgba(255,255,255,0.02)'" onmouseout="this.style.background='transparent'">
+          <tr data-post-id="${escapeHtml(String(p.id || ''))}" style="border-bottom: 1px solid var(--border); transition: background 0.15s ease;" onmouseover="this.style.background='rgba(255,255,255,0.02)'" onmouseout="this.style.background='transparent'">
             <td style="padding: 12px 14px; color: #64748b; font-weight: 600;">${index + 1}</td>
             <td style="padding: 12px 14px;">
               <div style="font-weight: 700; color: #f8fafc; font-size: 13.5px;">${safeTitle}</div>
@@ -5999,10 +6000,29 @@
         `;
       });
 
-      tbody.innerHTML = html;
+      if (quiet && tbody.querySelector('tr[data-post-id]')) {
+        const next = document.createElement('tbody');
+        next.innerHTML = html;
+        const current = new Map([...tbody.querySelectorAll('tr[data-post-id]')].map(row => [row.dataset.postId, row]));
+        let cursor = tbody.firstElementChild;
+        for (const row of [...next.children]) {
+          const old = current.get(row.dataset.postId);
+          if (old) {
+            if (old.innerHTML !== row.innerHTML) old.innerHTML = row.innerHTML;
+            current.delete(row.dataset.postId);
+            if (old !== cursor) tbody.insertBefore(old, cursor);
+            cursor = old.nextElementSibling;
+          } else {
+            tbody.insertBefore(row, cursor);
+          }
+        }
+        for (const old of current.values()) old.remove();
+      } else tbody.innerHTML = html;
     } catch (e) {
       console.error(e);
-      tbody.innerHTML = `<tr><td colspan="8" style="color: #ef4444; padding: 20px; text-align: center;">Lỗi tải bài đăng: ${e.message}</td></tr>`;
+      if (!quiet) tbody.innerHTML = `<tr><td colspan="8" style="color: #ef4444; padding: 20px; text-align: center;">Lỗi tải bài đăng: ${e.message}</td></tr>`;
+    } finally {
+      postsTableLoading = false;
     }
   }
 
