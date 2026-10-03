@@ -6,6 +6,19 @@ from pathlib import Path
 from datetime import datetime
 
 class MetaReelPoster:
+    @staticmethod
+    def _meta_error(data):
+        error = data.get("error") if isinstance(data, dict) else None
+        if not isinstance(error, dict):
+            return "Meta did not return an error object"
+        details = [str(error.get("message") or "Meta rejected the request")]
+        for key, label in (("code", "code"), ("error_subcode", "subcode"),
+                           ("error_user_title", "title"), ("error_user_msg", "detail"),
+                           ("fbtrace_id", "trace")):
+            if error.get(key):
+                details.append(f"{label}: {error[key]}")
+        return " | ".join(details)
+
     def __init__(self, api_version="v22.0", token_vault=None):
         self.api_version = api_version
         self.base_url = f"https://graph.facebook.com/{self.api_version}"
@@ -69,10 +82,10 @@ class MetaReelPoster:
             except ValueError:
                 return {"success": False, "error": f"Meta init non-JSON response (HTTP {r_init.status_code})"}
             if not r_init.ok:
-                err_msg = init_data.get("error", {}).get("message", str(init_data))
+                err_msg = self._meta_error(init_data)
                 return {"success": False, "error": f"Meta init rejected (HTTP {r_init.status_code}): {err_msg}"}
             if "video_id" not in init_data:
-                err_msg = init_data.get("error", {}).get("message", str(init_data))
+                err_msg = self._meta_error(init_data)
                 return {"success": False, "error": f"Lỗi khởi tạo upload: {err_msg}"}
 
             video_id = init_data["video_id"]
@@ -136,7 +149,7 @@ class MetaReelPoster:
             except ValueError:
                 return {"success": False, "outcome_unknown": True, "error": f"Meta finish non-JSON response (HTTP {r_finish.status_code}); reconcile before retry"}
             if not r_finish.ok:
-                err_msg = finish_data.get("error", {}).get("message", str(finish_data))
+                err_msg = self._meta_error(finish_data)
                 return {"success": False, "outcome_unknown": True, "error": f"Meta finish rejected (HTTP {r_finish.status_code}); reconcile before retry: {err_msg}"}
             # A successful Finish response is an acceptance, not proof that the
             # Reel is public. Verify the upload video object with a read-only GET.
@@ -161,7 +174,7 @@ class MetaReelPoster:
                         "error": "Meta accepted finish; Reel processing. Verify remotely before marking posted; do not retry."}
             # A success response without an object id is not authoritative.
             if not finish_data.get("video_id") and not finish_data.get("reel_id"):
-                err_msg = finish_data.get("error", {}).get("message", str(finish_data))
+                err_msg = self._meta_error(finish_data)
                 return {"success": False, "outcome_unknown": True, "error": f"Meta finish returned no object id; outcome is unknown: {err_msg}"}
 
             # Bước 4: Tự động bắn First Comment nếu đăng ngay

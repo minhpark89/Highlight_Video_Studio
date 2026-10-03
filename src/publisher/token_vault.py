@@ -6,6 +6,7 @@ import requests
 import uuid
 from pathlib import Path
 from datetime import datetime
+from multi_pc.json_io import replace_with_retry
 
 class TokenVault:
     def __init__(self, data_dir=r"D:\Highlight_Video_Studio"):
@@ -24,7 +25,10 @@ class TokenVault:
             json.dump(tokens, f, indent=2, ensure_ascii=False)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, self.vault_file)
+        try:
+            replace_with_retry(tmp, self.vault_file)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def list_tokens(self, mask=True):
         if not self.vault_file.exists():

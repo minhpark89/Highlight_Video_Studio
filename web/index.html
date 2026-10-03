@@ -1365,6 +1365,7 @@
             </div>
             <div style="display: flex; gap: 8px;">
               <button class="btn btn-secondary" onclick="loadTokensOnly()"><i class="bi bi-arrow-repeat"></i> Làm mới</button>
+              <button class="btn btn-outline" onclick="syncTokenMetaHealth(this)" style="color:#38bdf8;border-color:rgba(56,189,248,.4);"><i class="bi bi-shield-check"></i> Kiểm tra Meta</button>
               <button class="btn btn-primary" onclick="openTokenGroupModal()"><i class="bi bi-folder-plus"></i> Quản lý Nhóm Token</button>
               <button class="btn btn-outline" onclick="openAddTokenModal()"><i class="bi bi-plus-lg"></i> Thêm Token</button>
             </div>
@@ -1383,7 +1384,7 @@
                 </div>
               </div>
               <div style="display: flex; align-items: center; gap: 6px;">
-                <input type="number" id="loha-token-threads" min="1" max="50" value="10" style="width: 55px; background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 5px; border-radius: 6px; font-weight: 700; text-align: center;">
+                <input type="number" id="loha-token-threads" min="1" max="50" value="10" title="10 lane: khoảng 90 giây giữa các Page và 15 phút trước khi dùng lại cùng token. Đây là gợi ý vận hành, không phải giới hạn Meta công bố." style="width: 55px; background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 5px; border-radius: 6px; font-weight: 700; text-align: center;">
                 <span style="font-size: 11px; color: #94a3b8;">luồng</span>
               </div>
             </div>
@@ -4038,6 +4039,17 @@
     finally { if (button) { button.disabled = false; button.innerHTML = oldLabel; } }
   }
 
+  async function syncTokenMetaHealth(button) {
+    const old = button.innerHTML; button.disabled = true; button.innerHTML = '<i class="bi bi-arrow-repeat spin"></i> Đang kiểm tra...';
+    try {
+      const res = await fetch('/api/tokens/health-sync', {method:'POST'}); const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Meta từ chối credential');
+      alert(`Meta hoạt động: ${data.healthy_tokens} token; bị chặn: ${data.blocked_tokens}; đã chuyển Page: ${data.reassigned_pages}.`);
+      await Promise.all([loadTokensOnly(), loadTokensAndPages()]);
+    } catch (e) { alert('Kiểm tra Meta thất bại: ' + e.message); }
+    finally { button.disabled = false; button.innerHTML = old; }
+  }
+
   function deleteTokenGroupById(groupId) {
     const group = cachedTokenGroups.find(g => String(g.id) === String(groupId));
     if (group) deleteTokenGroup(group.id, group.name);
@@ -4299,7 +4311,8 @@
   async function executeBatchDistribute() {
     const groupId = document.getElementById('modal-dist-group')?.value;
     const startTime = document.getElementById('modal-dist-starttime')?.value;
-    const stagger = parseInt(document.getElementById('modal-dist-stagger')?.value) || 15;
+      const stagger = parseInt(document.getElementById('modal-dist-stagger')?.value) || 15;
+    const postingThreads = parseInt(document.getElementById('loha-token-threads')?.value) || 10;
     const btn = document.getElementById('btn-submit-distribute');
 
     if (!groupId) {
@@ -4321,6 +4334,7 @@
           token_group_id: document.getElementById('modal-dist-token-group')?.value || '',
           start_time: startTime,
           stagger_minutes: stagger,
+          posting_threads: postingThreads,
           auto_first_comment: true,
           delete_after_schedule: false
         })
@@ -4873,6 +4887,7 @@
     const mode = document.querySelector('input[name="pub_mode"]:checked')?.value;
     const scheduleDt = document.getElementById('pub-schedule-datetime').value;
     const stagger = parseInt(document.getElementById('pub-schedule-stagger').value || '15', 10);
+    const postingThreads = parseInt(document.getElementById('loha-token-threads')?.value || '10', 10);
     if (!groupId && !singlePageId) {
       alert('Vui lòng chọn ít nhất 1 Fanpage hoặc 1 Nhóm Trang để xuất bản!');
       return;
@@ -4900,15 +4915,27 @@
       group_id: groupId || null,
       page_id: singlePageId || null,
       schedule_time: (mode === 'schedule') ? scheduleDt : null,
-      stagger_minutes: stagger
+      stagger_minutes: stagger,
+      posting_threads: postingThreads
     };
     try {
+      if (mode === 'schedule') {
+        const healthResp = await fetch('/api/tokens/health-sync', {method:'POST'});
+        const health = await healthResp.json();
+        if (!healthResp.ok || !health.success) throw new Error(health.error || 'Meta token preflight failed');
+        if (health.blocked_tokens) alert(`Meta từ chối ${health.blocked_tokens} token. Đã chuyển ${health.reassigned_pages} Page sang token còn hoạt động.`);
+      }
       const resp = await fetch('/api/publish/reel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
       const data = await resp.json();
+      const metaFailures = (data.results || []).filter(r => !r.success && !r.processing);
+      if (metaFailures.length) {
+        alert('Meta báo lỗi trên ' + metaFailures.length + ' Page:\n' +
+          metaFailures.map(r => `${r.page_name || r.page_id || 'Page'}: ${r.error || data.error || 'Không rõ lỗi Meta'}`).join('\n'));
+      }
       if (data.success) {
         const processingCount = data.processing_count || (data.results || []).filter(r => r.processing).length;
         const isProcessing = mode !== 'schedule' && processingCount > 0;
@@ -5434,6 +5461,10 @@
     const useLlm = document.getElementById('sched-conf-use-llm') ? document.getElementById('sched-conf-use-llm').checked : true;
 
     try {
+      const healthResp = await fetch('/api/tokens/health-sync', {method:'POST'});
+      const health = await healthResp.json();
+      if (!healthResp.ok || !health.success) throw new Error(health.error || 'Meta token preflight failed');
+      if (health.blocked_tokens) alert(`Meta từ chối ${health.blocked_tokens} token. Đã chuyển ${health.reassigned_pages} Page sang token còn hoạt động.`);
       const res = await fetch('/api/distribute/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -5710,6 +5741,38 @@
   }
   window.startPostsAutoRefresh = startPostsAutoRefresh;
 
+  const seenMetaPostErrors = new Set();
+  let postLedgerWarningShown = false;
+  function showNewMetaPostErrors(posts) {
+    const failures = posts.filter(p => p.status === 'failed' &&
+      ['facebook_publish', 'meta_preflight'].includes(p.retry_stage) && p.error &&
+      !seenMetaPostErrors.has(`${p.id}:${p.error}`));
+    failures.forEach(p => seenMetaPostErrors.add(`${p.id}:${p.error}`));
+    if (failures.length) {
+      alert('Meta báo lỗi trên ' + failures.length + ' bài:\n' +
+        failures.slice(0, 12).map(p => `${p.page_name || p.page_id || 'Page'}: ${p.error}`).join('\n') +
+        (failures.length > 12 ? '\nXem các lỗi còn lại trong Quản lý Bài Đăng.' : ''));
+    }
+  }
+  async function pollMetaPostErrors() {
+    try {
+      const res = await fetch('/api/posts');
+      if (!res.ok) return;
+      const posts = await res.json();
+      if (Array.isArray(posts)) showNewMetaPostErrors(posts);
+      if (!postLedgerWarningShown) {
+        const health = await (await fetch('/api/posts/health')).json();
+        if (health.ledger_incomplete_suspected) {
+          postLedgerWarningShown = true;
+          alert(health.message);
+        }
+      }
+    } catch (_) {}
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    pollMetaPostErrors();
+    setInterval(pollMetaPostErrors, 15000);
+  });
   async function loadPostsTable() {
     const tbody = document.getElementById('posts-table-body');
     if (!tbody) return;
@@ -5726,8 +5789,19 @@
     try {
       const res = await fetch('/api/posts');
       const posts = await res.json();
+      if (!res.ok || !Array.isArray(posts)) throw new Error(posts.error || 'Không tải được bài đăng');
+      showNewMetaPostErrors(posts);
 
       if (!posts || posts.length === 0) {
+        if (!postLedgerWarningShown) {
+          try {
+            const health = await (await fetch('/api/posts/health')).json();
+            if (health.ledger_empty_suspected) {
+              postLedgerWarningShown = true;
+              alert(health.message);
+            }
+          } catch (_) {}
+        }
         tbody.innerHTML = `
           <tr>
             <td colspan="8" style="text-align: center; padding: 40px; color: #64748b;">
@@ -5776,7 +5850,7 @@
         } else if (p.status === 'processing') {
           statusBadge = `<span style="background:rgba(245,158,11,0.15);color:#fbbf24;border:1px solid #b45309;padding:3px 8px;border-radius:6px;font-size:11px;" title="${escapeHtml(p.error || '')}">Meta processing · awaiting verification · do not retry</span>`;
         } else if (p.status === 'failed') {
-          statusBadge = `<span style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;" title="${escapeHtml(p.error || p.website_error || '')}"><i class="bi bi-x-circle"></i> Lỗi · Có thể thử lại</span>`;
+          statusBadge = `<span style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-x-circle"></i> Lỗi · Có thể thử lại</span><div style="color:#fca5a5;font-size:11px;white-space:normal;max-width:280px;">${escapeHtml(p.error || p.website_error || 'Không rõ lỗi')}</div>`;
         } else if (p.status === 'publishing') {
           statusBadge = '<span style="background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-arrow-repeat spin"></i> Đang đăng...</span>';
         } else {
@@ -5946,7 +6020,8 @@
       const allItems = data.items || [];
       const failedOnly = document.getElementById('cs-status-filter')?.value === 'failed';
       const items = failedOnly ? allItems.filter(item => item.needs_attention) : allItems;
-      stats.innerHTML = `Đang chờ: <strong>${data.queued}</strong> · Sẵn sàng: <strong>${data.ready}</strong> · Cần xử lý / chờ tạo lại: <strong>${data.needs_attention}</strong> · Lỗi: <strong>${data.failed}</strong>`;
+      const lc = data.llm_counts || {};
+      stats.innerHTML = `Đang chờ: <strong>${data.queued}</strong> · Sẵn sàng: <strong>${data.ready}</strong> · LLM thành công: <strong style="color:#4ade80">${lc.success || 0}</strong> · Fallback: <strong style="color:#fbbf24">${lc.fallback || 0}</strong> · LLM lỗi: <strong style="color:#f87171">${lc.failed || 0}</strong> · Cần xử lý: <strong>${data.needs_attention}</strong>`;
       const c = data.circuit || {};
       circuit.textContent = c.open
         ? `Circuit breaker \u0110ANG M\u1ede \u2014 th\u1eed l\u1ea1i sau ${c.retry_after_seconds}s (l\u1ed7i quota).`
@@ -5958,6 +6033,9 @@
       tbody.innerHTML = items.slice().reverse().sort((a,b) => Number(['queued','running'].includes(b.status)) - Number(['queued','running'].includes(a.status))).map(function(item) {
         const mode = item.mode || 'auto';
         const source = (item.result && item.result.source) || (item.status === 'failed' ? 'error' : '\u2014');
+        const llmLabels = {success:'LLM đã tạo thành công',fallback:'LLM lỗi · đang dùng fallback',pending:'LLM đang xử lý',failed:'LLM thất bại',disabled:'Đã tắt LLM',unknown:'Chưa xác định'};
+        const llmState = item.llm_status || 'unknown';
+        const llmColor = llmState === 'success' ? '#4ade80' : (llmState === 'fallback' || llmState === 'pending' ? '#fbbf24' : '#f87171');
         const fallbackPending = ['queued', 'running'].includes(item.status) && ['no_llm_error_fallback', 'no_llm_quota_fallback'].includes(source);
         const pending = fallbackPending ? 'Chờ tạo lại nội dung LLM' : (item.status === 'queued' || item.status === 'running' ? 'Đang tạo' : (item.status === 'ready' && item.needs_attention ? 'Cần xử lý' : item.status));
         const cs = item.component_statuses || {};
@@ -5975,7 +6053,7 @@
           <td>${csEscape(item.title || '\u2014')}</td>
           <td>${csEscape(mode)}</td>
           <td>${csEscape(pending)}${item.error ? `<div style="color:#f87171;font-size:11px;white-space:normal;">${csEscape(item.error)}</div>` : ''}${websiteError && websiteError !== item.error ? `<div style="color:#f87171;font-size:11px;white-space:normal;">CMS: ${csEscape(websiteError)}</div>` : ''}</td>
-          <td style="line-height:1.6;">${mark('hero_title','Ti\u00eau \u0111\u1ec1')}<br>${mark('article_html','B\u00e0i vi\u1ebft')}<br>${mark('first_comment','First Comment')}<br>${mark('website_link','Link web')}<br><small style="color:#94a3b8;">${csEscape(source)}</small>${fallbackReason ? `<br><small style="color:#fbbf24;">LLM fallback: ${csEscape(fallbackReason)}</small>` : ''}</td>
+          <td style="line-height:1.6;"><strong style="color:${llmColor}">${csEscape(llmLabels[llmState])}</strong><br>${mark('hero_title','Ti\u00eau \u0111\u1ec1')}<br>${mark('article_html','B\u00e0i vi\u1ebft')}<br>${mark('first_comment','First Comment')}<br>${mark('website_link','Link web')}<br><small style="color:#94a3b8;">${csEscape(source)}</small>${fallbackReason ? `<br><small style="color:#fbbf24;">LLM fallback: ${csEscape(fallbackReason)}</small>` : ''}</td>
           <td class="content-studio-actions">
             ${item.needs_attention && !['queued', 'running'].includes(item.status) ? `<input type="checkbox" class="cs-failed-select" value="${csEscape(item.id)}" aria-label="Chọn bài lỗi ${csEscape(item.title || item.id)}">` : ''}
             ${item.needs_attention && !['queued', 'running'].includes(item.status) ? `<button class="btn btn-sm btn-outline cs-retry-btn" onclick="csRetryPackage('${csEscape(item.id)}', this)">Thử lại CMS / nội dung</button>` : ''}
@@ -6566,7 +6644,7 @@
           <select id="modal-dist-stagger" class="form-select form-select-sm" style="background: #0b1329; border-color: #23304d;">
             <option value="5">Giãn cách 5 phút</option>
             <option value="10">Giãn cách 10 phút</option>
-            <option value="15" selected>Giãn cách 15 phút (Khuyên dùng)</option>
+            <option value="15" selected>Cửa sổ 15 phút / token (10 lane ≈ 90 giây/Page)</option>
             <option value="20">Giãn cách 20 phút</option>
           </select>
         </div>

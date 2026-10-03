@@ -4,6 +4,7 @@ import hashlib
 import uuid
 import threading
 import time
+from multi_pc.json_io import replace_with_retry
 from pathlib import Path
 from datetime import datetime
 
@@ -31,14 +32,10 @@ class PageManager:
             json.dump(value, f, indent=2, ensure_ascii=False)
             f.flush()
             os.fsync(f.fileno())
-        for attempt in range(6):
-            try:
-                os.replace(tmp, path)
-                break
-            except PermissionError:
-                if attempt == 5:
-                    raise
-                time.sleep(0.1 * (attempt + 1))
+        try:
+            replace_with_retry(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     @staticmethod
     def credential_fingerprint(token_value):
@@ -207,6 +204,24 @@ class PageManager:
             "unhealthy": len(pages) - verified,
             "mapped_credentials": len(tokens),
         }
+
+    def activate_bindings(self, assignments):
+        """Switch canonical Page credentials only to existing verified bindings."""
+        if not assignments:
+            return self.list_pages()
+        with _PAGES_WRITE_LOCK:
+            pages = self.list_pages()
+            by_id = {str(page.get("page_id")): page for page in pages}
+            for page_id, token_id in assignments.items():
+                page = by_id.get(str(page_id))
+                binding = (page or {}).get("token_bindings", {}).get(str(token_id))
+                if not binding or binding.get("status") != "VERIFIED" or not binding.get("page_token"):
+                    raise ValueError(f"Verified Page binding disappeared for Page {page_id}")
+                page.update({"token_id": str(token_id), "token_name": binding.get("token_name") or "",
+                             "page_token": binding["page_token"], "mapping_status": "VERIFIED",
+                             "mapping_verified_at": binding.get("verified_at") or ""})
+            self.save_pages(pages)
+            return pages
 
     def list_groups(self):
         try:

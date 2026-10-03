@@ -34,6 +34,8 @@ from multi_pc.concurrency import (
     bounded_concurrency,
     resolve_concurrency,
 )
+from multi_pc.json_io import replace_with_retry
+from multi_pc.posting_schedule import paced_offsets_by_token, posting_schedule_recommendation
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -280,14 +282,8 @@ def save_jobs(jobs):
                 json.dump(jobs, handle, indent=2, ensure_ascii=False)
                 handle.flush()
                 os.fsync(handle.fileno())
-            for attempt in range(12):
-                try:
-                    os.replace(str(tmp_file), str(JOBS_FILE))
-                    return True
-                except PermissionError:
-                    if attempt == 11:
-                        raise
-                    time.sleep(0.04 * (attempt + 1))
+            replace_with_retry(tmp_file, JOBS_FILE)
+            return True
         finally:
             try:
                 tmp_file.unlink(missing_ok=True)
@@ -1600,7 +1596,112 @@ def api_list_tokens():
             page_counts[token_id] = page_counts.get(token_id, 0) + 1
     for token in tokens:
         token["pages_count"] = page_counts.get(str(token.get("id")), 0)
+        # Bulk-imported tokens can all carry the same operator label (e.g. Bm1).
+        # Show the verified Meta owner so each credential remains identifiable.
+        token["display_name"] = token.get("owner_name") or token.get("name") or token.get("id")
+        token["name"] = token["display_name"]
     return jsonify({"success": True, "tokens": tokens})
+
+@app.route("/api/tokens/health-sync", methods=["POST"])
+def api_token_health_sync():
+    """Probe every stored credential and move Pages off blocked credentials."""
+    from concurrent.futures import ThreadPoolExecutor
+    tokens = token_vault.list_tokens(mask=False)
+    healthy, blocked = set(), set()
+    def check_token(token):
+        try:
+            response = requests.get("https://graph.facebook.com/v22.0/me",
+                                    params={"access_token": token.get("token"), "fields": "id,name"}, timeout=8)
+            payload = response.json()
+            error = payload.get("error") if isinstance(payload, dict) else None
+            if response.ok and not error:
+                return token, True, ""
+            else:
+                return token, False, f"Meta [{(error or {}).get('code', response.status_code)}] {(error or {}).get('message', 'Credential rejected')}"
+        except Exception as exc:
+            return token, False, sanitize_error(exc)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(check_token, tokens))
+    for token, ok, error in outcomes:
+        (healthy if ok else blocked).add(str(token.get("id")))
+        token.update({"status": "ACTIVE" if ok else "ERROR", "error_msg": error,
+                      "last_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    token_vault._save(tokens)
+    if not healthy:
+        return jsonify({"success": False, "error": "Meta từ chối toàn bộ credential; không thay đổi Page mapping.",
+                        "blocked_tokens": len(blocked)}), 409
+    assignments = {}
+    page_failures = []
+    counts = {token_id: 0 for token_id in healthy}
+    token_lookup = {str(token.get("id")): token for token in tokens}
+    pages = page_manager.list_pages()
+    for page in pages:
+        if str(page.get("token_id") or "") in healthy:
+            counts[str(page.get("token_id"))] += 1
+    # Page bindings were created by /me/accounts discovery. Reuse those exact
+    # bindings after the owning credential probe; probing 100 Page tokens here
+    # would make the health action exceed desktop request timeouts.
+    for page in pages:
+        canonical_ok = str(page.get("token_id") or "") in healthy
+        current = str(page.get("token_id") or "")
+        if canonical_ok:
+            continue
+        candidates = sorted((str(tid) for tid in (page.get("token_bindings") or {}) if str(tid) in healthy and str(tid) != current),
+                            key=lambda tid: (counts[tid], tid))
+        for token_id in candidates:
+            binding, reason = page_manager.resolve_verified_mapping(str(page.get("page_id")), token_lookup[token_id])
+            if binding and not reason:
+                assignments[str(page.get("page_id"))] = token_id
+                counts[token_id] += 1
+                break
+        else:
+            page_failures.append(str(page.get("page_id")))
+    def check_page(selection):
+        page, token_id = selection
+        binding = (page.get("token_bindings") or {}).get(token_id) or {}
+        if not binding.get("page_token"):
+            return False
+        try:
+            response = requests.get("https://graph.facebook.com/v22.0/me",
+                                    params={"access_token": binding["page_token"], "fields": "id"}, timeout=8)
+            payload = response.json()
+            return response.ok and str(payload.get("id")) == str(page.get("page_id"))
+        except Exception:
+            return False
+    selections = [(page, assignments.get(str(page.get("page_id")), str(page.get("token_id") or ""))) for page in pages]
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        verified_pages = list(pool.map(check_page, selections))
+    for (page, selected_id), verified_page in zip(selections, verified_pages):
+        if verified_page or str(page.get("page_id")) in page_failures:
+            continue
+        alternatives = sorted((str(tid) for tid in (page.get("token_bindings") or {})
+                               if str(tid) in healthy and str(tid) != selected_id), key=lambda tid: (counts[tid], tid))
+        for token_id in alternatives:
+            binding, reason = page_manager.resolve_verified_mapping(str(page.get("page_id")), token_lookup[token_id])
+            if binding and not reason and check_page((page, token_id)):
+                assignments[str(page.get("page_id"))] = token_id
+                counts[token_id] += 1
+                break
+        else:
+            page_failures.append(str(page.get("page_id")))
+    if page_failures:
+        return jsonify({"success": False, "error": "Một số Page không có Page token nào được Meta chấp nhận; chưa đổi mapping.",
+                        "page_ids": page_failures, "healthy_tokens": len(healthy), "blocked_tokens": len(blocked)}), 409
+    page_manager.activate_bindings(assignments)
+    global _last_meta_health_sync
+    _last_meta_health_sync = time.monotonic()
+    return jsonify({"success": True, "healthy_tokens": len(healthy), "blocked_tokens": len(blocked),
+                    "reassigned_pages": len(assignments), "blocked_token_ids": sorted(blocked)})
+
+_last_meta_health_sync = 0.0
+
+def _ensure_recent_meta_health():
+    """Fail before queue creation if Meta no longer accepts Page credentials."""
+    if app.testing or time.monotonic() - _last_meta_health_sync < 120:
+        return None
+    result = api_token_health_sync()
+    response = result[0] if isinstance(result, tuple) else result
+    return result if response.status_code != 200 else None
 
 @app.route("/api/tokens", methods=["POST"])
 def api_add_token():
@@ -1744,6 +1845,8 @@ def api_list_pages():
     pages = page_manager.list_pages()
     groups = page_manager.list_groups()
     valid_groups = {str(g.get("id")): g for g in groups if g.get("id")}
+    token_names = {str(t.get("id")): (t.get("owner_name") or t.get("name") or t.get("id"))
+                   for t in token_vault.list_tokens(mask=True)}
     # Page mapping stores the last successful publish counter, while the post
     # queue is the authoritative source for work scheduled during the current
     # run. Expose both so the UI never shows a misleading zero during a batch.
@@ -1768,6 +1871,7 @@ def api_list_pages():
     for page in pages:
         item = dict(page)
         pid = str(item.get("page_id") or "").strip()
+        item["token_name"] = token_names.get(str(item.get("token_id") or ""), item.get("token_name") or "")
         item.update(stats.get(pid, {"published_count": 0, "scheduled_count": 0, "publishing_count": 0}))
         # Never display a deleted/stale group label as if it still existed.
         group_ids = [str(gid) for gid in (item.get("group_ids") or []) if str(gid) in valid_groups]
@@ -1853,6 +1957,10 @@ def api_delete_group(group_id):
 def api_publish_reel():
     from src.content_packages import scheduled_video_path
     data = request.json or {}
+    if data.get("schedule_time"):
+        blocked = _ensure_recent_meta_health()
+        if blocked is not None:
+            return blocked
     page_id = data.get("page_id")
     page_ids = data.get("page_ids") or []
     group_id = data.get("group_id")
@@ -1865,7 +1973,8 @@ def api_publish_reel():
     if article_url and article_url not in first_comment:
         first_comment = f"{first_comment}\n{article_url}".strip()
     schedule_time = data.get("schedule_time") # ISO or "YYYY-MM-DD HH:MM" or timestamp
-    stagger_minutes = int(data.get("stagger_minutes", 15)) # Leech gio giua cac page
+    stagger_minutes = max(1, int(data.get("stagger_minutes", 15)))
+    posting_threads = max(1, min(50, int(data.get("posting_threads", 10))))
 
     
     if not clip_filename:
@@ -1897,6 +2006,13 @@ def api_publish_reel():
 
     if not target_page_ids:
         return jsonify({"error": "Vui lòng chọn ít nhất 1 Fanpage hoặc 1 Nhóm Page để đăng"}), 400
+
+    if not schedule_time and len(target_page_ids) > 1:
+        return jsonify({
+            "success": False,
+            "code": "multi_page_requires_schedule",
+            "error": "Đăng nhiều Page cần đặt lịch để giãn cách request Meta; chọn thời gian bắt đầu rồi thử lại.",
+        }), 400
 
     full_description = f"{title}\n\n{caption}".strip()
     results = []
@@ -1974,6 +2090,13 @@ def api_publish_reel():
         _page_record["page_token"] = ready["token"]
         _page_record["token_id"] = ready["token_id"]
 
+    scheduled_offsets = paced_offsets_by_token(
+        [next((ready["token_id"] for record, ready in schedule_target_pages
+               if str(record.get("page_id")) == pid), pid) for pid in target_page_ids],
+        global_seconds=max(90, int(stagger_minutes * 60 / posting_threads)),
+        token_seconds=stagger_minutes * 60,
+    ) if schedule_time else []
+
     for idx, pid in enumerate(target_page_ids):
         p_info = next((p for p in pages if isinstance(p, dict) and str(p.get("page_id")) == str(pid)), None)
         if not p_info:
@@ -1988,7 +2111,7 @@ def api_publish_reel():
         # Tinh gio hen kem jitter/stagger cho page nay neu co schedule
         curr_sched = None
         if base_schedule_ts:
-            curr_sched = base_schedule_ts + (idx * stagger_minutes * 60)
+            curr_sched = base_schedule_ts + scheduled_offsets[idx]
 
         if curr_sched:
             verified = next((ready for record, ready in schedule_target_pages if record is p_info), None)
@@ -2217,6 +2340,25 @@ def api_publish_reel():
                             "success": False, "processing": True, "outcome_unknown": True,
                             "meta_post_id": str(res.get("meta_post_id") or ""), "error": "Meta processing; do not retry."})
         else:
+            # Persist a failed direct publish so the operator can inspect the
+            # exact Meta error in Post Management instead of losing it when the
+            # request response closes. This row is never retried automatically.
+            failure_post = {
+                "id": f"post_{int(time.time())}_{uuid.uuid4().hex[:6]}",
+                "title": title, "content": caption, "page_id": pid,
+                "page_name": p_info.get("page_name", pid), "type": "reel",
+                "media_file": clip_filename, "first_comment": first_comment,
+                "article_url": article_url, "status": "failed",
+                "retryable": bool(res.get("retryable", False)),
+                "retry_stage": "facebook_publish",
+                "error": str(res.get("error") or "Meta publish returned no object id; outcome is unknown and must be reconciled before retry."),
+                "outcome_unknown": bool(res.get("outcome_unknown")),
+                "token_id": verified["token_id"],
+                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            failed_posts = load_posts()
+            failed_posts.insert(0, failure_post)
+            save_posts(failed_posts)
             results.append({
                 "page_id": pid,
                 "page_name": p_info.get("page_name"),
@@ -2493,6 +2635,39 @@ def api_get_posts():
     posts = sorted(posts, key=_sort_key, reverse=True)
     return jsonify(posts)
 
+@app.route("/api/posts/health", methods=["GET"])
+def api_posts_health():
+    """Expose an explicit warning when the post ledger was cleared independently.
+
+    Content packages and posted_clips are retained after a queue wipe, so an empty
+    /api/posts response must not look like a clean first run to the operator.
+    """
+    posts = load_posts()
+    posted_file = POSTS_FILE.parent / "posted_clips.json"
+    posted_count = 0
+    if posted_file.exists():
+        try:
+            value = json.loads(posted_file.read_text(encoding="utf-8"))
+            posted_count = len(value) if isinstance(value, list) else 0
+        except Exception:
+            pass
+    package_count = 0
+    try:
+        from src.content_packages import list_packages
+        package_count = sum(1 for item in list_packages() if item.get("post_ids"))
+    except Exception:
+        pass
+    recovered_count = sum(1 for post in posts if post.get("recovered_from_meta"))
+    suspected = (not posts or recovered_count == len(posts)) and (posted_count > 0 or package_count > 0)
+    return jsonify({"success": True, "ledger_empty": not posts,
+                    "ledger_empty_suspected": suspected,
+                    "ledger_incomplete_suspected": suspected,
+                    "recovered_meta_count": recovered_count,
+                    "posted_clip_count": posted_count,
+                    "linked_package_count": package_count,
+                    "message": (f"Đã phục hồi {recovered_count} Reel từ Meta, nhưng lịch đăng cũ đã mất. Không đăng lại tự động để tránh trùng bài." if suspected and recovered_count else
+                                "Post ledger đang rỗng nhưng dữ liệu Content Studio/đã đăng vẫn còn; không đăng lại tự động." if suspected else "")})
+
 @app.route("/api/posts", methods=["POST"])
 def api_save_post():
     data = request.json or {}
@@ -2571,13 +2746,28 @@ def api_distribute_batch():
     import re
     from datetime import datetime, timedelta
     data = request.json or {}
+    blocked = _ensure_recent_meta_health()
+    if blocked is not None:
+        return blocked
     group_id = data.get("group_id")
     token_group_id = str(data.get("token_group_id") or "").strip()
     clip_filenames = data.get("clip_filenames", [])
     if not isinstance(clip_filenames, list) or any(not isinstance(fn, str) for fn in clip_filenames):
         return jsonify({"success": False, "code": "invalid_video_path", "error": "Clip selections must be a list of filenames"}), 400
     posts_per_page = int(data.get("posts_per_page", 1))
-    stagger_minutes = int(data.get("stagger_minutes", 15))
+    stagger_minutes = max(1, int(data.get("stagger_minutes", 15)))
+    posting_threads = max(1, min(50, int(data.get("posting_threads", 10))))
+    requested_start = str(data.get("start_time") or "").strip()
+    start_dt = None
+    if requested_start:
+        try:
+            start_dt = datetime.fromisoformat(requested_start)
+            if start_dt.tzinfo is not None:
+                start_dt = start_dt.astimezone().replace(tzinfo=None)
+        except ValueError:
+            return jsonify({"success": False, "code": "invalid_start_time", "error": "Start time must be ISO date/time"}), 400
+        if start_dt <= datetime.now() + timedelta(seconds=5):
+            return jsonify({"success": False, "code": "start_time_in_past", "error": "Start time must be in the future"}), 400
     auto_first_comment = data.get("auto_first_comment", True)
     use_llm_comment = data.get("use_llm_comment", True)
     configured_first_comment = str(data.get("first_comment") or "").strip()
@@ -2653,7 +2843,13 @@ def api_distribute_batch():
 
     sched_cfg = group.get("schedule_config") or {}
     group_times = sched_cfg.get("times") or ["11:30", "19:30"]
-    group_stagger = sched_cfg.get("stagger_minutes") or stagger_minutes
+    group_stagger = max(1, int(sched_cfg.get("stagger_minutes") or stagger_minutes))
+    posting_threads = max(1, min(50, int(sched_cfg.get("posting_threads") or posting_threads)))
+    scheduled_offsets = paced_offsets_by_token(
+        [verified_token_ids[pid] for pid in page_ids],
+        global_seconds=max(90, int(group_stagger * 60 / posting_threads)),
+        token_seconds=group_stagger * 60,
+    )
 
     configured_folder = str(group.get("folder_binding") or group.get("folder_path") or "").strip()
     folder_path = Path(configured_folder or str(OUTPUT_DIR)).expanduser()
@@ -2785,10 +2981,13 @@ def api_distribute_batch():
         except Exception:
             th, tm = 11, 30
 
-        target_date = now_ts.date()
-        slot_base_dt = datetime(target_date.year, target_date.month, target_date.day, th, tm, 0)
-        if slot_base_dt <= now_ts:
-            slot_base_dt += timedelta(days=1)
+        if start_dt is not None:
+            slot_base_dt = start_dt + timedelta(days=slot_idx)
+        else:
+            target_date = now_ts.date()
+            slot_base_dt = datetime(target_date.year, target_date.month, target_date.day, th, tm, 0)
+            if slot_base_dt <= now_ts:
+                slot_base_dt += timedelta(days=1)
 
         for idx, pid in enumerate(page_ids):
             if clip_idx >= len(available_clips):
@@ -2801,7 +3000,7 @@ def api_distribute_batch():
             page_token = resolved_page_tokens[pid]
 
             post_id = f"post_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-            sched_dt = slot_base_dt + timedelta(minutes=(idx * group_stagger))
+            sched_dt = slot_base_dt + timedelta(seconds=scheduled_offsets[idx])
             sched_time_str = sched_dt.strftime("%Y-%m-%d %H:%M:%S")
 
             # Lấy thông tin video bám sát nội dung gốc
@@ -2890,6 +3089,14 @@ def api_distribute_batch():
         "content_package_pending": sum(value for key, value in package_statuses.items() if key in ("queued", "running", "pending")),
         "content_package_llm": package_sources.get("llm", 0),
         "content_package_fallback": sum(value for key, value in package_sources.items() if key.startswith("no_llm")),
+        "posting_threads": posting_threads,
+        "schedule_recommendation": {
+            **posting_schedule_recommendation(
+                threads=posting_threads, pages=len(page_ids), window_minutes=group_stagger
+            ),
+            "actual_estimated_minutes": round(max(scheduled_offsets, default=0) / 60, 1),
+            "distinct_tokens": len(set(verified_token_ids.values())),
+        },
         "message": f"Đã phân bổ thành công {scheduled_count} bài viết cho {len(page_ids)} Fanpage ({posts_per_page} bài/page)!"
     })
 
@@ -2930,6 +3137,20 @@ def handle_schedule_rules():
         saved = save_schedule_rules(data)
         return jsonify({"status": "ok", "rules": saved})
     return jsonify({"status": "ok", "rules": get_schedule_rules()})
+
+
+@app.route("/api/schedule/recommendation", methods=["GET"])
+def api_schedule_recommendation():
+    threads = request.args.get("threads", 10)
+    pages = request.args.get("pages", 100)
+    window = request.args.get("window_minutes", 15)
+    try:
+        recommendation = posting_schedule_recommendation(
+            threads=int(threads), pages=int(pages), window_minutes=int(window)
+        )
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "threads/pages/window_minutes must be integers"}), 400
+    return jsonify({"success": True, "recommendation": recommendation})
 
 
 
@@ -3491,9 +3712,26 @@ def apply_ready_package_to_post(post, package):
 @app.route("/api/content-studio/queue", methods=["GET"])
 def api_content_studio_queue():
     items = list_packages()
+    llm_counts = {"success": 0, "fallback": 0, "pending": 0, "failed": 0, "disabled": 0, "unknown": 0}
     for item in items:
         item["component_statuses"] = component_statuses(item)
         item["needs_attention"] = package_needs_attention(item)
+        source = str((item.get("result") or {}).get("source") or "")
+        if source == "llm":
+            llm_status = "success"
+        elif item.get("mode") == "no_llm":
+            llm_status = "disabled"
+        elif source.startswith("no_llm"):
+            llm_status = "fallback"
+        elif item.get("status") in ("queued", "running"):
+            llm_status = "pending"
+        elif item.get("status") in ("failed", "retryable"):
+            llm_status = "failed"
+        else:
+            llm_status = "unknown"
+        item["llm_status"] = llm_status
+        item["llm_error"] = str((item.get("result") or {}).get("fallback_reason") or item.get("error") or "") if llm_status in ("fallback", "failed") else ""
+        llm_counts[llm_status] += 1
     return jsonify({
         "success": True,
         "queued": sum(1 for i in items if i.get("status") == "queued"),
@@ -3502,6 +3740,7 @@ def api_content_studio_queue():
         "retryable": sum(1 for i in items if i.get("status") == "retryable"),
         "needs_attention": sum(1 for i in items if package_needs_attention(i)),
         "items": items,
+        "llm_counts": llm_counts,
         "circuit": circuit_status(),
     })
 

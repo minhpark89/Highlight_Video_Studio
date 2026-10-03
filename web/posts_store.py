@@ -6,7 +6,10 @@ import json
 import os
 import threading
 import uuid
+import copy
+from datetime import datetime
 from pathlib import Path
+from multi_pc.json_io import replace_with_retry
 
 
 class PostsStoreError(RuntimeError):
@@ -14,6 +17,58 @@ class PostsStoreError(RuntimeError):
 
 
 _LOCK = threading.RLock()
+_READS = threading.local()
+
+
+class PostsList(list):
+    """A queue revision carrying its original rows for conflict aware saves."""
+    def __init__(self, rows, path):
+        super().__init__(rows)
+        self._store_path = str(path.resolve())
+        self._baseline = copy.deepcopy(rows)
+
+
+def _remember(path, rows):
+    value = PostsList(rows, path)
+    if not hasattr(_READS, "baselines"):
+        _READS.baselines = {}
+    _READS.baselines[str(path.resolve())] = copy.deepcopy(rows)
+    return value
+
+
+def _merge_revision(current, incoming, baseline):
+    """Apply only fields changed since load; preserve independent worker edits."""
+    old = {str(row.get("id")): row for row in baseline if isinstance(row, dict) and row.get("id")}
+    now = {str(row.get("id")): row for row in current if isinstance(row, dict) and row.get("id")}
+    new = {str(row.get("id")): row for row in incoming if isinstance(row, dict) and row.get("id")}
+    if len(old) != len(baseline) or len(now) != len(current) or len(new) != len(incoming):
+        raise PostsStoreError("posts queue rows require unique nonempty ids")
+    if len(set(old)) != len(baseline) or len(set(now)) != len(current) or len(set(new)) != len(incoming):
+        raise PostsStoreError("posts queue contains duplicate ids")
+    for post_id in old.keys() - new.keys():
+        now.pop(post_id, None)
+    for post_id, incoming_row in new.items():
+        if post_id not in old:
+            now[post_id] = copy.deepcopy(incoming_row)
+            continue
+        if post_id not in now:
+            # A concurrent explicit deletion wins over an old worker snapshot.
+            continue
+        original = old[post_id]
+        target = now[post_id]
+        protected = target.get("status") in ("published", "processing") and incoming_row.get("status") not in ("published", "processing")
+        for key in set(original) | set(incoming_row):
+            if original.get(key) == incoming_row.get(key) and (key in original) == (key in incoming_row):
+                continue
+            if protected and target.get(key) != original.get(key) and key in ("status", "post_fb_id", "fb_url", "meta_post_id", "meta_upload_video_id", "retryable", "retry_stage", "error"):
+                continue
+            if key in incoming_row:
+                target[key] = copy.deepcopy(incoming_row[key])
+            else:
+                target.pop(key, None)
+    order = list(dict.fromkeys([str(row["id"]) for row in incoming if isinstance(row, dict)] +
+                               [str(row["id"]) for row in current if isinstance(row, dict)]))
+    return [now[post_id] for post_id in order if post_id in now]
 
 
 def resolve_posts_file(path=None) -> Path:
@@ -68,7 +123,7 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp, path)
+        replace_with_retry(temp, path)
     finally:
         try:
             temp.unlink(missing_ok=True)
@@ -91,18 +146,18 @@ def load_posts_file(path: str | Path) -> list:
                 try:
                     recovered = _read_valid_list(backup)
                     _atomic_write_bytes(primary, backup.read_bytes())
-                    return recovered
+                    return _remember(primary, recovered)
                 except Exception as exc:
                     raise PostsStoreError(f"posts queue backup is unreadable: {exc}") from exc
-            return []
+            return _remember(primary, [])
         try:
-            return _read_valid_list(primary)
+            return _remember(primary, _read_valid_list(primary))
         except Exception as primary_exc:
             if backup.exists():
                 try:
                     recovered = _read_valid_list(backup)
                     _atomic_write_bytes(primary, backup.read_bytes())
-                    return recovered
+                    return _remember(primary, recovered)
                 except Exception as backup_exc:
                     raise PostsStoreError(
                         f"posts queue primary and backup are unreadable: primary={primary_exc}; backup={backup_exc}"
@@ -116,7 +171,31 @@ def save_posts_file(path: str | Path, posts: list) -> None:
         raise PostsStoreError("refusing to save posts queue: value is not a list")
     primary = resolve_posts_file(path)
     backup = _backup_path(primary)
-    payload = json.dumps(posts, indent=2, ensure_ascii=False).encode("utf-8")
+    source_posts = posts
+    incoming_snapshot = copy.deepcopy(list(posts))
     with _LOCK:
+        if isinstance(posts, PostsList) and posts._store_path == str(primary.resolve()):
+            baseline = posts._baseline
+        else:
+            baseline = getattr(_READS, "baselines", {}).get(str(primary.resolve()))
+        if baseline is not None and primary.exists():
+            posts = _merge_revision(_read_valid_list(primary), posts, baseline)
+        payload = json.dumps(posts, indent=2, ensure_ascii=False).encode("utf-8")
+        # Preserve the last populated ledger before a clear/delete or a stale
+        # writer replaces it. The rolling .bak mirrors the new revision and
+        # cannot recover an accidental empty write after it happens.
+        if primary.exists():
+            previous = _read_valid_list(primary)
+            old_ids = {str(row.get("id")) for row in previous if isinstance(row, dict)}
+            new_ids = {str(row.get("id")) for row in posts if isinstance(row, dict)}
+            if old_ids - new_ids:
+                archive = primary.with_name(
+                    f"{primary.stem}.history.{datetime.now().strftime('%Y%m%d_%H%M%S')}.{uuid.uuid4().hex[:6]}.json"
+                )
+                _atomic_write_bytes(archive, primary.read_bytes())
         _atomic_write_bytes(primary, payload)
         _atomic_write_bytes(backup, payload)
+        if isinstance(source_posts, PostsList):
+            source_posts._baseline = incoming_snapshot
+        if hasattr(_READS, "baselines"):
+            _READS.baselines[str(primary.resolve())] = incoming_snapshot

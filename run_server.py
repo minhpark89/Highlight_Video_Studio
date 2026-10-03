@@ -39,10 +39,21 @@ from web.app import app
 
 
 if __name__ == "__main__":
+    # A desktop executable and a manually launched run_server must never serve
+    # the same mutable JSON ledgers at the same time.  The lease is reclaimed
+    # only after the owner process is gone.
+    from multi_pc.data_root import ProcessLease
+    server_lease = ProcessLease("desktop-server", ROOT_DIR, stale_after=45)
+    if not server_lease.acquire():
+        print("Highlight Video Studio is already running; refusing a second server.")
+        raise SystemExit(0)
     bind_host = "127.0.0.1"
     requested_host = os.environ.get("HIGHLIGHT_BIND_HOST", bind_host).strip()
     if requested_host not in ("127.0.0.1", "localhost", "::1"):
         print(f"Ignoring unsafe bind host {requested_host!r}; desktop server is loopback-only.")
     port = int(os.environ.get("HIGHLIGHT_PORT", "5080"))
     print(f"Highlight Video Studio starting on http://{bind_host}:{port}...")
-    waitress.serve(app, host=bind_host, port=port, threads=8, channel_timeout=30)
+    try:
+        waitress.serve(app, host=bind_host, port=port, threads=8, channel_timeout=30)
+    finally:
+        server_lease.release()

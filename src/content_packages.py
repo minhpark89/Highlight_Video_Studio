@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
+from multi_pc.json_io import replace_with_retry
 
 from multi_pc.data_root import ProcessLease, canonical_data_root
 from src.llm_response import chat_model_unavailable, chat_stream_incomplete, json_from_chat_response
@@ -44,7 +45,10 @@ def _write(path: Path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
     temp.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(temp, path)
+    try:
+        replace_with_retry(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def _now():
