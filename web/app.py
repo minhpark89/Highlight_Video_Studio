@@ -1887,7 +1887,7 @@ def _delete_token_set(token_ids, migration_token_id=""):
                         or ids.intersection({str(tid) for tid, binding in (p.get("token_bindings") or {}).items() if binding})]
     posts = load_posts()
     referenced_posts = [p for p in posts if str(p.get("token_id") or "") in ids and (
-        p.get("status") in ("scheduled", "publishing", "processing", "meta_scheduled")
+        p.get("status") in ("scheduled", "meta_handoff", "publishing", "processing", "meta_scheduled")
         or (p.get("status") == "failed" and p.get("retryable") and p.get("retry_stage") == "meta_preflight")
     )]
     pending_comment_file = BASE_DIR / "data" / "pending_first_comments.json"
@@ -1907,7 +1907,7 @@ def _delete_token_set(token_ids, migration_token_id=""):
         target = token_vault.get_token_by_id(migration_token_id)
         if not target or target.get("status") != "ACTIVE":
             return jsonify({"success": False, "code": "invalid_migration_target", "error": "Migration target must exist and be active."}), 409
-        unsafe_posts = [p for p in referenced_posts if p.get("status") in ("publishing", "processing", "meta_scheduled")]
+        unsafe_posts = [p for p in referenced_posts if p.get("status") in ("meta_handoff", "publishing", "processing", "meta_scheduled")]
         if unsafe_posts:
             return jsonify({"success": False, "code": "token_in_use", "migration_required": True,
                             "error": "Meta outcome or handed-off schedule is unresolved; reconcile it with the original credential before deleting.",
@@ -2812,11 +2812,16 @@ def api_test_video_uploader():
 
 @app.route("/api/posts/clear", methods=["POST"])
 def api_clear_posts():
+    from web.scheduled_publisher import _cycle_lock
+    if not _cycle_lock.acquire(blocking=False):
+        return jsonify({"success": False, "error": "App đang xử lý bài; thử lại sau ít giây."}), 409
     try:
         data = request.get_json(silent=True) or {}
         status_filter = data.get("status", "all") # 'all' or 'scheduled'
         
         posts = load_posts()
+        if status_filter != "scheduled" and any(p.get("status") in ("meta_handoff", "publishing", "processing", "meta_scheduled") for p in posts):
+            return jsonify({"success": False, "error": "Có bài đang giao hoặc đã giao Meta. Xóa lịch local không hủy lịch trên Meta."}), 409
         if status_filter == "scheduled":
             new_posts = [p for p in posts if p.get("status") != "scheduled"]
             removed_count = len(posts) - len(new_posts)
@@ -2832,6 +2837,8 @@ def api_clear_posts():
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e), "message": f"Lỗi: {str(e)}"}), 500
+    finally:
+        _cycle_lock.release()
 
 @app.route("/api/scheduler/status", methods=["GET"])
 def api_scheduler_status():
@@ -2922,8 +2929,10 @@ def api_scheduler_run_due():
 
 @app.route("/api/posts", methods=["GET"])
 def api_get_posts():
+    from web.meta_handoff import handoff_eligibility
     posts = load_posts()
     for post in posts:
+        post["can_handoff_meta"], post["meta_handoff_blocked_reason"] = handoff_eligibility(post, OUTPUT_DIR)
         media_file = post.get("media_file") or post.get("clip_filename")
         if media_file:
             post["local_video_url"] = f"/api/clips/play/{media_file}"
@@ -2951,6 +2960,28 @@ def api_get_posts():
         return (c_at, s_at, p_id)
     posts = sorted(posts, key=_sort_key, reverse=True)
     return jsonify(posts)
+
+
+@app.route("/api/posts/handoff-meta", methods=["POST"])
+def api_handoff_posts_to_meta():
+    from web.meta_handoff import queue_handoffs
+    from web.scheduled_publisher import _cycle_lock
+    data = request.get_json(silent=True) or {}
+    post_ids = data.get("post_ids")
+    if not isinstance(post_ids, list) or not post_ids or len(post_ids) > 500 or any(not isinstance(pid, str) or not pid.strip() for pid in post_ids):
+        return jsonify({"success": False, "error": "Chọn từ 1 đến 500 bài cần giao Meta."}), 400
+    if not _cycle_lock.acquire(blocking=False):
+        return jsonify({"success": False, "busy": True, "error": "App đang xử lý bài khác; thử lại sau ít giây."}), 409
+    try:
+        posts = load_posts()
+        results = queue_handoffs(posts, post_ids, OUTPUT_DIR, token_vault, page_manager)
+        accepted = sum(item["accepted"] for item in results)
+        if accepted:
+            save_posts(posts)
+        return jsonify({"success": True, "accepted_count": accepted,
+                        "skipped_count": len(results) - accepted, "results": results})
+    finally:
+        _cycle_lock.release()
 
 @app.route("/api/posts/health", methods=["GET"])
 def api_posts_health():
@@ -3024,10 +3055,19 @@ def api_save_post():
 
 @app.route("/api/posts/<post_id>", methods=["DELETE"])
 def api_delete_post(post_id):
-    posts = load_posts()
-    posts = [p for p in posts if p.get("id") != post_id]
-    save_posts(posts)
-    return jsonify({"success": True})
+    from web.scheduled_publisher import _cycle_lock
+    if not _cycle_lock.acquire(blocking=False):
+        return jsonify({"success": False, "error": "App đang xử lý bài; thử lại sau ít giây."}), 409
+    try:
+        posts = load_posts()
+        post = next((p for p in posts if p.get("id") == post_id), None)
+        if post and post.get("status") in ("meta_handoff", "publishing", "processing", "meta_scheduled"):
+            return jsonify({"success": False, "error": "Bài đang giao hoặc đã giao Meta. Xóa lịch local không hủy lịch trên Meta."}), 409
+        posts = [p for p in posts if p.get("id") != post_id]
+        save_posts(posts)
+        return jsonify({"success": True})
+    finally:
+        _cycle_lock.release()
 
 
 @app.route("/api/posts/<post_id>/retry-website", methods=["POST"])

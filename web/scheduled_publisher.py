@@ -584,8 +584,11 @@ def _process_scheduled_posts_once(
                 removed += 1
     if claimed_posts or recovered or reconciled or queue_result.get("changed") or removed:
         save_posts(posts)
+    from web.meta_handoff import process_next_handoff
+    handed_off = process_next_handoff(posts, save_posts, poster, OUTPUT_DIR, token_vault, page_manager, now=now)
     failed = sum(1 for post in claimed_posts if post.get("status") == "failed")
-    return {"claimed": len(claimed_posts), "recovered": recovered, "failed": failed, "queue": queue_result, "posts": posts}
+    return {"claimed": len(claimed_posts), "recovered": recovered, "failed": failed, "queue": queue_result,
+            "handed_off": handed_off, "handoff_pending": any(p.get("status") == "meta_handoff" for p in posts), "posts": posts}
 
 
 def process_scheduled_posts_once(*args, **kwargs):
@@ -621,6 +624,7 @@ def scheduled_publisher_worker_loop():
     try:
         while True:
             _PROCESS_LEASE.touch()
+            result = {}
             try:
                 result = process_scheduled_posts_once()
                 if result.get("busy"):
@@ -634,7 +638,7 @@ def scheduled_publisher_worker_loop():
             except Exception as exc:
                 _touch_heartbeat(False, exc)
                 _safe_log(f"[ScheduledPublisher] Loop Error: {sanitize_error(exc)}")
-            time.sleep(CYCLE_INTERVAL_SECONDS)
+            time.sleep(1 if result.get("handoff_pending") else CYCLE_INTERVAL_SECONDS)
     finally:
         _worker_started = False
         with _heartbeat_lock:
