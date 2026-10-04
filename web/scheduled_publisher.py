@@ -272,6 +272,10 @@ def _process_scheduled_posts_once(
         post["meta_reconcile_attempts"] = (attempts + 1) if post.get("meta_reconcile_version") == 2 else 1
         post["meta_reconcile_version"] = 2
         post["meta_next_check_at"] = now_ts + (300 if meta_scheduled or attempts >= 5 else 60)
+        if isinstance(check.get("meta_observation"), dict):
+            from web.meta_diagnostics import diagnose
+            post["meta_observation"] = check["meta_observation"]
+            post["meta_diagnosis"] = diagnose(post)
         reconciled += 1
         if check.get("verified"):
             post["post_fb_id"] = check["video_id"]
@@ -649,6 +653,9 @@ def _publish_claimed_post(post, posts, poster, current_dt, token_vault, page_man
                          "meta_upload_video_id": str(result.get("upload_video_id") or post.get("meta_upload_video_id") or ""),
                          "meta_reconcile_attempts": 0, "meta_next_check_at": now_ts + 60,
                          "retryable": False, "retry_stage": "meta_processing",
+                         "meta_publish_error": sanitize_error(result.get("error")),
+                         "meta_publish_error_code": result.get("code") or "",
+                         "outcome_unknown": bool(result.get("outcome_unknown")),
                          "error": "Meta is processing; awaiting independent read-only verification. Do not retry."})
             save_posts(posts)
             return post

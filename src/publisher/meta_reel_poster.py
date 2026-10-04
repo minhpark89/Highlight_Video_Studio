@@ -40,9 +40,12 @@ class MetaReelPoster:
                 "fields": "id,status,permalink_url", "access_token": page_token,
             }, timeout=12)
             self._track_headers(token_id or page_token, response)
-            if not response.ok:
-                return {"verified": False}
+            from web.meta_diagnostics import observation
             data = response.json()
+            seen = observation(data, response.status_code)
+            seen["error"] = seen["error"].replace(page_token, "[redacted]")
+            if not response.ok:
+                return {"verified": False, "meta_observation": seen}
             status = data.get("status") or {}
             state = str(status.get("video_status") or "").lower() if isinstance(status, dict) else ""
             # An explicit ready/published state and a real permalink are needed;
@@ -54,10 +57,51 @@ class MetaReelPoster:
                 permalink = "https://www.facebook.com" + permalink
             if (str(data.get("id")) == str(candidate_id) and state in ("ready", "published")
                     and published and permalink.startswith("https://www.facebook.com/reel/")):
-                return {"verified": True, "video_id": str(candidate_id), "fb_url": permalink}
+                return {"verified": True, "video_id": str(candidate_id), "fb_url": permalink, "meta_observation": seen}
+            return {"verified": False, "meta_observation": seen}
         except (requests.RequestException, ValueError, TypeError):
             pass
         return {"verified": False}
+
+    def inspect_reel(self, video_id, page_token, token_id=None):
+        """Read one existing object and expose only diagnostic fields."""
+        from web.meta_diagnostics import observation
+        if not re.fullmatch(r"[0-9]+", str(video_id or "")) or not page_token:
+            return observation({"error": {"message": "Thiếu Meta upload ID hoặc Token gốc."}}, 400)
+        try:
+            response = requests.get(f"{self.base_url}/{video_id}", params={
+                "fields": "id,status,permalink_url", "access_token": page_token,
+            }, timeout=15)
+            self._track_headers(token_id or page_token, response)
+            seen = observation(response.json(), response.status_code)
+            seen["error"] = seen["error"].replace(page_token, "[redacted]")
+            return seen
+        except (requests.RequestException, ValueError, TypeError):
+            return observation({"error": {"message": "Không đọc được trạng thái Meta; hãy kiểm tra lại."}}, 503)
+
+    def finish_existing_reel(self, page_id, page_token, video_id, description, *, schedule_time=None, token_id=None):
+        """Finish an existing upload only; never initialize or transfer another video."""
+        from web.meta_diagnostics import safe_error
+        if not re.fullmatch(r"[0-9]+", str(video_id or "")):
+            return {"accepted": False, "state": "rejected", "error": "Meta upload ID không hợp lệ."}
+        payload = {"upload_phase": "finish", "access_token": page_token, "video_id": str(video_id),
+                   "description": description, "video_state": "PUBLISHED"}
+        if schedule_time is not None:
+            from multi_pc.meta_scheduling import parse_meta_schedule_time
+            payload.update(video_state="SCHEDULED", scheduled_publish_time=parse_meta_schedule_time(schedule_time))
+        try:
+            response = requests.post(f"{self.base_url}/{page_id}/video_reels", data=payload, timeout=35)
+            self._track_headers(token_id or page_token, response)
+            data = response.json()
+            if response.status_code >= 500 or not isinstance(data, dict):
+                return {"accepted": False, "state": "unknown", "error": "Chưa xác nhận phản hồi Finish; tiếp tục đối soát đúng Meta ID."}
+            if not response.ok or data.get("error") or data.get("success") is False:
+                return {"accepted": False, "state": "rejected", "error": safe_error(self._meta_error(data)).replace(page_token, "[redacted]")}
+            if data.get("success") is not True and not any(data.get(key) for key in ("video_id", "reel_id", "post_id")):
+                return {"accepted": False, "state": "unknown", "error": "Meta chưa xác nhận Finish; tiếp tục đối soát đúng Meta ID."}
+            return {"accepted": True, "state": "accepted", "error": ""}
+        except (requests.RequestException, ValueError, TypeError):
+            return {"accepted": False, "state": "unknown", "error": "Phản hồi Finish chưa rõ; không gửi lại tự động."}
 
     def check_scheduled_reel(self, candidate_id, page_token, expected_publish_time=None, token_id=None):
         """Read the Reel object and verify Meta's accepted schedule state."""

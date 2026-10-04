@@ -1167,6 +1167,39 @@ def api_system_info():
         "config": public_config(cfg)
     })
 
+
+@app.route("/api/dashboard/summary", methods=["GET"])
+def api_dashboard_summary():
+    """Return live, non-secret overview data for the home dashboard."""
+    from web.dashboard import overview
+    try:
+        pages = page_manager.list_pages()
+        tokens = token_vault.list_tokens(mask=True)
+        groups = page_manager.list_groups()
+        jobs = load_jobs()
+        data = overview(load_posts(), pages, tokens, groups, jobs)
+        data["mapping_health"] = page_manager.mapping_health()
+        from multi_pc.publishing_settings import load_publishing_settings
+        data.update(load_publishing_settings(POSTS_FILE.parent))
+        data["updated_at"] = datetime.now().astimezone().isoformat()
+        try:
+            from web.scheduled_publisher import worker_status
+            data["scheduler"] = worker_status()
+        except Exception:
+            data["scheduler"] = {"thread_alive": False, "last_cycle_ok": False}
+        data["render"] = {"is_paused": IS_QUEUE_PAUSED, "active": len(ACTIVE_JOB_IDS),
+                           "running": sum(1 for job in jobs if job.get("status") == "running"),
+                           "queued": sum(1 for job in jobs if job.get("status") == "queued")}
+        data["success"] = True
+        return jsonify(data)
+    except Exception as exc:
+        try:
+            from web.scheduled_publisher import sanitize_error
+            message = sanitize_error(exc)
+        except Exception:
+            message = "Không đọc được dữ liệu tổng quan."
+        return jsonify({"success": False, "error": message}), 500
+
 @app.route("/api/settings", methods=["GET", "POST"])
 def api_settings():
     if request.method == "POST":
@@ -2129,6 +2162,29 @@ def api_list_groups():
     groups = [{**g, "token_group_id": linked.get(str(g.get("id")), "")} for g in groups]
     return jsonify({"success": True, "groups": groups})
 
+
+@app.route("/api/folders", methods=["GET"])
+def api_folder_browser():
+    """Browse local directories for the operator's Folder Binding selection."""
+    import string
+    try:
+        folder = Path(str(request.args.get("path") or OUTPUT_DIR).strip().strip('"')).expanduser().resolve()
+        if not folder.is_dir():
+            return jsonify({"success": False, "error": "Thư mục không tồn tại hoặc không truy cập được."}), 400
+        children = []
+        for child in folder.iterdir():
+            try:
+                if child.is_dir():
+                    children.append({"name": child.name, "path": str(child)})
+            except OSError:
+                continue
+        children.sort(key=lambda child: child["name"].casefold())
+        drives = [f"{letter}:\\" for letter in string.ascii_uppercase if Path(f"{letter}:\\").is_dir()] if os.name == "nt" else ["/"]
+        return jsonify({"success": True, "path": str(folder), "parent": str(folder.parent),
+                        "default_path": str(OUTPUT_DIR), "directories": children[:500], "drives": drives})
+    except (OSError, ValueError):
+        return jsonify({"success": False, "error": "Không thể đọc thư mục này; bạn vẫn có thể nhập đường dẫn nguồn."}), 400
+
 @app.route("/api/groups", methods=["POST"])
 def api_save_group():
     data = request.json or {}
@@ -3023,11 +3079,98 @@ def api_scheduler_run_due():
         return jsonify({"success": False, "error": sanitize_error(exc)}), 500
 
 
+def _inspect_post_meta(post):
+    """Resolve the original saved credential rather than a Page's later default."""
+    from web.meta_diagnostics import observation
+    entry = token_vault.get_token_by_id(str(post.get("token_id") or ""))
+    mapping, error = page_manager.resolve_verified_mapping(post.get("page_id"), entry)
+    if error or not mapping:
+        return observation({"error": {"message": "Token gốc hoặc binding Page chưa được xác minh; hãy Sync Page đúng Token."}}, 409), None
+    video_id = post.get("meta_upload_video_id") or post.get("meta_video_id")
+    return reel_poster.inspect_reel(video_id, mapping["page_token"], mapping["token_id"]), mapping
+
+
+@app.route("/api/posts/<post_id>/meta-diagnosis", methods=["GET"])
+def api_post_meta_diagnosis(post_id):
+    from web.meta_diagnostics import diagnose
+    post = next((item for item in load_posts() if item.get("id") == post_id), None)
+    if not post:
+        return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
+    seen, mapping = _inspect_post_meta(post)
+    return jsonify({"success": True, "post_id": post_id, "title": post.get("title"),
+                    "page_name": post.get("page_name"), "observation": seen, "diagnosis": diagnose(post, seen)})
+
+
+@app.route("/api/posts/<post_id>/finish-existing-upload", methods=["POST"])
+def api_finish_existing_upload(post_id):
+    from web.meta_diagnostics import diagnose, safe_error
+    from web.scheduled_publisher import _cycle_lock
+    from multi_pc.publishing_settings import credential_ready
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm_existing_upload") is not True or not body.get("video_id"):
+        return jsonify({"success": False, "error": "Cần xác nhận hoàn tất đúng upload hiện có."}), 400
+    if not _cycle_lock.acquire(blocking=False):
+        return jsonify({"success": False, "error": "Worker đang chạy; hãy kiểm tra lại sau chu kỳ này."}), 409
+    try:
+        posts = load_posts()
+        post = next((item for item in posts if item.get("id") == post_id), None)
+        if not post:
+            return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
+        if str(post.get("meta_upload_video_id") or "") != str(body["video_id"]):
+            return jsonify({"success": False, "error": "Meta upload ID đã khác; hãy kiểm tra lại bài."}), 409
+        seen, mapping = _inspect_post_meta(post)
+        diagnostic = diagnose(post, seen)
+        if not diagnostic["can_finish_existing"] or not mapping:
+            return jsonify({"success": False, "error": diagnostic["message"], "diagnosis": diagnostic}), 409
+        if not credential_ready(token_vault.get_token_by_id(mapping["token_id"])):
+            return jsonify({"success": False, "error": "Token đang cooldown hoặc bị hạn chế; chờ trước khi gửi Finish."}), 409
+        if any(item.get("id") != post_id and item.get("status") in ("publishing", "meta_handoff") and
+               (item.get("token_id") == post.get("token_id") or item.get("page_id") == post.get("page_id")) for item in posts):
+            return jsonify({"success": False, "error": "Token/Page đang có upload khác; hãy chờ hoàn tất."}), 409
+        native = post.get("publish_mode") == "meta_scheduled" or bool(post.get("meta_scheduled_publish_time"))
+        schedule = (post.get("meta_scheduled_publish_time") or post.get("scheduled_time")) if native else None
+        post.update(meta_finish_recovery_attempts=1, meta_finish_recovery_state="requesting",
+                    meta_finish_recovery_started_at=datetime.now().astimezone().isoformat(),
+                    meta_observation=seen, outcome_unknown=True, retryable=False)
+        # Persist the claim before a remote write. A crash leaves a durable fence
+        # that disables a second Finish and every generic re-upload path.
+        try:
+            save_posts(posts)
+        except Exception:
+            return jsonify({"success": False, "error": "Không thể lưu khóa an toàn trước khi gửi Finish; Meta chưa được gọi."}), 500
+        description = post.get("meta_description_snapshot") or f"{post.get('title') or ''}\n\n{post.get('content') or ''}"
+        try:
+            result = reel_poster.finish_existing_reel(post["page_id"], mapping["page_token"], post["meta_upload_video_id"],
+                description, schedule_time=schedule, token_id=mapping["token_id"])
+        except Exception:
+            result = {"accepted": False, "state": "unknown", "error": "Phản hồi Finish chưa rõ; tiếp tục đối soát đúng Meta ID."}
+        post.update(meta_finish_recovery_state=result["state"], meta_finish_recovery_error=safe_error(result.get("error")),
+                    meta_next_check_at=time.time() + 30)
+        post["meta_diagnosis"] = diagnose(post)
+        try:
+            save_posts(posts)
+        except Exception:
+            return jsonify({"success": True, "accepted": False, "state": "unknown", "post_id": post_id,
+                            "video_id": post["meta_upload_video_id"],
+                            "message": "Đã gửi yêu cầu một lần nhưng chưa lưu được phản hồi; giữ nguyên Meta ID và không gửi lại."}), 202
+        return jsonify({"success": True, "accepted": bool(result.get("accepted")), "state": result["state"],
+                        "post_id": post_id, "video_id": post["meta_upload_video_id"],
+                        "message": "Meta đã nhận yêu cầu hoàn tất; chờ xác minh xuất bản." if result.get("accepted") else
+                                   safe_error(result.get("error") or "Meta chưa xác nhận Finish.")})
+    finally:
+        _cycle_lock.release()
+
+
 @app.route("/api/posts", methods=["GET"])
 def api_get_posts():
     from web.meta_handoff import handoff_eligibility
+    from web.dashboard import post_bucket
+    from web.meta_diagnostics import diagnose
     posts = load_posts()
     for post in posts:
+        post["post_bucket"] = post_bucket(post)
+        if post.get("status") == "processing":
+            post["meta_diagnosis"] = diagnose(post)
         post["can_handoff_meta"], post["meta_handoff_blocked_reason"] = handoff_eligibility(post, OUTPUT_DIR)
         media_file = post.get("media_file") or post.get("clip_filename")
         if media_file:
