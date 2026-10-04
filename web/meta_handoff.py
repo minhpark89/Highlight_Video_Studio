@@ -61,10 +61,11 @@ def queue_handoffs(posts, post_ids, output_dir, vault, pages, *, now=None):
     return results
 
 
-def process_next_handoff(posts, save, poster, output_dir, vault, pages, *, now=None):
-    """One durable handoff per existing worker cycle, earliest schedule first."""
+def process_next_handoff(posts, save, poster, output_dir, vault, pages, *, now=None, post_id=None):
+    """Persist one selected handoff before sending any Meta request."""
     current = now or datetime.now()
-    waiting = sorted((post for post in posts if post.get("status") == "meta_handoff"),
+    waiting = sorted((post for post in posts if post.get("status") == "meta_handoff"
+                      and (post_id is None or str(post.get("id")) == str(post_id))),
                      key=lambda post: (str(post.get("scheduled_time") or ""), str(post.get("id"))))
     if not waiting:
         return 0

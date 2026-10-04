@@ -934,6 +934,7 @@
             <div style="font-size:12px;color:#cbd5e1;line-height:1.7;"><b style="color:#fbbf24;">App giữ lịch:</b> chưa gửi video lên Meta; cần để app chạy và máy có mạng khi đến giờ. <b style="color:#38bdf8;">Meta giữ lịch:</b> video tự đăng dù tắt app.</div>
             <div style="font-size:12px;color:#94a3b8;line-height:1.7;">First Comment được app gửi sau khi xác minh video đã đăng: cần app chạy sau giờ đăng. Giao Meta khi còn hơn 10 phút và trong 29 ngày; Website, comment và video phải sẵn sàng.</div>
             <div id="posts-schedule-summary" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;"></div>
+            <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:12px;">Số luồng đăng theo lịch <select data-posting-threads onchange="savePostingThreads(this)" class="form-select form-select-sm" style="width:90px;"><option value="1">1</option><option value="2">2</option><option value="4" selected>4</option><option value="8">8</option></select> Mỗi Token/Page chỉ chạy một bài; giữ giãn cách và cooldown.</label>
             <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px;">
               <label style="color:#cbd5e1;font-size:12px;display:flex;align-items:center;gap:8px;white-space:nowrap;"><input id="posts-select-all" type="checkbox" onchange="selectVisibleMetaPosts(this.checked)"> Chọn bài đủ điều kiện đang hiển thị</label>
               <button id="posts-handoff-selected" class="btn btn-primary btn-sm" onclick="handoffMetaPosts(false)" disabled><i class="bi bi-cloud-arrow-up"></i> Đưa bài đã chọn lên Meta chờ</button>
@@ -1401,7 +1402,7 @@
                 </div>
               </div>
               <div style="display: flex; align-items: center; gap: 6px;">
-                <input type="number" id="loha-token-threads" min="1" max="50" value="10" title="10 lane: khoảng 90 giây giữa các Page và 15 phút trước khi dùng lại cùng token. Đây là gợi ý vận hành, không phải giới hạn Meta công bố." style="width: 55px; background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 5px; border-radius: 6px; font-weight: 700; text-align: center;">
+                <select id="loha-token-threads" data-posting-threads onchange="savePostingThreads(this)" style="background:#0f172a;border:1px solid #334155;color:#f8fafc;padding:5px;border-radius:6px;"><option value="1">1</option><option value="2">2</option><option value="4" selected>4</option><option value="8">8</option></select>
                 <span style="font-size: 11px; color: #94a3b8;">luồng</span>
               </div>
             </div>
@@ -1413,7 +1414,7 @@
                   <i class="bi bi-diagram-3-fill"></i> Số Page Gán Cho 1 Token
                 </div>
                 <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">
-                  Đang gán: <strong id="token-ratio-status" style="color: #38bdf8;">~3-4 Page/Token</strong> (100 Page / 31 Token)
+                  Đang gán: <strong id="token-ratio-status" style="color: #38bdf8;">Đang tải...</strong>
                 </div>
               </div>
               <div style="display: flex; align-items: center; gap: 6px;">
@@ -1491,7 +1492,7 @@
               <button class="btn btn-secondary" onclick="loadTokensAndPages()"><i class="bi bi-arrow-repeat"></i> Làm mới</button>
               <button class="btn btn-primary" onclick="openAddTokenModal()"><i class="bi bi-key-fill"></i> Nạp Token</button>
               <button class="btn btn-primary" style="background: linear-gradient(135deg, #8b5cf6, #ec4899); border:none;" onclick="openAddGroupModal()"><i class="bi bi-folder-plus"></i> Tạo Nhóm Mới</button>
-              <button class="btn btn-secondary" onclick="openManageGroupsModal()"><i class="bi bi-folder-check"></i> Quản lý Nhóm (<span id="btn-group-count">1</span>)</button>
+              <button class="btn btn-secondary" onclick="openManageGroupsModal()"><i class="bi bi-folder-check"></i> Quản lý Nhóm (<span id="btn-group-count">0</span>)</button>
               <button class="btn btn-warning" onclick="openScheduleRulesModal()" style="font-weight: 700; color: #0f172a;"><i class="bi bi-sliders2-vertical"></i> Quy tắc Lên lịch</button>
               <button class="btn btn-success" onclick="openDistributeModal()" style="font-weight: 700;"><i class="bi bi-send-check-fill"></i> 1-Click Phân bổ</button>
             </div>
@@ -3289,8 +3290,14 @@
   }
   window.addEventListener('DOMContentLoaded', checkActive9Router);
   // ================= MODAL & TAB HANDLERS =================
-  function openAddTokenModal() {
+  async function openAddTokenModal() {
     const m = document.getElementById('modal-add-token');
+    try { await loadTokenGroupsPills(); } catch (_) {}
+    const picker = document.getElementById('token-import-group');
+    if (picker) {
+      picker.innerHTML = '<option value="">Chưa phân nhóm</option>' + (cachedTokenGroups || []).map(g => `<option value="${escapeHtml(g.id)}">${escapeHtml(g.name)}</option>`).join('');
+      if (currentSelectedTokenGroupId !== 'all') picker.value = currentSelectedTokenGroupId;
+    }
     if (m) m.style.display = 'flex';
   }
   function closeAddTokenModal() {
@@ -3318,7 +3325,9 @@
       const response = await fetch('/api/tokens', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({tokens_input: tokensInput, name, kind, page_sync_mode: pageSyncMode})
+        body: JSON.stringify({tokens_input: tokensInput, name, kind, page_sync_mode: pageSyncMode,
+          token_group_id: document.getElementById('token-import-group')?.value || '',
+          token_group_name: document.getElementById('token-import-group-name')?.value.trim() || ''})
       });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || 'Không thể lưu token');
@@ -3326,7 +3335,7 @@
       document.getElementById('token-input-str').value = '';
       document.getElementById('token-input-name').value = '';
       closeAddTokenModal();
-      await Promise.all([loadTokensOnly(), loadTokensAndPages()]);
+      await Promise.all([loadTokensOnly(), loadTokensAndPages(), loadTokenGroupsList()]);
       const failed = (data.results || []).filter(item => item.status !== 'ACTIVE');
       const skipped = (data.results || []).filter(item => item.page_sync === 'skipped').length;
       const summary = `Đã lưu ${data.count || 0} token, đồng bộ ${data.synced_pages || 0} Page${skipped ? `; bỏ qua fetch Page trên ${skipped} token còn lại` : ''}.`;
@@ -3467,13 +3476,10 @@
       if (currentPageSearchText && !pName.includes(currentPageSearchText) && !pId.includes(currentPageSearchText)) {
         return false;
       }
-      // Match group (pages store group membership as group_ids[] + group_name)
+      // Match group (pages expose group_ids; the group snapshot is authoritative).
       if (currentPageFilterGroup !== 'all' && currentPageFilterGroup !== '') {
-        const pGroups = Array.from(p.group_ids || []).map(String);
-        const matched = pGroups.includes(String(currentPageFilterGroup))
-          || String(p.group_id || '') === String(currentPageFilterGroup)
-          || String(p.group_name || '') === String(currentPageFilterGroup);
-        if (!matched) return false;
+        const group = cachedGroupsList.find(g => String(g.id) === String(currentPageFilterGroup));
+        if (!group || !(group.page_ids || []).map(String).includes(pId)) return false;
       }
       // Match status
       if (currentPageFilterStatus === 'active' && !p.page_token && !p.has_token) return false;
@@ -3509,7 +3515,9 @@
         const totalPosts = Number(p.published_count || p.total_posted || 0);
         const scheduledPosts = Number(p.scheduled_count || 0) + Number(p.publishing_count || 0);
         const hasToken = !!(p.page_token || p.has_token);
-        const tokenName = p.token_name || 'System User';
+        const scopeId = document.getElementById('page-filter-token-group')?.value || '';
+        const scopeToken = (p.group_token_assignments || {})[scopeId];
+        const tokenName = scopeId ? ((globalTokensCatalog.find(t => String(t.id) === String(scopeToken)) || {}).name || 'Chưa gán Token trong nhóm') : (p.token_name || 'Chưa gán');
         const grpName = p.group_name || 'Chưa nhóm';
         const avatarUrl = p.avatar || `https://graph.facebook.com/${pId}/picture?type=normal`;
 
@@ -3527,7 +3535,7 @@
             <!-- Cột 1: Avatar thật + Tên + ID (1 dòng) -->
             <div style="display: flex; align-items: center; gap: 14px; min-width: 280px; flex: 1.2;">
               <div style="width: 44px; height: 44px; border-radius: 50%; overflow: hidden; background: ${avatarBg}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 2px solid #1e293b;">
-                <img src="${avatarUrl}" alt="${pName}" style="width: 100%; height: 100%; object-fit: cover;" referrerpolicy="no-referrer" onerror="this.onerror=null; this.parentElement.innerHTML='<span style=\'color:#fff; font-weight:800; font-size:14px;\'>${initials}</span>';">
+                <img src="${avatarUrl}" alt="${escapeHtml(pName)}" data-initials="${escapeHtml(initials)}" style="width:100%;height:100%;object-fit:cover;" referrerpolicy="no-referrer" onerror="this.onerror=null;this.parentElement.style.color='#fff';this.parentElement.style.fontWeight='800';this.parentElement.textContent=this.dataset.initials;">
               </div>
               <div style="overflow: hidden;">
                 <div style="font-weight: 700; font-size: 14px; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${pName}">
@@ -3580,7 +3588,9 @@
         const totalPosts = Number(p.published_count || p.total_posted || 0);
         const scheduledPosts = Number(p.scheduled_count || 0) + Number(p.publishing_count || 0);
         const hasToken = !!(p.page_token || p.has_token);
-        const tokenName = p.token_name || 'System User';
+        const scopeId = document.getElementById('page-filter-token-group')?.value || '';
+        const scopeToken = (p.group_token_assignments || {})[scopeId];
+        const tokenName = scopeId ? ((globalTokensCatalog.find(t => String(t.id) === String(scopeToken)) || {}).name || 'Chưa gán Token trong nhóm') : (p.token_name || 'Chưa gán');
         const grpName = p.group_name || 'Chưa nhóm';
 
         return `
@@ -3760,10 +3770,11 @@
     }
   }
 
-  function openManageGroupsModal() {
+  async function openManageGroupsModal() {
     const m = document.getElementById('modal-manage-groups');
     if (!m) return;
     m.style.display = 'flex';
+    await loadTokensAndPages();
     renderGroupsInManageModal();
   }
 
@@ -3842,10 +3853,11 @@
   async function openTokenGroupModal() {
     const m = document.getElementById('modal-token-group');
     if (!m) return;
+    await loadTokensOnly();
     document.getElementById('tgrp-input-name').value = '';
     const sourceSelect = document.getElementById('tgrp-page-source-token');
     if (sourceSelect) {
-      sourceSelect.innerHTML = '<option value="">Không binding Page set</option>' + (globalTokensCatalog || []).map(t =>
+      sourceSelect.innerHTML = '<option value="">Tất cả Page đã xác minh trong nhóm</option>' + (globalTokensCatalog || []).map(t =>
         `<option value="${t.id}">${t.name} · ${t.pages_count || 0} Page đã sync</option>`
       ).join('');
     }
@@ -3865,7 +3877,7 @@
     }
 
     m.style.display = 'flex';
-    loadTokenGroupsList();
+    await loadTokenGroupsList();
   }
 
   function closeTokenGroupModal() {
@@ -3897,26 +3909,25 @@
         listCont.innerHTML = cachedTokenGroups.map(g => `
           <div style="background: #0b1329; border: 1px solid #1e293b; border-radius: 8px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px;">
             <div>
-              <div style="font-weight: 700; font-size: 13px; color: #f59e0b;">${g.name}</div>
+              <div style="font-weight: 700; font-size: 13px; color: #f59e0b;">${escapeHtml(g.name)}</div>
               <div style="font-size: 11px; color: #64748b; margin-top: 2px;">
                 <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">${(g.token_ids||[]).length} Token</span>
-                <span class="badge" style="background: rgba(16,185,129,0.12); color: #34d399;">${(g.page_ids||[]).length} Page binding</span>
+                <span class="badge" style="background: rgba(16,185,129,0.12); color: #34d399;">${(g.page_ids||[]).length} Page snapshot</span>
                 <span style="margin-left: 6px;">Chiến lược: <strong>${g.strategy || 'least_recently_used'}</strong></span>
               </div>
               <div style="font-size: 10.5px; color: #64748b; margin-top: 4px;">
                 ${g.page_source_token_id
                   ? `Ảnh chụp (snapshot) Page set từ token nguồn · ${escapeHtml(groupSourceLabel(g))}${g.pages_synced_at ? ' · lúc ' + escapeHtml(g.pages_synced_at) : ''}`
-                  : 'Chưa binding Page set (không giữ Page nào)'}
+                  : 'Page snapshot từ các Token đã Sync trong nhóm'}
               </div>
               <div style="font-size:10.5px;color:${g.health?.rebind_required ? '#fbbf24' : '#94a3b8'};margin-top:4px;">
                 Pages bound ${g.health?.pages_bound ?? (g.page_ids || []).length} · Vault ${g.health?.vault_present ?? (g.token_ids || []).length}/${g.health?.vault_total ?? (g.token_ids || []).length} · scheduled ${g.health?.scheduled_posts ?? 0} · processing ${g.health?.processing_posts ?? 0}${g.health?.rebind_required ? ' · Rebind required' : ''}
               </div>
             </div>
-            <div style="display: flex; gap: 6px;">
-              ${g.page_source_token_id ? `<button class="btn btn-secondary btn-sm" onclick="rebindTokenGroupPages('${g.id}', '${g.name}')" style="font-size: 11px; padding: 3px 8px;" title="Cập nhật Page set từ cache, không gọi Graph API">
-                <i class="bi bi-arrow-repeat"></i> Cập nhật Page set
-              </button>` : ''}
-              <button class="btn btn-secondary btn-sm text-danger" onclick="deleteTokenGroup('${g.id}', '${g.name}')" style="font-size: 11px; padding: 3px 8px;">
+            <div style="display: flex; gap: 6px; flex-wrap:wrap;">
+              <button class="btn btn-secondary btn-sm" data-group-id="${escapeHtml(g.id)}" data-group-name="${escapeHtml(g.name)}" onclick="rebindTokenGroupPages(this.dataset.groupId, this.dataset.groupName)" style="font-size:11px;padding:3px 8px;"><i class="bi bi-arrow-repeat"></i> Cập nhật Page set · Sync Page</button>
+              <button class="btn btn-secondary btn-sm" data-group-id="${escapeHtml(g.id)}" onclick="allocateTokenGroupById(this.dataset.groupId)" style="font-size:11px;padding:3px 8px;">Gán Token cho Page</button>
+              <button class="btn btn-secondary btn-sm text-danger" data-group-id="${escapeHtml(g.id)}" onclick="deleteTokenGroupById(this.dataset.groupId)" style="font-size: 11px; padding: 3px 8px;">
                 <i class="bi bi-trash"></i> Xóa
               </button>
             </div>
@@ -3936,6 +3947,18 @@
     return `token nguồn: ${name}`;
   }
 
+  function syncTokenGroupById(gid) {
+    const group = cachedTokenGroups.find(g => String(g.id) === String(gid));
+    if (group) rebindTokenGroupPages(group.id, group.name);
+  }
+
+  async function allocateTokenGroupById(gid) {
+    await loadTokenAllocationGroups();
+    document.getElementById('token-allocation-group').value = gid;
+    await rebalanceTokenPageAllocation();
+    await loadTokenGroupsList();
+  }
+
   async function rebindTokenGroupPages(gid, gname) {
     try {
       const syncRes = await fetch('/api/token-groups/' + encodeURIComponent(gid) + '/sync-pages', { method: 'POST' });
@@ -3944,11 +3967,16 @@
         alert('Sync Page thất bại: ' + (syncData.error || 'Server error'));
         return;
       }
-      const res = await fetch('/api/token-groups/' + encodeURIComponent(gid) + '/rebind-pages', { method: 'POST' });
-      const data = await res.json();
-      if (res.ok && data.success) {
+      let data = syncData;
+      const group = cachedTokenGroups.find(g => String(g.id) === String(gid));
+      if (group?.page_source_token_id) {
+        const res = await fetch('/api/token-groups/' + encodeURIComponent(gid) + '/rebind-pages', { method: 'POST' });
+        data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || 'Không cập nhật được Page snapshot');
+      }
+      if (data.success) {
         showToast(`Đã cập nhật Page set cho nhóm '${gname}': ${data.page_ids.length} Page`);
-        await Promise.all([loadTokenGroupsList(), loadTokensAndPages()]);
+        await Promise.all([loadTokenGroupsList(), loadTokenGroupsPills(), loadTokensOnly(), loadTokensAndPages()]);
       } else {
         alert('Không cập nhật được Page set: ' + (data.error || 'Server error'));
       }
@@ -3969,6 +3997,7 @@
     }
     const tokenIds = [];
     document.querySelectorAll('.tgrp-token-check:checked').forEach(c => tokenIds.push(c.value));
+    if (pageSourceTokenId && !tokenIds.includes(pageSourceTokenId)) tokenIds.push(pageSourceTokenId);
     if (tokenIds.length === 0) {
       alert('Vui lòng chọn ít nhất 1 Token vào nhóm!');
       return;
@@ -3978,13 +4007,14 @@
       const res = await fetch('/api/token-groups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, strategy, token_ids: tokenIds, page_source_token_id: pageSourceTokenId, sync_pages: false })
+        body: JSON.stringify({ name, strategy, token_ids: tokenIds, page_source_token_id: pageSourceTokenId,
+          sync_pages: true, create_page_group: document.getElementById('tgrp-create-page-group')?.checked === true })
       });
       const data = await res.json();
       if (res.ok && data.success) {
         showToast(`Đã tạo thành công Nhóm Token '${name}'!`);
         document.getElementById('tgrp-input-name').value = '';
-        await loadTokenGroupsList();
+        await Promise.all([loadTokenGroupsList(), loadTokenGroupsPills(), loadTokensOnly(), loadTokensAndPages()]);
       } else {
         alert('Lỗi: ' + (data.error || 'Server error'));
       }
@@ -4001,7 +4031,7 @@
       if (res.ok && d.success) {
         showToast('Đã xóa nhóm token thành công!');
         currentSelectedTokenGroupId = 'all';
-        await Promise.all([loadTokenGroupsList(), loadTokenGroupsPills(), loadTokensOnly()]);
+        await Promise.all([loadTokenGroupsList(), loadTokenGroupsPills(), loadTokensOnly(), loadTokensAndPages()]);
       } else {
         alert('Không thể xóa nhóm token: ' + (d.error || 'Server error'));
       }
@@ -4060,6 +4090,33 @@
   function filterTokensByGroup(groupId) {
     currentSelectedTokenGroupId = groupId;
     loadTokensOnly();
+  }
+
+  async function loadPostingThreads() {
+    const selects = document.querySelectorAll('[data-posting-threads]');
+    if (!selects.length) return;
+    try {
+      const response = await fetch('/api/publishing/settings');
+      const data = await response.json();
+      if (response.ok && data.success) selects.forEach(select => { select.value = String(data.posting_threads); });
+    } catch (error) { console.warn('Không tải được số luồng đăng:', error); }
+  }
+
+  async function savePostingThreads(select) {
+    const value = Number(select?.value || 4);
+    try {
+      const response = await fetch('/api/publishing/settings', {
+        method: 'PUT', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({posting_threads: value})
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Không lưu được số luồng');
+      document.querySelectorAll('[data-posting-threads]').forEach(element => { element.value = String(data.posting_threads); });
+      showToast(`Đã lưu ${data.posting_threads} luồng đăng. Mỗi Token/Page chỉ chạy một bài.`);
+    } catch (error) {
+      alert(error.message);
+      await loadPostingThreads();
+    }
   }
 
 
@@ -4199,7 +4256,7 @@
             <td style="padding: 12px 16px;">
               ${(tokenGroupMap[t.id] || []).length > 0
                 ? tokenGroupMap[t.id].map(gn => `<span style="background: rgba(236,72,153,0.15); color: #f472b6; border: 1px solid rgba(236,72,153,0.3); padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; margin-right: 4px;"><i class="bi bi-diagram-3-fill"></i> ${gn}</span>`).join('')
-                : '<span style="color: #64748b; font-size: 11px;">(Mặc định)</span>'
+                : '<span style="color: #64748b; font-size: 11px;">Chưa phân nhóm</span>'
               }
             </td>
             <td style="padding: 12px 16px;">${statusBadge}</td>
@@ -4353,13 +4410,17 @@
       // Populate filter dropdown
       const filterGrp = document.getElementById('page-filter-group');
       if (filterGrp) {
+        const previousGroupId = filterGrp.value;
         filterGrp.innerHTML = '<option value="all">Tất cả nhóm</option>' + groups.map(g => `
           <option value="${g.id || g.name}">${g.name} (${(g.page_ids||[]).length})</option>
         `).join('');
+        filterGrp.value = groups.some(g => String(g.id) === previousGroupId) ? previousGroupId : 'all';
+        currentPageFilterGroup = filterGrp.value;
       }
 
       // Render cards
       renderFilteredPages();
+      loadPostingThreads();
     } catch (e) {
       console.error('Lỗi nạp tokens and pages:', e);
     }
@@ -4446,7 +4507,7 @@
     const groupId = document.getElementById('modal-dist-group')?.value;
     const startTime = document.getElementById('modal-dist-starttime')?.value;
       const stagger = parseInt(document.getElementById('modal-dist-stagger')?.value) || 15;
-    const postingThreads = parseInt(document.getElementById('loha-token-threads')?.value) || 10;
+    const postingThreads = parseInt(document.getElementById('loha-token-threads')?.value) || 4;
     const btn = document.getElementById('btn-submit-distribute');
 
     if (!groupId) {
@@ -4469,6 +4530,7 @@
           start_time: startTime,
           stagger_minutes: stagger,
           posting_threads: postingThreads,
+          publish_mode: document.getElementById('modal-dist-mode-meta')?.checked ? 'meta_scheduled' : 'app_queue',
           auto_first_comment: true,
           delete_after_schedule: false
         })
@@ -5079,7 +5141,7 @@
     const mode = document.querySelector('input[name="pub_mode"]:checked')?.value;
     const scheduleDt = document.getElementById('pub-schedule-datetime').value;
     const stagger = parseInt(document.getElementById('pub-schedule-stagger').value || '15', 10);
-    const postingThreads = parseInt(document.getElementById('loha-token-threads')?.value || '10', 10);
+    const postingThreads = parseInt(document.getElementById('loha-token-threads')?.value || '4', 10);
     const selectedTokenPages = Array.from(document.querySelectorAll('.pub-token-group-page:checked')).map(checkbox => checkbox.value);
     if (!groupId && !singlePageId && !selectedTokenPages.length) {
       alert('Vui lòng chọn ít nhất 1 Fanpage hoặc 1 Nhóm Trang để xuất bản!');
@@ -6126,6 +6188,9 @@
           statusBadge = `<span style="background:rgba(56,189,248,0.15);color:#38bdf8;border:1px solid #0ea5e9;padding:3px 8px;border-radius:6px;font-size:11px;">Meta giữ lịch · chờ đăng</span><div style="color:#94a3b8;font-size:11px;margin-top:5px;">Video tự đăng dù tắt app</div>`;
         } else if (p.status === 'meta_handoff') {
           statusBadge = '<span style="color:#38bdf8;font-size:12px;"><i class="bi bi-cloud-arrow-up"></i> Chờ gửi lên Meta</span><div style="color:#94a3b8;font-size:11px;">Để app chạy đến khi Meta nhận lịch</div>';
+        } else if (p.status === 'scheduled' && p.requested_publish_mode === 'meta_scheduled') {
+          statusBadge = '<span style="color:#38bdf8;font-size:12px;">Chuẩn bị giao lịch cho Meta</span><div style="color:#94a3b8;font-size:11px;">Để app chạy đến khi Website/comment sẵn sàng và Meta nhận lịch</div>';
+          if (p.meta_handoff_error) statusBadge += `<div style="color:#fbbf24;font-size:11px;">${escapeHtml(p.meta_handoff_error)}</div>`;
         } else if (p.status === 'processing') {
           const uploading = p.publish_mode === 'meta_scheduled' && ['upload_started','upload_initialized'].includes(p.meta_schedule_status);
           statusBadge = `<span style="background:rgba(245,158,11,0.15);color:#fbbf24;border:1px solid #b45309;padding:3px 8px;border-radius:6px;font-size:11px;" title="${escapeHtml(p.error || '')}">${uploading ? 'Đang gửi video lên Meta' : 'Chờ xác minh bài trên Meta'}</span><div style="color:#fbbf24;font-size:11px;white-space:normal;max-width:220px;">${uploading ? 'Để app chạy đến khi Meta nhận lịch' : escapeHtml(p.meta_reconcile_error || p.error || '')}</div>`;
@@ -7039,17 +7104,23 @@
           <select id="modal-dist-group" class="form-select form-select-sm" style="background: #0b1329; border-color: #23304d;"></select>
           <label style="font-size: 12px; color: #94a3b8;">Nhóm Token đăng (tuỳ chọn):</label>
           <select id="modal-dist-token-group" class="form-select form-select-sm" style="background: #0b1329; border-color: #23304d;"><option value="">Dùng mapping hiện tại</option></select>
+          <label style="font-size:12px;color:#94a3b8;">Số luồng đăng:</label><select data-posting-threads onchange="savePostingThreads(this)" class="form-select form-select-sm"><option value="1">1</option><option value="2">2</option><option value="4" selected>4</option><option value="8">8</option></select>
         </div>
         <div style="margin-bottom: 16px;">
           <label style="font-size: 12px; font-weight: 700; color: #94a3b8;">2. Thời gian bắt đầu lên lịch:</label>
           <input type="datetime-local" id="modal-dist-starttime" class="form-control form-control-sm" style="background: #0b1329; border-color: #23304d;">
+          <div style="margin-top:10px;padding:10px;background:#0f172a;border:1px solid #334155;border-radius:8px;font-size:12px;">
+            <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;"><input style="width:auto;margin:0;" type="radio" name="modal-dist-mode" value="app_queue" checked> App giữ lịch — cần mở app</label>
+            <label style="display:flex;align-items:center;gap:8px;"><input style="width:auto;margin:0;" id="modal-dist-mode-meta" type="radio" name="modal-dist-mode" value="meta_scheduled"> Giao lịch cho Meta — Meta tự đăng</label>
+            <div style="color:#94a3b8;margin-top:8px;">Meta: giữ app mở đến khi tạo xong Website/comment và Meta nhận lịch. Giờ đăng phải còn hơn 10 phút, trong 29 ngày. First Comment vẫn cần app chạy sau giờ đăng.</div>
+          </div>
         </div>
         <div style="margin-bottom: 16px;">
           <label style="font-size: 12px; font-weight: 700; color: #94a3b8;">3. Giãn cách giữa các Page:</label>
           <select id="modal-dist-stagger" class="form-select form-select-sm" style="background: #0b1329; border-color: #23304d;">
             <option value="5">Giãn cách 5 phút</option>
             <option value="10">Giãn cách 10 phút</option>
-            <option value="15" selected>Cửa sổ 15 phút / token (10 lane ≈ 90 giây/Page)</option>
+            <option value="15" selected>Giãn cách 15 phút trước khi dùng lại cùng Token</option>
             <option value="20">Giãn cách 20 phút</option>
           </select>
         </div>
@@ -7190,24 +7261,25 @@
             </select>
           </div>
           <div style="margin-bottom:12px;">
-            <label class="form-label" style="font-size:12px;font-weight:600;color:#cbd5e1;">Dùng lại Page set đã sync từ:</label>
-            <select id="tgrp-page-source-token" class="form-select form-select-sm" style="background:#0b1329;border-color:#334155;"><option value="">Không binding Page set</option></select>
-            <div style="font-size:11px;color:#64748b;margin-top:4px;">Chỉ lưu binding tới Page hiện có; không gọi Graph API lại cho các token trong nhóm.</div>
+            <label class="form-label" style="font-size:12px;font-weight:600;color:#cbd5e1;">Token nguồn cho Page snapshot:</label>
+            <select id="tgrp-page-source-token" class="form-select form-select-sm" style="background:#0b1329;border-color:#334155;"><option value="">Tất cả Page đã xác minh trong nhóm</option></select>
+            <div style="font-size:11px;color:#64748b;margin-top:4px;">Khi lưu, Sync Page riêng từng Token để xác minh quyền; Token nguồn xác định danh sách Page của nhóm.</div>
             <div style="font-size:11px;color:#f59e0b;margin-top:4px;">
               <i class="bi bi-info-circle"></i>
-              Đây là <b>snapshot</b> Page tại thời điểm lưu. Sau khi Sync Page cho token nguồn, bấm
-              <b>Cập nhật Page set</b> ở danh sách bên dưới để bind lại (vẫn không gọi Graph API).
+              Đây là <b>snapshot</b> Page tại thời điểm lưu. Bấm <b>Cập nhật Page set</b> để Sync lại;
+              sau đó <b>Gán Token cho Page</b> để mỗi Page dùng một Token đã xác minh trong nhóm.
             </div>
           </div>
           <div style="margin-bottom: 14px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
               <label class="form-label" style="font-size: 12px; font-weight: 600; color: #cbd5e1; margin-bottom:0;">Chọn các Token thuộc nhóm:</label>
-              <button type="button" class="btn btn-link btn-sm" style="padding:0; font-size:11px; color:#38bdf8;" onclick="toggleAllTokenGroupChecks()">Chọn tất cả 31 Token</button>
+              <button type="button" class="btn btn-link btn-sm" style="padding:0; font-size:11px; color:#38bdf8;" onclick="toggleAllTokenGroupChecks()">Chọn / bỏ tất cả Token</button>
             </div>
             <div id="tgrp-tokens-select-box" style="max-height: 180px; overflow-y: auto; background: #0b1329; border: 1px solid #23304d; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 6px;">
-              <!-- Render checkbox 31 tokens -->
+              <!-- Render current Token Vault -->
             </div>
           </div>
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:12px;"><input id="tgrp-create-page-group" style="width:auto;margin:0;flex-shrink:0;" type="checkbox" checked> Tạo nhóm Page liên kết để chọn khi đăng bài</label>
           <button type="button" class="btn btn-warning btn-sm" style="font-weight: 700; color: #0f172a; width: 100%;" onclick="submitCreateTokenGroup()">
             <i class="bi bi-save2"></i> Lưu Nhóm Token Mới
           </button>
@@ -7381,6 +7453,8 @@
         <label>Nhóm token</label><select id="pub-select-token-group" class="form-control"><option value="">-- Tất cả mapping hiện tại --</option></select>
         <div id="pub-token-group-pages" style="display:none;"><button type="button" onclick="setPubTokenGroupPages(true)">Chọn tất cả trong nhóm</button><button type="button" onclick="setPubTokenGroupPages(false)">Bỏ tất cả</button><div id="pub-token-group-page-list"></div></div>
         <div id="pub-pages-target-summary"></div>
+        <label>Số luồng đăng theo lịch</label><select data-posting-threads onchange="savePostingThreads(this)" class="form-control"><option value="1">1 luồng</option><option value="2">2 luồng</option><option value="4" selected>4 luồng</option><option value="8">8 luồng</option></select>
+        <small>Mỗi Token/Page chỉ chạy một bài. Giãn cách và cooldown Token vẫn được giữ.</small>
         <label>Caption</label><textarea id="pub-caption" class="form-control" rows="4"></textarea>
         <label>First comment</label><textarea id="pub-first-comment" class="form-control" rows="3"></textarea>
         <label>Link bài Website cho First Comment</label><input id="pub-article-url" class="form-control" type="url" placeholder="https://.../blog/bai-viet"><small>Đăng ngay cần link bài viết. Khi lên lịch, ứng dụng có thể tự tạo bài và comment.</small>
@@ -7393,6 +7467,11 @@
             <label style="display:flex;gap:8px;align-items:flex-start;"><input name="pub-delivery-mode" type="radio" checked> <span><b>App giữ lịch</b> — cần app chạy khi đến giờ. Có thể đưa lên Meta sau ở Quản lý Bài Đăng.</span></label>
             <label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;"><input id="pub-mode-meta" name="pub-delivery-mode" type="radio"> <span><b>Đưa lên Meta chờ ngay</b> — video tự đăng dù tắt app sau khi Meta nhận lịch. Cần hơn 10 phút, trong 29 ngày, Website và comment đã sẵn sàng.</span></label>
             <div style="color:#fbbf24;margin-top:8px;">First Comment vẫn cần app chạy sau giờ đăng.</div>
+          </div>
+          <div>
+            <label class="form-label" style="font-size:12px;font-weight:600;color:#94a3b8;">Nhóm Token khi import:</label>
+            <select id="token-import-group" class="form-control"><option value="">Chưa phân nhóm</option></select>
+            <input id="token-import-group-name" class="form-control" style="margin-top:6px;" placeholder="Hoặc nhập tên nhóm mới (tuỳ chọn)">
           </div>
         </div>
         <label>First Comment profile</label><select id="pub-first-comment-profile" class="form-control"><option value="">General</option></select>

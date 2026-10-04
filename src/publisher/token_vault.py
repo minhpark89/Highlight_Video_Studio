@@ -4,9 +4,20 @@ import base64
 import time
 import requests
 import uuid
+import threading
+from functools import wraps
 from pathlib import Path
 from datetime import datetime
 from multi_pc.json_io import replace_with_retry
+
+_VAULT_LOCK = threading.RLock()
+
+def vault_transaction(function):
+    @wraps(function)
+    def locked(*args, **kwargs):
+        with _VAULT_LOCK:
+            return function(*args, **kwargs)
+    return locked
 
 class TokenVault:
     def __init__(self, data_dir=r"D:\Highlight_Video_Studio"):
@@ -30,6 +41,7 @@ class TokenVault:
         finally:
             tmp.unlink(missing_ok=True)
 
+    @vault_transaction
     def list_tokens(self, mask=True):
         if not self.vault_file.exists():
             return []
@@ -88,6 +100,7 @@ class TokenVault:
             pass
         return None
 
+    @vault_transaction
     def add_token(self, name, token_str, kind="SYS", note="", discover_pages=True):
         """Store one token; optionally avoid the expensive /me/accounts discovery call."""
         token_str = token_str.strip()
@@ -140,6 +153,7 @@ class TokenVault:
         self._save(tokens)
         return entry, status_info.get("pages", [])
 
+    @vault_transaction
     def delete_token(self, token_id):
         if not self.vault_file.exists():
             return False
@@ -155,6 +169,7 @@ class TokenVault:
         except Exception:
             return False
 
+    @vault_transaction
     def delete_tokens(self, token_ids):
         """Remove a validated set in one vault write; return the IDs removed."""
         with open(self.vault_file, "r", encoding="utf-8") as f:
@@ -264,6 +279,7 @@ class TokenVault:
                 "owner_name": owner_name,
             }
 
+    @vault_transaction
     def record_page_sync(self, token_id, pages):
         """Persist Page discovery metadata without changing identity-valid token status."""
         tokens = self.list_tokens(mask=False)
@@ -275,6 +291,7 @@ class TokenVault:
         self._save(tokens)
         return entry
 
+    @vault_transaction
     def refresh_token_pages(self, token_id):
         """Explicitly re-run full Page discovery for one stored token."""
         tokens = self.list_tokens(mask=False)
@@ -290,6 +307,7 @@ class TokenVault:
         self._save(tokens)
         return entry, status_info.get("pages", [])
 
+    @vault_transaction
     def record_usage(self, token_id_or_token, response_headers=None):
         """Ghi nhận lượt gọi API và phân tích Header Rate Limit (X-App-Usage) của Meta"""
         if not self.vault_file.exists():

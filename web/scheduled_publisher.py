@@ -24,6 +24,8 @@ SCHEDULER_HEARTBEAT_FILE = BASE_DIR / "data" / "scheduler_heartbeat.json"
 _FILE_LOCK = threading.Lock()
 _cycle_lock = threading.Lock()
 CYCLE_INTERVAL_SECONDS = 20
+_active_posts = set()
+_active_posts_lock = threading.Lock()
 CLAIM_STALE_AFTER_SECONDS = 300
 OVERDUE_GRACE_SECONDS = 120
 
@@ -82,6 +84,8 @@ def worker_status():
     snapshot["thread_alive"] = bool(_worker_thread and _worker_thread.is_alive())
     snapshot["waiting_for_lease"] = _worker_waiting_for_lease
     snapshot["cycle_active"] = _cycle_lock.locked()
+    with _active_posts_lock:
+        snapshot["active_posts"] = len(_active_posts)
     return snapshot
 
 
@@ -346,7 +350,12 @@ def _process_scheduled_posts_once(
         claimed_at = _parse_scheduled_time(post.get("claimed_at"))
         if claimed_at is not None and (now_ts - claimed_at.timestamp()) < CLAIM_STALE_AFTER_SECONDS:
             continue
-        if post.get("publish_started_at"):
+        if post.get("meta_upload_video_id"):
+            post.update({"status": "processing", "retryable": False,
+                         "retry_stage": "meta_processing", "outcome_unknown": True,
+                         "meta_next_check_at": now_ts,
+                         "error": "Upload đã có ID; đang đối soát Meta trước khi tiếp tục."})
+        elif post.get("publish_started_at"):
             post.update({
                 "status": "failed",
                 "retryable": False,
@@ -364,7 +373,54 @@ def _process_scheduled_posts_once(
             })
         recovered += 1
 
-    selected_due = next_paced_due_post(posts, current_dt, global_seconds=0, token_seconds=900)
+    from multi_pc.publishing_settings import load_publishing_settings, credential_ready
+    # Only schedules explicitly created in Meta mode request a handoff when
+    # their Website and comment become ready. Existing app schedules stay put.
+    from web.meta_handoff import handoff_eligibility, queue_handoffs
+    for pending in posts:
+        if pending.get("status") != "scheduled" or pending.get("requested_publish_mode") != "meta_scheduled":
+            continue
+        from multi_pc.meta_scheduling import parse_meta_schedule_time, MetaScheduleTimeError
+        try:
+            parse_meta_schedule_time(pending.get("scheduled_time"), now_ts=now_ts)
+        except MetaScheduleTimeError as exc:
+            pending.update({"status": "failed", "retryable": False,
+                            "retry_stage": "meta_schedule_not_ready", "meta_schedule_status": "handoff_blocked",
+                            "error": "Chưa giao được lịch cho Meta trong cửa sổ cho phép. Chọn giờ mới hoặc chế độ App giữ lịch. " + str(exc)})
+            continue
+        ok, reason = handoff_eligibility(pending, OUTPUT_DIR, now_ts=now_ts)
+        if ok:
+            result = queue_handoffs(posts, [str(pending["id"])], OUTPUT_DIR, token_vault, page_manager, now=current_dt)
+            if result and not result[0].get("accepted"):
+                pending["meta_handoff_error"] = result[0].get("reason", "")
+        else:
+            pending["meta_handoff_error"] = reason
+    save_posts(posts)
+    posting_threads = load_publishing_settings(POSTS_FILE.parent)["posting_threads"]
+    selected_due = []
+    def token_key(post):
+        return str(post.get("token_id") or f"page:{post.get('page_id')}")
+    reserved_tokens = {token_key(p) for p in posts if p.get("status") in ("publishing", "processing")}
+    reserved_pages = {str(p.get("page_id")) for p in posts if p.get("status") in ("publishing", "processing")}
+    candidates = list(posts)
+    rate_blocked = 0
+    for _ in range(len(posts)):
+        if len(selected_due) >= posting_threads:
+            break
+        eligible = [p for p in candidates if token_key(p) not in reserved_tokens and str(p.get("page_id")) not in reserved_pages]
+        due = next_paced_due_post(eligible, current_dt, global_seconds=0, token_seconds=900)
+        if due is None:
+            break
+        token_id = str(due.get("token_id") or "")
+        entry = token_vault.get_token_by_id(token_id) if token_id else None
+        if entry and not credential_ready(entry):
+            reserved_tokens.add(token_id)
+            due["schedule_error"] = "Token đang cooldown hoặc Meta usage cao; app chờ quota, giữ nguyên token."
+            rate_blocked += 1
+            continue
+        selected_due.append(due)
+        reserved_tokens.add(token_key(due))
+        reserved_pages.add(str(due.get("page_id")))
     claimed_posts = []
     for post in posts:
         if post.get("status") != "scheduled":
@@ -378,203 +434,36 @@ def _process_scheduled_posts_once(
         if scheduled_dt is None:
             post["schedule_error"] = "Thời gian lên lịch không hợp lệ"
             continue
-        if scheduled_dt <= current_dt and post is selected_due:
+        if scheduled_dt <= current_dt and any(post is selected for selected in selected_due):
             post["status"] = "publishing"
             post["claimed_at"] = current_dt.strftime("%Y-%m-%d %H:%M:%S")
             claimed_posts.append(post)
 
-    if claimed_posts or recovered:
+    if claimed_posts or recovered or rate_blocked:
         save_posts(posts)
 
-    for post in claimed_posts:
-        post_id = post.get("id")
-        page_id = post.get("page_id")
-        clip_filename = post.get("media_file") or post.get("clip_filename")
-        page_token = post.get("token")
-        title = post.get("title", "")
-        content = post.get("content", "")
-        first_comment = str(post.get("first_comment") or "").strip()
-        article_url = str(post.get("article_url") or "").strip()
-        if article_url and article_url not in first_comment:
-            first_comment = f"{first_comment}\n{article_url}".strip()
-            post["first_comment"] = first_comment
-        video_error = "Video file unavailable at publish time"
-        try:
-            video_path = scheduled_video_path(OUTPUT_DIR, clip_filename)
-        except (ValueError, FileNotFoundError, OSError) as exc:
-            video_path = None
-            video_error = sanitize_error(exc)
-
-        # Re-check the immutable Page/token binding at due time. The queue may
-        # survive a token refresh/restart; never publish with a stale or generic
-        # credential that was not verified for this exact page_id.
-        page_record = next(
-            (page for page in page_manager.list_pages() if str(page.get("page_id")) == str(page_id)),
-            None,
-        )
-        # Legacy queue records may predate discovery-backed mappings. Preserve
-        # their already-persisted page token for migration compatibility; new
-        # schedules always have a token_id and must pass current preflight.
-        # New queue records carry token_id and must pass current verified
-        # Page/token preflight. Legacy records only carry their persisted exact
-        # page token; preserve that compatibility for offline recovery and old
-        # queues instead of letting an unrelated cached Page record block them.
-        try:
-            if post.get("token_id"):
-                # Revalidate the exact token selected when the post was queued;
-                # a later auto-rebalance must not silently switch credentials.
-                bound_page = dict(page_record or {})
-                bound_page["token_id"] = str(post.get("token_id") or "")
-                verdict = preflight_pages([bound_page], token_vault, page_manager) if page_record else {"ok": False, "blocked": {"code": "missing_page", "stage": "mapping", "action": "Sync Page before publishing."}}
-                blocked = verdict.get("blocked") or {}
-                verified = verdict["ready"][0] if verdict.get("ok") else None
-            else:
-                blocked = {}
-                verified = {"token": page_token, "token_id": post.get("token_id", "")} if page_token else None
-        except Exception as exc:
-            post.update({"status": "failed", "retryable": True,
-                         "retry_stage": "meta_preflight",
-                         "error": sanitize_error(exc)})
-            save_posts(posts)
-            continue
-        if verified is None:
-            post.update({
-                "status": "failed",
-                "retryable": True,
-                "retry_stage": "meta_preflight",
-                "error": blocked.get("action") or "Page credential mapping is not verified; Sync Page before publishing.",
-                "meta_preflight": {
-                    "stage": blocked.get("stage"),
-                    "code": blocked.get("code"),
-                    "action": blocked.get("action"),
-                    "reconnect_required": True,
-                },
-            })
-            continue
-        post["token"] = verified["token"]
-        post["token_id"] = verified["token_id"]
-        page_token = verified["token"]
-
-        if not video_path or not video_path.exists():
-            post.update({
-                "status": "failed",
-                "error": video_error,
-                "retryable": True,
-                "retry_stage": "local_video",
-            })
-            continue
-
-        if post.get("auto_first_comment") or post.get("type") == "reel":
-            url = str(post.get("article_url") or "").strip()
-            comment = str(post.get("first_comment") or "").strip()
-            website_ready = post.get("website_status") in (None, "", "ready")
-            if not (url and website_ready and url in comment):
-                post["status"] = "failed" if post.get("website_status") == "failed" else "scheduled"
-                post["retryable"] = post["status"] == "failed"
-                post["retry_stage"] = "website_content"
-                post["schedule_error"] = "Đang chờ bài Website và First Comment chứa link; chưa gửi Reel lên Meta."
-                post.pop("claimed_at", None)
-                continue
-            post.pop("schedule_error", None)
-
-        # Website creation belongs to schedule confirmation. Due-time publishing
-        # only consumes persisted article_url/first_comment and must never create
-        # a duplicate CMS article. A prior CMS failure does not cancel Facebook.
-        if first_comment:
-            post["first_comment_status"] = "ready"
-        elif post.get("auto_first_comment") and post.get("content_package_status") in ("queued", "running"):
-            post["first_comment_status"] = "pending_generation"
-        else:
-            post["first_comment_status"] = post.get("first_comment_status") or "not_configured"
-
-        try:
-            # The worker publishes first, then comments. Passing an empty comment
-            # prevents MetaReelPoster from making an implicit/out-of-order call.
-            post["publish_started_at"] = current_dt.strftime("%Y-%m-%d %H:%M:%S")
-            save_posts(posts)
-            result = poster.publish_reel(
-                page_id=page_id,
-                page_token=page_token,
-                video_path=str(video_path),
-                description=f"{title}\n\n{content}",
-                first_comment="",
-                token_id=post.get("token_id"),
-                reconcile_seconds=12,
-            )
-            facebook_id = result.get("video_id") or result.get("reel_id")
-            if result.get("processing") and (result.get("meta_post_id") or result.get("upload_video_id")):
-                post.update({"status": "processing", "meta_post_id": str(result.get("meta_post_id") or ""),
-                             "meta_upload_video_id": str(result.get("upload_video_id") or ""),
-                             "meta_reconcile_attempts": 0, "meta_next_check_at": now_ts + 60,
-                             "retryable": False, "retry_stage": "meta_processing",
-                             "error": "Meta is processing; awaiting independent read-only verification. Do not retry."})
-                save_posts(posts)
-                continue
-            if not result.get("success") or not facebook_id:
-                post.update({
-                    "status": "failed",
-                    "retryable": not (result.get("outcome_unknown") or (result.get("success") and not facebook_id)),
-                    "retry_stage": "facebook_publish",
-                    "error": result.get("error", "Lỗi Meta Graph API không xác định"),
-                })
-                continue
-
-            post.update({
-                "status": "published",
-                "post_fb_id": facebook_id,
-                "fb_url": result.get("fb_url") or (f"https://www.facebook.com/reel/{facebook_id}" if facebook_id else ""),
-                "published_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                "error": "",
-                "retryable": False,
-            })
-
-            # Persist the Meta object id before optional local/comment side effects.
-            # A comment or ledger failure must never turn a confirmed Reel into a
-            # failed Reel that an operator could inadvertently publish twice.
-            save_posts(posts)
+    if claimed_posts:
+        # Every thread owns a queue revision. Atomic field merges preserve both
+        # independent publishes and concurrent Content Studio metadata updates.
+        from concurrent.futures import ThreadPoolExecutor
+        def publish_one(claim):
+            local_posts = load_posts()
+            local_post = next(row for row in local_posts if row.get("id") == claim.get("id"))
+            with _active_posts_lock:
+                _active_posts.add(local_post["id"])
             try:
-                _record_posted_clip(clip_filename)
-            except Exception as exc:
-                post["ledger_error"] = sanitize_error(exc)
-            if first_comment:
-                try:
-                    comment_result = poster.post_first_comment(facebook_id, page_token, first_comment)
-                    if comment_result.get("success"):
-                        post["comment_id"] = comment_result.get("comment_id")
-                        post["first_comment_status"] = "posted"
-                        post["first_comment_error"] = ""
-                    else:
-                        queued = enqueue_first_comment(
-                            facebook_id, page_token, first_comment,
-                            int(current_dt.timestamp()) + 30,
-                            token_id=post.get("token_id"), post_id=post_id,
-                            outcome_unknown=bool(comment_result.get("outcome_unknown")),
-                        )
-                        post["first_comment_status"] = "verification_pending" if queued.get("outcome_unknown") else ("pending_retry" if queued.get("success") else "queue_failed")
-                        if queued.get("outcome_unknown"):
-                            post["first_comment_error"] = "First Comment outcome unknown; queue is paused until Meta verification."
-                        post["first_comment_error"] = comment_result.get("error", "Không thể đăng First Comment")
-                        post["first_comment_queue_id"] = queued.get("queue_id")
-                except Exception as exc:
-                    try:
-                        queued = enqueue_first_comment(
-                            facebook_id, page_token, first_comment,
-                            int(current_dt.timestamp()) + 30,
-                            token_id=post.get("token_id"), post_id=post_id,
-                            outcome_unknown=True,
-                        )
-                        post["first_comment_status"] = "verification_pending" if queued.get("success") else "queue_failed"
-                        post["first_comment_queue_id"] = queued.get("queue_id")
-                    except Exception:
-                        post["first_comment_status"] = "queue_failed"
-                    post["first_comment_error"] = sanitize_error(exc)
-        except Exception:
-            post.update({
-                "status": "failed",
-                "retryable": False,
-                "retry_stage": "publish_outcome_unknown",
-                "error": "Publish started but outcome is unknown; reconcile on Facebook before retrying.",
-            })
+                result = _publish_claimed_post(local_post, local_posts, poster, current_dt, token_vault, page_manager)
+                save_posts(local_posts)
+                return result
+            finally:
+                with _active_posts_lock:
+                    _active_posts.discard(local_post["id"])
+        with ThreadPoolExecutor(max_workers=posting_threads, thread_name_prefix="meta-publish") as pool:
+            outcomes = list(pool.map(publish_one, claimed_posts))
+        # Workers persisted their own revisions. Reload their merged results
+        # before cleanup so a clip shared by parallel posts is retained until
+        # every Page has a confirmed Meta result.
+        posts = load_posts()
 
     removed = 0
     for published_post in posts:
@@ -585,11 +474,254 @@ def _process_scheduled_posts_once(
     if claimed_posts or recovered or reconciled or queue_result.get("changed") or removed:
         save_posts(posts)
     from web.meta_handoff import process_next_handoff
-    handed_off = process_next_handoff(posts, save_posts, poster, OUTPUT_DIR, token_vault, page_manager, now=now)
-    failed = sum(1 for post in claimed_posts if post.get("status") == "failed")
+    reserved_tokens = {token_key(p) for p in posts if p.get("status") in ("publishing", "processing")}
+    reserved_pages = {str(p.get("page_id")) for p in posts if p.get("status") in ("publishing", "processing")}
+    last_started = {}
+    for row in posts:
+        for field in ("publish_started_at", "meta_handoff_started_at"):
+            started = _parse_scheduled_time(row.get(field))
+            if started:
+                last_started[token_key(row)] = max(last_started.get(token_key(row), started), started)
+    handoffs = []
+    for row in sorted((p for p in posts if p.get("status") == "meta_handoff"),
+                      key=lambda p: (str(p.get("scheduled_time") or ""), str(p.get("id")))):
+        key = token_key(row)
+        pid = str(row.get("page_id"))
+        if key in reserved_tokens or pid in reserved_pages:
+            continue
+        entry = token_vault.get_token_by_id(str(row.get("token_id") or ""))
+        if entry and entry.get("status") == "ACTIVE" and not credential_ready(entry):
+            continue
+        started = last_started.get(key)
+        if started and now_ts - started.timestamp() < int(row.get("token_gap_seconds") or 900):
+            continue
+        handoffs.append(row)
+        reserved_tokens.add(key)
+        reserved_pages.add(pid)
+        if len(handoffs) >= posting_threads:
+            break
+    handed_off = 0
+    if handoffs:
+        from concurrent.futures import ThreadPoolExecutor
+        def handoff_one(row):
+            local_posts = load_posts()
+            with _active_posts_lock:
+                _active_posts.add(row["id"])
+            try:
+                return process_next_handoff(local_posts, save_posts, poster, OUTPUT_DIR, token_vault,
+                                            page_manager, now=current_dt, post_id=row["id"])
+            finally:
+                with _active_posts_lock:
+                    _active_posts.discard(row["id"])
+        with ThreadPoolExecutor(max_workers=posting_threads, thread_name_prefix="meta-handoff") as pool:
+            handed_off = sum(pool.map(handoff_one, handoffs))
+        posts = load_posts()
+    failed = sum(1 for post in outcomes if post.get("status") == "failed") if claimed_posts else 0
     return {"claimed": len(claimed_posts), "recovered": recovered, "failed": failed, "queue": queue_result,
             "handed_off": handed_off, "handoff_pending": any(p.get("status") == "meta_handoff" for p in posts), "posts": posts}
 
+
+
+def _publish_claimed_post(post, posts, poster, current_dt, token_vault, page_manager):
+    from src.content_packages import scheduled_video_path
+    from src.publisher.meta_preflight import preflight_pages
+    from src.publisher.first_comment_queue import enqueue_first_comment
+    now_ts = current_dt.timestamp()
+    post_id = post.get("id")
+    page_id = post.get("page_id")
+    clip_filename = post.get("media_file") or post.get("clip_filename")
+    page_token = post.get("token")
+    title = post.get("title", "")
+    content = post.get("content", "")
+    first_comment = str(post.get("first_comment") or "").strip()
+    article_url = str(post.get("article_url") or "").strip()
+    if article_url and article_url not in first_comment:
+        first_comment = f"{first_comment}\n{article_url}".strip()
+        post["first_comment"] = first_comment
+    video_error = "Video file unavailable at publish time"
+    try:
+        video_path = scheduled_video_path(OUTPUT_DIR, clip_filename)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        video_path = None
+        video_error = sanitize_error(exc)
+
+    # Re-check the immutable Page/token binding at due time. The queue may
+    # survive a token refresh/restart; never publish with a stale or generic
+    # credential that was not verified for this exact page_id.
+    page_record = next(
+        (page for page in page_manager.list_pages() if str(page.get("page_id")) == str(page_id)),
+        None,
+    )
+    # Legacy queue records may predate discovery-backed mappings. Preserve
+    # their already-persisted page token for migration compatibility; new
+    # schedules always have a token_id and must pass current preflight.
+    # New queue records carry token_id and must pass current verified
+    # Page/token preflight. Legacy records only carry their persisted exact
+    # page token; preserve that compatibility for offline recovery and old
+    # queues instead of letting an unrelated cached Page record block them.
+    try:
+        if post.get("token_id"):
+            # Revalidate the exact token selected when the post was queued;
+            # a later auto-rebalance must not silently switch credentials.
+            bound_page = dict(page_record or {})
+            bound_page["token_id"] = str(post.get("token_id") or "")
+            verdict = preflight_pages([bound_page], token_vault, page_manager) if page_record else {"ok": False, "blocked": {"code": "missing_page", "stage": "mapping", "action": "Sync Page before publishing."}}
+            blocked = verdict.get("blocked") or {}
+            verified = verdict["ready"][0] if verdict.get("ok") else None
+        else:
+            blocked = {}
+            verified = {"token": page_token, "token_id": post.get("token_id", "")} if page_token else None
+    except Exception as exc:
+        post.update({"status": "failed", "retryable": True,
+                     "retry_stage": "meta_preflight",
+                     "error": sanitize_error(exc)})
+        save_posts(posts)
+        return post
+    if verified is None:
+        post.update({
+            "status": "failed",
+            "retryable": True,
+            "retry_stage": "meta_preflight",
+            "error": blocked.get("action") or "Page credential mapping is not verified; Sync Page before publishing.",
+            "meta_preflight": {
+                "stage": blocked.get("stage"),
+                "code": blocked.get("code"),
+                "action": blocked.get("action"),
+                "reconnect_required": True,
+            },
+        })
+        return post
+    post["token"] = verified["token"]
+    post["token_id"] = verified["token_id"]
+    page_token = verified["token"]
+
+    if not video_path or not video_path.exists():
+        post.update({
+            "status": "failed",
+            "error": video_error,
+            "retryable": True,
+            "retry_stage": "local_video",
+        })
+        return post
+
+    if post.get("auto_first_comment") or post.get("type") == "reel":
+        url = str(post.get("article_url") or "").strip()
+        comment = str(post.get("first_comment") or "").strip()
+        website_ready = post.get("website_status") in (None, "", "ready")
+        if not (url and website_ready and url in comment):
+            post["status"] = "failed" if post.get("website_status") == "failed" else "scheduled"
+            post["retryable"] = post["status"] == "failed"
+            post["retry_stage"] = "website_content"
+            post["schedule_error"] = "Đang chờ bài Website và First Comment chứa link; chưa gửi Reel lên Meta."
+            post.pop("claimed_at", None)
+            return post
+        post.pop("schedule_error", None)
+
+    # Website creation belongs to schedule confirmation. Due-time publishing
+    # only consumes persisted article_url/first_comment and must never create
+    # a duplicate CMS article. A prior CMS failure does not cancel Facebook.
+    if first_comment:
+        post["first_comment_status"] = "ready"
+    elif post.get("auto_first_comment") and post.get("content_package_status") in ("queued", "running"):
+        post["first_comment_status"] = "pending_generation"
+    else:
+        post["first_comment_status"] = post.get("first_comment_status") or "not_configured"
+
+    try:
+        # The worker publishes first, then comments. Passing an empty comment
+        # prevents MetaReelPoster from making an implicit/out-of-order call.
+        post["publish_started_at"] = current_dt.strftime("%Y-%m-%d %H:%M:%S")
+        save_posts(posts)
+        def persist_upload(video_id):
+            post.update({"meta_upload_video_id": str(video_id), "outcome_unknown": True})
+            save_posts(posts)
+        result = poster.publish_reel(
+            page_id=page_id,
+            page_token=page_token,
+            video_path=str(video_path),
+            description=f"{title}\n\n{content}",
+            first_comment="",
+            token_id=post.get("token_id"),
+            reconcile_seconds=12,
+            on_upload_initialized=persist_upload,
+        )
+        facebook_id = result.get("video_id") or result.get("reel_id")
+        if (result.get("processing") or result.get("outcome_unknown") or (not result.get("success") and post.get("meta_upload_video_id"))) and (result.get("meta_post_id") or result.get("upload_video_id") or post.get("meta_upload_video_id")):
+            post.update({"status": "processing", "meta_post_id": str(result.get("meta_post_id") or ""),
+                         "meta_upload_video_id": str(result.get("upload_video_id") or post.get("meta_upload_video_id") or ""),
+                         "meta_reconcile_attempts": 0, "meta_next_check_at": now_ts + 60,
+                         "retryable": False, "retry_stage": "meta_processing",
+                         "error": "Meta is processing; awaiting independent read-only verification. Do not retry."})
+            save_posts(posts)
+            return post
+        if not result.get("success") or not facebook_id:
+            post.update({
+                "status": "failed",
+                "retryable": not (result.get("outcome_unknown") or (result.get("success") and not facebook_id)),
+                "retry_stage": "facebook_publish",
+                "error": result.get("error", "Lỗi Meta Graph API không xác định"),
+            })
+            return post
+
+        post.update({
+            "status": "published",
+            "post_fb_id": facebook_id,
+            "fb_url": result.get("fb_url") or (f"https://www.facebook.com/reel/{facebook_id}" if facebook_id else ""),
+            "published_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "error": "",
+            "retryable": False,
+            "outcome_unknown": False,
+        })
+
+        # Persist the Meta object id before optional local/comment side effects.
+        # A comment or ledger failure must never turn a confirmed Reel into a
+        # failed Reel that an operator could inadvertently publish twice.
+        save_posts(posts)
+        try:
+            _record_posted_clip(clip_filename)
+        except Exception as exc:
+            post["ledger_error"] = sanitize_error(exc)
+        if first_comment:
+            try:
+                comment_result = poster.post_first_comment(facebook_id, page_token, first_comment)
+                if comment_result.get("success"):
+                    post["comment_id"] = comment_result.get("comment_id")
+                    post["first_comment_status"] = "posted"
+                    post["first_comment_error"] = ""
+                else:
+                    queued = enqueue_first_comment(
+                        facebook_id, page_token, first_comment,
+                        int(current_dt.timestamp()) + 30,
+                        token_id=post.get("token_id"), post_id=post_id,
+                        outcome_unknown=bool(comment_result.get("outcome_unknown")),
+                    )
+                    post["first_comment_status"] = "verification_pending" if queued.get("outcome_unknown") else ("pending_retry" if queued.get("success") else "queue_failed")
+                    if queued.get("outcome_unknown"):
+                        post["first_comment_error"] = "First Comment outcome unknown; queue is paused until Meta verification."
+                    post["first_comment_error"] = comment_result.get("error", "Không thể đăng First Comment")
+                    post["first_comment_queue_id"] = queued.get("queue_id")
+            except Exception as exc:
+                try:
+                    queued = enqueue_first_comment(
+                        facebook_id, page_token, first_comment,
+                        int(current_dt.timestamp()) + 30,
+                        token_id=post.get("token_id"), post_id=post_id,
+                        outcome_unknown=True,
+                    )
+                    post["first_comment_status"] = "verification_pending" if queued.get("success") else "queue_failed"
+                    post["first_comment_queue_id"] = queued.get("queue_id")
+                except Exception:
+                    post["first_comment_status"] = "queue_failed"
+                post["first_comment_error"] = sanitize_error(exc)
+    except Exception:
+        post.update({
+            "status": "failed",
+            "retryable": False,
+            "retry_stage": "publish_outcome_unknown",
+            "error": "Publish started but outcome is unknown; reconcile on Facebook before retrying.",
+        })
+
+    return post
 
 def process_scheduled_posts_once(*args, **kwargs):
     """Serialize worker/manual cycles so one due record cannot publish twice."""

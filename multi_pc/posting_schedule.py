@@ -79,7 +79,7 @@ def next_paced_due_post(posts, now, *, global_seconds=90, token_seconds=900):
         started = parsed(post.get("publish_started_at"))
         if started is not None:
             last_global = max(last_global, started) if last_global else started
-            token_id = str(post.get("token_id") or "")
+            token_id = str(post.get("token_id") or f"page:{post.get('page_id')}")
             last_by_token[token_id] = max(last_by_token.get(token_id, started), started)
         scheduled = parsed(post.get("scheduled_time"))
         if post.get("status") == "scheduled" and scheduled is not None and scheduled <= now:
@@ -94,7 +94,7 @@ def next_paced_due_post(posts, now, *, global_seconds=90, token_seconds=900):
     if global_seconds and last_global is not None and now - last_global < timedelta(seconds=global_seconds):
         return None
     for _, _, post in sorted(due, key=lambda item: (item[0], item[1])):
-        previous = last_by_token.get(str(post.get("token_id") or ""))
+        previous = last_by_token.get(str(post.get("token_id") or f"page:{post.get('page_id')}"))
         try:
             gap = max(1, int(post.get("token_gap_seconds") or token_seconds))
         except (TypeError, ValueError):

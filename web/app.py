@@ -105,7 +105,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.1.8"
+APP_VERSION = "1.1.9"
 
 @app.after_request
 def add_header(response):
@@ -1477,9 +1477,12 @@ def load_token_groups():
         return []
     try:
         with open(TOKEN_GROUPS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
+            groups = json.load(f)
+            if not isinstance(groups, list) or any(not isinstance(g, dict) for g in groups):
+                raise ValueError("Token groups must be an array of group records")
+            return groups
+    except Exception as exc:
+        raise RuntimeError("Không đọc được nhóm Token; giữ dữ liệu hiện có và khôi phục file nhóm.") from exc
 
 def save_token_groups(groups):
     tmp = TOKEN_GROUPS_FILE.with_name(f".{TOKEN_GROUPS_FILE.name}.{uuid.uuid4().hex}.tmp")
@@ -1487,7 +1490,26 @@ def save_token_groups(groups):
         json.dump(groups, f, indent=2, ensure_ascii=False)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp, TOKEN_GROUPS_FILE)
+    replace_with_retry(tmp, TOKEN_GROUPS_FILE)
+
+
+def sync_linked_page_group(group):
+    """The token group's Page set is available in the posting group selector."""
+    if not group.get("page_group_id"):
+        group["page_group_id"] = f"grp_{uuid.uuid4().hex[:12]}"
+    existing = next((g for g in page_manager.list_groups() if g.get("id") == group["page_group_id"]), None)
+    page_manager.add_or_update_group(group["page_group_id"], group["name"], list(group.get("page_ids") or []),
+                                     (existing or {}).get("folder_binding") or str(OUTPUT_DIR),
+                                     (existing or {}).get("schedule_config"))
+
+
+def page_in_token_group(page, group):
+    """Use the group's own verified assignment without altering queued posts."""
+    page = dict(page)
+    tid = (group.get("page_token_bindings") or {}).get(str(page.get("page_id")))
+    tid = str(tid or page.get("token_id") or "")
+    page["token_id"] = tid if tid in {str(t) for t in group.get("token_ids", [])} else ""
+    return page
 
 @app.route("/api/token-groups", methods=["GET"])
 def api_list_token_groups():
@@ -1507,7 +1529,7 @@ def api_list_token_groups():
         group_pages = [page for page in pages if str(page.get("page_id") or "") in page_ids]
         bound_pages = [page for page in group_pages if token_ids.intersection((page.get("token_bindings") or {}).keys())]
         stale_binding = any(
-            str(page.get("token_id") or "") not in vault_ids
+            str(page_in_token_group(page, group).get("token_id") or "") not in vault_ids
             or not token_ids.intersection((page.get("token_bindings") or {}).keys())
             for page in group_pages
         )
@@ -1529,7 +1551,8 @@ def _pages_for_source_token(page_source_token_id):
         return []
     return sorted({
         str(page.get("page_id")) for page in page_manager.list_pages()
-        if str(page.get("token_id") or "") == page_source_token_id and page.get("page_id")
+        if (str(page.get("token_id") or "") == page_source_token_id
+            or page_source_token_id in (page.get("token_bindings") or {})) and page.get("page_id")
     })
 
 
@@ -1549,6 +1572,8 @@ def _sync_group_credentials(token_ids):
 
 
 def _group_page_ids(token_ids, source_id=""):
+    if source_id:
+        return _pages_for_source_token(source_id)
     ids = set(_pages_for_source_token(source_id))
     for page in page_manager.list_pages():
         if set(page.get("token_bindings") or {}).intersection(token_ids):
@@ -1576,8 +1601,12 @@ def api_save_token_group():
         return jsonify({"error": "Token không tồn tại trong Vault: " + ", ".join(unknown_ids)}), 404
     if page_source_token_id and page_source_token_id not in vault_ids:
         return jsonify({"error": "Token nguồn Page không tồn tại trong Vault"}), 404
-    # The UI saves from cache. Explicit API callers may still request discovery.
+    if page_source_token_id and page_source_token_id not in token_ids:
+        return jsonify({"success": False, "error": "Token nguồn phải thuộc nhóm được chọn."}), 400
     sync_errors = _sync_group_credentials(token_ids) if data.get("sync_pages") is True else []
+    if sync_errors:
+        return jsonify({"success": False, "code": "page_sync_failed", "sync_errors": sync_errors,
+                        "error": "Một số Token chưa Sync Page thành công; nhóm chưa được lưu."}), 409
     page_ids = _group_page_ids(token_ids, page_source_token_id)
 
     with _token_group_lock:
@@ -1593,7 +1622,9 @@ def api_save_token_group():
             existing["note"] = note
             if has_source or not existing.get("page_source_token_id"):
                 existing["page_source_token_id"] = page_source_token_id
-                existing["page_ids"] = page_ids
+            existing["page_ids"] = _group_page_ids(token_ids, existing.get("page_source_token_id") or "")
+            existing["page_token_bindings"] = {pid: tid for pid, tid in (existing.get("page_token_bindings") or {}).items()
+                                               if pid in existing["page_ids"] and tid in token_ids}
             existing["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         else:
             groups.append({"id": gid, "name": name, "strategy": strategy,
@@ -1601,6 +1632,9 @@ def api_save_token_group():
                            "page_source_token_id": page_source_token_id,
                            "page_ids": page_ids,
                            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+        saved = next(g for g in groups if g.get("id") == gid)
+        if data.get("create_page_group") is True or saved.get("page_group_id"):
+            sync_linked_page_group(saved)
         save_token_groups(groups)
     saved = next((g for g in groups if g.get("id") == gid), None) or {}
     return jsonify({
@@ -1635,6 +1669,8 @@ def api_rebind_token_group_pages(gid):
         }), 409
     group["page_ids"] = page_ids
     group["pages_synced_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if group.get("page_group_id"):
+        sync_linked_page_group(group)
     save_token_groups(groups)
     return jsonify({"success": True, "page_ids": page_ids, "group": group})
 
@@ -1654,7 +1690,15 @@ def api_sync_token_group_pages(gid):
     if errors:
         return jsonify({"success": False, "code": "page_sync_failed", "sync_errors": errors,
                         "error": "Some group tokens could not sync Pages; the Page set was not rebound."}), 409
-    return jsonify({"success": True, "synced_token_count": len(token_ids)})
+    with _token_group_lock:
+        groups = load_token_groups()
+        current = next(g for g in groups if str(g.get("id")) == str(gid))
+        current["page_ids"] = _group_page_ids(token_ids, str(current.get("page_source_token_id") or ""))
+        current["pages_synced_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if current.get("page_group_id"):
+            sync_linked_page_group(current)
+        save_token_groups(groups)
+    return jsonify({"success": True, "synced_token_count": len(token_ids), "page_ids": current["page_ids"], "group": current})
 
 @app.route("/api/token-groups/<gid>", methods=["DELETE"])
 def api_delete_token_group(gid):
@@ -1740,6 +1784,10 @@ def api_add_token():
     kind = data.get("kind", "SYS")
     note = data.get("note", "").strip()
     page_sync_mode = str(data.get("page_sync_mode") or "each").strip().lower()
+    import_group_id = str(data.get("token_group_id") or "").strip()
+    import_group_name = str(data.get("token_group_name") or "").strip()
+    if import_group_id and not any(g.get("id") == import_group_id for g in load_token_groups()):
+        return jsonify({"success": False, "error": "Nhóm Token được chọn không còn tồn tại."}), 404
     if page_sync_mode not in {"representative", "each", "none"}:
         return jsonify({"error": "page_sync_mode không hợp lệ"}), 400
     
@@ -1838,6 +1886,25 @@ def api_add_token():
     if representative is not None:
         representative_label = f"#{representative_idx + 1} {representative.get('name')}"
 
+    import_group = None
+    imported_ids = [item["id"] for item in results if item.get("id")]
+    if imported_ids and (import_group_id or import_group_name):
+        with _token_group_lock:
+            groups = load_token_groups()
+            import_group = next((g for g in groups if (import_group_id and g.get("id") == import_group_id)
+                                 or (not import_group_id and g.get("name", "").casefold() == import_group_name.casefold())), None)
+            if import_group is None:
+                import_group = {"id": f"tgrp_{uuid.uuid4().hex[:12]}", "name": import_group_name,
+                                "token_ids": [], "strategy": "least_recently_used", "page_source_token_id": "",
+                                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                groups.append(import_group)
+            import_group["token_ids"] = list(dict.fromkeys(list(import_group.get("token_ids") or []) + imported_ids))
+            if representative and not import_group.get("page_source_token_id"):
+                import_group["page_source_token_id"] = representative["id"]
+            import_group["page_ids"] = _group_page_ids(import_group["token_ids"], str(import_group.get("page_source_token_id") or ""))
+            sync_linked_page_group(import_group)
+            save_token_groups(groups)
+
     return jsonify({
         "success": True,
         "count": len(results),
@@ -1846,7 +1913,8 @@ def api_add_token():
         "page_sync_mode": page_sync_mode,
         "representative": ({"id": representative.get("id"), "name": representative.get("name"),
                             "label": representative_label} if representative else None),
-        "token": results[0] if results else None
+        "token": results[0] if results else None,
+        "token_group": import_group,
     })
 
 @app.route("/api/tokens/<token_id>/refresh-pages", methods=["POST"])
@@ -2029,7 +2097,10 @@ def api_list_pages():
         item["token_assignment_valid"] = assigned_id in token_names
         item["token_name"] = token_names.get(assigned_id, "Chưa gán token hiện tại")
         item["token_group_ids"] = [str(group.get("id")) for group in token_groups
-                                   if assigned_id and assigned_id in {str(tid) for tid in group.get("token_ids", [])}]
+                                   if pid in {str(value) for value in group.get("page_ids", [])}]
+        item["token_group_names"] = [group.get("name") for group in token_groups if str(group.get("id")) in item["token_group_ids"]]
+        item["group_token_assignments"] = {str(group["id"]): page_in_token_group(page, group).get("token_id")
+                                           for group in token_groups if str(group.get("id")) in item["token_group_ids"]}
         item.update(stats.get(pid, {"published_count": 0, "scheduled_count": 0, "publishing_count": 0}))
         # Never display a deleted/stale group label as if it still existed.
         group_ids = [str(gid) for gid in (item.get("group_ids") or []) if str(gid) in valid_groups]
@@ -2054,6 +2125,8 @@ def api_page_mapping_health():
 @app.route("/api/groups", methods=["GET"])
 def api_list_groups():
     groups = page_manager.list_groups()
+    linked = {str(g.get("page_group_id")): str(g["id"]) for g in load_token_groups() if g.get("page_group_id")}
+    groups = [{**g, "token_group_id": linked.get(str(g.get("id")), "")} for g in groups]
     return jsonify({"success": True, "groups": groups})
 
 @app.route("/api/groups", methods=["POST"])
@@ -2143,7 +2216,12 @@ def api_publish_reel():
     if publish_mode == "meta_scheduled" and not schedule_time:
         return jsonify({"success": False, "code": "schedule_time_required", "error": "Meta scheduling requires a future publish time."}), 400
     stagger_minutes = max(1, int(data.get("stagger_minutes", 15)))
-    posting_threads = max(1, min(50, int(data.get("posting_threads", 10))))
+    from multi_pc.publishing_settings import load_publishing_settings, save_publishing_settings
+    try:
+        posting_threads = (save_publishing_settings(POSTS_FILE.parent, data["posting_threads"])
+                           if "posting_threads" in data else load_publishing_settings(POSTS_FILE.parent))["posting_threads"]
+    except (ValueError, TypeError) as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     
     if not clip_filename:
@@ -2173,6 +2251,9 @@ def api_publish_reel():
                 if pid not in target_page_ids:
                     target_page_ids.append(pid)
 
+    if not token_group_id and group_id:
+        token_group_id = next((str(g["id"]) for g in load_token_groups()
+                               if str(g.get("page_group_id") or "") == str(group_id)), "")
     selected_token_group = None
     if token_group_id:
         selected_token_group = next((g for g in load_token_groups() if str(g.get("id")) == token_group_id), None)
@@ -2192,6 +2273,7 @@ def api_publish_reel():
             return jsonify({"success": False, "code": "page_outside_token_group", "page_ids": sorted(outside),
                             "error": "Page đã chọn không thuộc nhóm token này."}), 409
         target_page_ids = [pid for pid in target_page_ids if pid in token_page_ids]
+        pages = [page_in_token_group(page, selected_token_group) if str(page.get("page_id")) in token_page_ids else page for page in pages]
 
     if not target_page_ids:
         return jsonify({"error": "Vui lòng chọn ít nhất 1 Fanpage hoặc 1 Nhóm Page để đăng"}), 400
@@ -2890,7 +2972,21 @@ def api_scheduler_status():
     status["overdue_count"] = len(overdue)
     status["overdue_posts"] = overdue[:50]
     status["success"] = True
+    from multi_pc.publishing_settings import load_publishing_settings, MAX_POSTING_THREADS
+    status.update(load_publishing_settings(POSTS_FILE.parent))
+    status["max_posting_threads"] = MAX_POSTING_THREADS
     return jsonify(status)
+
+
+@app.route("/api/publishing/settings", methods=["GET", "PUT"])
+def api_publishing_settings():
+    from multi_pc.publishing_settings import load_publishing_settings, save_publishing_settings, MAX_POSTING_THREADS
+    try:
+        settings = (save_publishing_settings(POSTS_FILE.parent, (request.get_json(silent=True) or {}).get("posting_threads"))
+                    if request.method == "PUT" else load_publishing_settings(POSTS_FILE.parent))
+        return jsonify({"success": True, "max_posting_threads": MAX_POSTING_THREADS, **settings})
+    except (ValueError, TypeError) as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
 
 @app.route("/api/scheduler/run-due", methods=["POST"])
@@ -3113,7 +3209,15 @@ def api_distribute_batch():
         return jsonify({"success": False, "code": "invalid_video_path", "error": "Clip selections must be a list of filenames"}), 400
     posts_per_page = int(data.get("posts_per_page", 1))
     stagger_minutes = max(1, int(data.get("stagger_minutes", 15)))
-    posting_threads = max(1, min(50, int(data.get("posting_threads", 10))))
+    from multi_pc.publishing_settings import load_publishing_settings, save_publishing_settings
+    try:
+        posting_threads = (save_publishing_settings(POSTS_FILE.parent, data["posting_threads"])
+                           if "posting_threads" in data else load_publishing_settings(POSTS_FILE.parent))["posting_threads"]
+    except (ValueError, TypeError) as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    publish_mode = str(data.get("publish_mode") or "app_queue")
+    if publish_mode not in ("app_queue", "meta_scheduled"):
+        return jsonify({"success": False, "error": "Chế độ đăng không hợp lệ."}), 400
     requested_start = str(data.get("start_time") or "").strip()
     start_dt = None
     if requested_start:
@@ -3151,6 +3255,9 @@ def api_distribute_batch():
         return jsonify({"error": "Không tìm thấy Nhóm Fanpage"}), 404
 
     page_ids = group.get("page_ids", [])
+    if not token_group_id:
+        token_group_id = next((str(g["id"]) for g in load_token_groups()
+                               if str(g.get("page_group_id") or "") == str(group_id)), "")
     if token_group_id:
         token_group = next((g for g in load_token_groups() if str(g.get("id")) == token_group_id), None)
         if not token_group:
@@ -3186,7 +3293,7 @@ def api_distribute_batch():
     # Verify exact page/token binding and publish capability before accepting any
     # schedule; a stale or cross-bound credential must never reach the queue.
     preflight = preflight_pages(
-        [page_map[pid] for pid in page_ids],
+        [page_in_token_group(page_map[pid], token_group) if token_group_id else page_map[pid] for pid in page_ids],
         token_vault,
         page_manager,
     )
@@ -3205,7 +3312,6 @@ def api_distribute_batch():
     sched_cfg = group.get("schedule_config") or {}
     group_times = sched_cfg.get("times") or ["11:30", "19:30"]
     group_stagger = max(1, int(sched_cfg.get("stagger_minutes") or stagger_minutes))
-    posting_threads = max(1, min(50, int(sched_cfg.get("posting_threads") or posting_threads)))
     scheduled_offsets = paced_offsets_by_token(
         [verified_token_ids[pid] for pid in page_ids],
         global_seconds=0,
@@ -3363,6 +3469,12 @@ def api_distribute_batch():
             post_id = f"post_{int(time.time())}_{uuid.uuid4().hex[:6]}"
             sched_dt = slot_base_dt + timedelta(seconds=scheduled_offsets[idx])
             sched_time_str = sched_dt.strftime("%Y-%m-%d %H:%M:%S")
+            if publish_mode == "meta_scheduled":
+                from multi_pc.meta_scheduling import parse_meta_schedule_time, MetaScheduleTimeError
+                try:
+                    parse_meta_schedule_time(sched_time_str)
+                except MetaScheduleTimeError as exc:
+                    return jsonify({"success": False, "code": exc.code, "error": str(exc)}), 400
 
             # Lấy thông tin video bám sát nội dung gốc
             meta = get_clip_metadata(clip_fn)
@@ -3393,6 +3505,9 @@ def api_distribute_batch():
                 "auto_first_comment": bool(auto_first_comment),
                 "use_llm_comment": bool(use_llm_comment),
                 "status": "scheduled",
+                "publish_mode": "app_queue",
+                "requested_publish_mode": publish_mode,
+                "meta_schedule_status": "waiting_content" if publish_mode == "meta_scheduled" else "",
                 "scheduled_time": sched_time_str,
                 "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "token": page_token,
@@ -3853,6 +3968,14 @@ def api_batch_assign_token():
         assigned = len(planned)
         if data.get("dry_run") is not True:
             page_manager.save_pages(pages)
+            if token_group:
+                with _token_group_lock:
+                    groups = load_token_groups()
+                    current = next(g for g in groups if str(g.get("id")) == token_group_id)
+                    assignments = dict(current.get("page_token_bindings") or {})
+                    assignments.update({str(page.get("page_id")): tid for page, tid, _binding, _credential in planned})
+                    current["page_token_bindings"] = assignments
+                    save_token_groups(groups)
         return jsonify({"success": True, "count": assigned, "loads": loads,
                         "requested_limit": max_pages_per_token, "effective_limit": effective_limit,
                         "active_tokens_used": sum(1 for count in loads.values() if count),
