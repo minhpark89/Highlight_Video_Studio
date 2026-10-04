@@ -68,6 +68,20 @@ def test_foreign_cached_package_cannot_bless_existing_cms_url():
     assert "same URL" in error
 
 
+def test_large_queue_listing_does_not_reclassify_article_paragraphs():
+    result = {"caption": "Watch the full original recording for complete context.",
+              "article_html": "<p>Review the source recording to see the complete sequence.</p>" * 100}
+    from src import english_text
+    with mock.patch.object(english_text, "_factory", wraps=english_text._factory) as detector:
+        for _ in range(100):
+            assert not packages.package_needs_attention({"status": "ready", "result": result})
+    assert detector.call_count <= 1
+    # Deep validation at a write boundary still rejects a foreign paragraph.
+    result["article_html"] += "<p>Cette vidéo présente tous les détails de la nouvelle mise à jour du jeu.</p>"
+    with pytest.raises(ValueError):
+        assert_english_package(result)
+
+
 def test_all_meta_write_boundaries_reject_foreign_text_before_network(tmp_path):
     video = tmp_path / "clip.mp4"
     video.write_bytes(b"fixture")

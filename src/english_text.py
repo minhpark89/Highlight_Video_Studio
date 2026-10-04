@@ -81,14 +81,32 @@ def english_or_default(value, default=""):
     return text if text and is_english(text) else default
 
 
-def assert_english(value, label="Content"):
+@lru_cache(maxsize=4096)
+def _english_error(value):
     if not is_english(value):
-        raise ValueError(f"{label} must be in English; non-English output was rejected")
+        return "must be in English; non-English output was rejected"
     # A mostly English article can contain an untranslated paragraph. Validate
     # paragraphs individually so the majority language cannot hide that drift.
     for part in re.findall(r'<(?:p|h[1-6]|li)\b[^>]*>(.*?)</(?:p|h[1-6]|li)>', str(value or ""), re.S | re.I):
         if not is_english(part):
-            raise ValueError(f"{label} contains a non-English paragraph")
+            return "contains a non-English paragraph"
+    return ""
+
+
+def assert_english(value, label="Content"):
+    error = _english_error(str(value or ""))
+    if error:
+        raise ValueError(f"{label} {error}")
+
+
+def package_summary_is_english(package):
+    """Queue listings inspect social text and article script without reclassifying
+    every paragraph. Full validation still runs before reuse and publication.
+    """
+    article = public_text((package or {}).get("article_html", ""))
+    if any(char.isalpha() and ord(char) > 127 and "LATIN" not in unicodedata.name(char, "") for char in article):
+        return False
+    return package_is_english({key: value for key, value in (package or {}).items() if key != "article_html"})
 
 
 def assert_english_package(package):

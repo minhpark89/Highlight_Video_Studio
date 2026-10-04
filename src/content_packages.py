@@ -21,7 +21,7 @@ from src.text_llm_diagnostics import chat_endpoint, chat_failure
 from src.fallback_comments import fallback_first_comment
 from src.first_comment_profiles import load_profile_store, profile_first_comment
 from src.article_format import normalize_article, viewing_article, word_count
-from src.english_text import ENGLISH_INSTRUCTION, assert_english_package, english_or_default, package_is_english
+from src.english_text import ENGLISH_INSTRUCTION, assert_english_package, english_or_default, package_is_english, package_summary_is_english
 
 DATA_ROOT = canonical_data_root()
 QUEUE_FILE = DATA_ROOT / "data" / "content_packages.json"
@@ -375,7 +375,7 @@ def _reusable(entry, *, needs_article, article_url=""):
 def package_needs_attention(item):
     """A ready caption does not hide a failed CMS or a missing required comment."""
     source = str((item.get("result") or {}).get("source") or "")
-    if not package_is_english(item.get("result")):
+    if not package_summary_is_english(item.get("result")):
         return True
     if item.get("status") in ("failed", "retryable"):
         return True
