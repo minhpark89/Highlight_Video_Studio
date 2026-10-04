@@ -800,7 +800,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
     def test_ui_distinguishes_pending_failed_and_not_configured_semantics(self):
         root = Path(__file__).resolve().parent.parent
         html = (root / "web" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("Chờ tạo khi đến giờ đăng", html)
+        self.assertIn("Đang chờ tạo nội dung và link Website", html)
         self.assertIn("Lỗi First Comment · sẽ thử lại", html)
         self.assertIn("Không cấu hình", html)
         self.assertIn("Mở bài website", html)

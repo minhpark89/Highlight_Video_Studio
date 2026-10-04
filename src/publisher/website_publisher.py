@@ -19,7 +19,7 @@ import logging
 from pathlib import Path
 import requests
 from multi_pc.data_root import canonical_data_root
-from src.llm_response import chat_stream_incomplete, chat_text_from_response, json_from_chat_response
+from src.llm_response import chat_model_unavailable, chat_stream_incomplete, chat_text_from_response, json_from_chat_response
 
 logger = logging.getLogger("website_publisher")
 
@@ -977,6 +977,11 @@ def generate_curiosity_comment_with_llm(video_title: str, article_url: str, enab
     api_base = str(llm_cfg.get("api_base") or "").strip()
     api_key = str(llm_cfg.get("api_key") or "").strip()
     model = get_task_model("first_comment", llm_cfg)
+    # A task-specific model can be retired while the configured main model is
+    # still healthy. Try the main route before dropping to a template so a green
+    # LLM configuration does not silently produce an opaque provider notice.
+    main_model = str(llm_cfg.get("model") or "").strip()
+    candidate_models = list(dict.fromkeys(item for item in (model, main_model) if item))
 
     prompt = f"""You are a master social media growth marketer. Write ONE viral, high-CTR First Comment in English for a Facebook Reel titled: "{video_title}".
 Rules:
@@ -986,18 +991,21 @@ Rules:
 4. Keep it under 260 characters total, use 2-3 engaging emojis.
 5. Return ONLY the comment text. No commentary, no quotation marks."""
 
-    try:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "You write viral, curiosity-piquing first comments in English. Return only the final comment text."},
-                {"role": "user", "content": prompt}
-            ],
-            "max_tokens": 120,
-            "temperature": 0.8
-        }
-        resp = _text_chat_request(api_base, api_key, model, payload, 45)
-        if resp.status_code == 200:
+    for candidate_model in candidate_models:
+        try:
+            payload = {
+                "model": candidate_model,
+                "messages": [
+                    {"role": "system", "content": "You write viral, curiosity-piquing first comments in English. Return only the final comment text."},
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 120,
+                "temperature": 0.8
+            }
+            resp = _text_chat_request(api_base, api_key, candidate_model, payload, 45)
+            if chat_model_unavailable(resp):
+                logger.warning("First Comment model unavailable; trying the main text model")
+                continue
             comment = chat_text_from_response(resp).strip()
             if not comment:
                 raise ValueError("LLM comment response is empty")
@@ -1014,10 +1022,8 @@ Rules:
                 if article_url not in comment:
                     comment = f"🔥 Full uncut story and video: {article_url}"
             return comment
-        else:
-            logger.warning("LLM comment gen error: %s", resp.status_code)
-    except Exception as exc:
-        logger.warning("LLM comment gen exception (using fallback): %s", _safe_text_llm_error(exc))
+        except Exception as exc:
+            logger.warning("LLM comment gen exception (trying next model/fallback): %s", _safe_text_llm_error(exc))
 
     return fallback_comment
 

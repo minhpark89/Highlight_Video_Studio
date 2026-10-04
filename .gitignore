@@ -45,6 +45,7 @@ data/pending_first_comments.json
 data/scheduler_heartbeat.json
 data/content_packages.json
 data/first_comment_profiles.json
+data/render_queue_state.json
 data/run/
 run/
 

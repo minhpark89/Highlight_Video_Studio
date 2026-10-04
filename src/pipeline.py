@@ -91,8 +91,13 @@ def get_whisper_model_source():
     return "small"
 
 
+_WHISPER_CUDA_FAILED = False
+
+
 def _whisper_device():
     """Choose CUDA only when CTranslate2 can actually see a CUDA device."""
+    if _WHISPER_CUDA_FAILED:
+        return "cpu", "int8"
     try:
         import ctranslate2
         if int(ctranslate2.get_cuda_device_count()) > 0:
@@ -110,6 +115,7 @@ def _load_whisper_model(model_source: str, device: str, compute_type: str):
 
 def _get_whisper_model(update_status=None):
     """Load Whisper on a verified device and fail over from CUDA to CPU."""
+    global _WHISPER_CUDA_FAILED
     model_source = get_whisper_model_source()
     device, compute_type = _whisper_device()
     if update_status:
@@ -120,6 +126,7 @@ def _get_whisper_model(update_status=None):
         if device != "cuda":
             raise RuntimeError(f"Whisper CPU initialization failed: {exc}") from exc
         print(f"[Whisper] CUDA initialization failed; falling back to CPU int8: {exc}")
+        _WHISPER_CUDA_FAILED = True
         _load_whisper_model.cache_clear()
         if update_status:
             update_status("CUDA initialization failed; switching to Whisper CPU int8...")
@@ -127,6 +134,39 @@ def _get_whisper_model(update_status=None):
             return _load_whisper_model(model_source, "cpu", "int8"), "cpu", "int8"
         except Exception as cpu_exc:
             raise RuntimeError(f"Whisper failed on CUDA and CPU: {cpu_exc}") from cpu_exc
+
+
+def _transcribe_whisper(audio_path, update_status=None, **options):
+    """Consume lazy inference inside the CUDA guard; discard partial GPU output."""
+    global _WHISPER_CUDA_FAILED
+    model, device, compute_type = _get_whisper_model(update_status)
+
+    def collect(active_model):
+        segments, info = active_model.transcribe(audio_path, **options)
+        output = []
+        for segment in segments:
+            output.append(segment)
+            if update_status and len(output) % 20 == 0:
+                update_status(f"Whisper đang xử lý transcript: {len(output)} đoạn...")
+        return output, info
+
+    if update_status:
+        update_status(f"Đang chạy Whisper {device.upper()} ({compute_type})...")
+    try:
+        return collect(model)
+    except Exception as exc:
+        # Inference loads cuBLAS/cuDNN lazily. Audio decoding and unrelated
+        # failures must still propagate without an expensive second attempt.
+        backend_error = any(name in str(exc).lower() for name in
+                            ("cuda", "cublas", "cudnn", "nvrtc", "cufft"))
+        if device != "cuda" or not backend_error:
+            raise
+        _WHISPER_CUDA_FAILED = True
+        _load_whisper_model.cache_clear()
+        if update_status:
+            update_status("Whisper CUDA không khả dụng; nhận diện lại bằng CPU int8...")
+        cpu_model = _load_whisper_model(get_whisper_model_source(), "cpu", "int8")
+        return collect(cpu_model)
 
 
 # Load config
@@ -385,11 +425,7 @@ def get_word_level_transcription(audio_path: str, start_time: float, duration: f
 
     words = []
     try:
-        model, device, compute_type = _get_whisper_model(update_status)
-        if update_status:
-            update_status(f"Đang nhận diện phụ đề bằng Whisper {device.upper()} ({compute_type})...")
-
-        segments, _ = model.transcribe(str(clip_audio_tmp), word_timestamps=True, beam_size=1)
+        segments, _ = _transcribe_whisper(str(clip_audio_tmp), update_status, word_timestamps=True, beam_size=1)
         for s in segments:
             if s.words:
                 for w in s.words:
@@ -528,12 +564,7 @@ def transcribe_local_whisper(audio_path: str, update_status=None):
         raise RuntimeError(
             "Video không có phụ đề YouTube và bộ nhận diện giọng nói faster-whisper chưa được cài đặt."
         ) from exc
-    model, device, compute_type = _get_whisper_model(update_status)
-    if update_status:
-        label = "NVIDIA CUDA" if device == "cuda" else "CPU (không cần CUDA)"
-        update_status(f"Đang chạy Whisper {get_whisper_model_source()} trên {label}, chế độ {compute_type}...")
-
-    segments, info = model.transcribe(audio_path, beam_size=1)
+    segments, info = _transcribe_whisper(audio_path, update_status, beam_size=1)
     results = []
     for s in segments:
         results.append({
@@ -541,8 +572,6 @@ def transcribe_local_whisper(audio_path: str, update_status=None):
             "duration": s.end - s.start,
             "text": s.text.strip()
         })
-        if update_status and len(results) % 20 == 0:
-            update_status(f"Whisper đang xử lý transcript: {len(results)} đoạn...")
     if update_status:
         update_status(f"Whisper hoàn tất: {len(results)} đoạn transcript.")
     return results

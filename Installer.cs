@@ -82,25 +82,13 @@ internal sealed class InstallerForm : Form
             Directory.CreateDirectory(target);
             UpdateUi("Stopping an earlier test instance…", 0);
             StopRunningApplication(target);
+            BackupMutableState(target);
             using (Stream payload = Assembly.GetExecutingAssembly().GetManifestResourceStream("HighlightDesktopTest.Payload"))
             {
                 if (payload == null) throw new InvalidOperationException("Installer payload is missing.");
                 using (var archive = new ZipArchive(payload, ZipArchiveMode.Read))
                 {
-                    int index = 0;
-                    foreach (var entry in archive.Entries)
-                    {
-                        index++;
-                        string relative = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
-                        string output = Path.GetFullPath(Path.Combine(target, relative));
-                        string root = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-                        if (!output.StartsWith(root, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Unsafe package path: " + entry.FullName);
-                        UpdateUi("Installing: " + entry.FullName, archive.Entries.Count == 0 ? 0 : index * 100 / archive.Entries.Count);
-                        if (String.IsNullOrEmpty(entry.Name)) { Directory.CreateDirectory(output); continue; }
-                        Directory.CreateDirectory(Path.GetDirectoryName(output));
-                        if (ShouldPreserve(relative) && File.Exists(output)) continue;
-                        ExtractWithRetry(entry, output);
-                    }
+                    ExtractArchive(archive, target, UpdateUi);
                 }
             }
 
@@ -128,12 +116,81 @@ internal sealed class InstallerForm : Form
 
     private static bool ShouldPreserve(string relative)
     {
-        string path = relative.Replace('\\', '/').ToLowerInvariant();
+        string path = NormalizePackagePath(relative).ToLowerInvariant();
         return path == "config.json" || path == "config/website_config.json" ||
                path == "posts.json" || path == "jobs.json" || path == "pages.json" ||
                path == "page_groups.json" || path == "tokens_vault.json" ||
+               path == "token_groups.json" || path == "posted_clips.json" ||
+               path == "crawled_videos.json" || path == "posts.json.bak" ||
+               path.StartsWith("posts.history.") ||
                path.StartsWith("downloads/") || path.StartsWith("output/") ||
                path.StartsWith("chrome_profile/") || path.StartsWith("data/");
+    }
+
+    private static string NormalizePackagePath(string relative)
+    {
+        // bsdtar packages the stage as ./posts.json. Compare the canonical
+        // member name, or upgrades replace populated user ledgers with seeds.
+        var parts = new System.Collections.Generic.List<string>();
+        foreach (string part in relative.Replace('\\', '/').Split('/'))
+        {
+            if (part == "" || part == ".") continue;
+            if (part == "..") throw new InvalidDataException("Unsafe package path: " + relative);
+            parts.Add(part);
+        }
+        return String.Join("/", parts.ToArray());
+    }
+
+    private static void ExtractArchive(ZipArchive archive, string target, Action<string, int> update)
+    {
+        string root = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        // Validate the whole archive before replacing any application files.
+        foreach (var entry in archive.Entries)
+        {
+            string relative = NormalizePackagePath(entry.FullName);
+            if (relative == "" && String.IsNullOrEmpty(entry.Name)) continue;
+            string output = Path.GetFullPath(Path.Combine(target, relative.Replace('/', Path.DirectorySeparatorChar)));
+            if (!output.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Unsafe package path: " + entry.FullName);
+        }
+        int index = 0;
+        foreach (var entry in archive.Entries)
+        {
+            index++;
+            string relative = NormalizePackagePath(entry.FullName);
+            if (relative == "" && String.IsNullOrEmpty(entry.Name)) continue;
+            string output = Path.GetFullPath(Path.Combine(target, relative.Replace('/', Path.DirectorySeparatorChar)));
+            update("Installing: " + relative, index * 100 / archive.Entries.Count);
+            if (String.IsNullOrEmpty(entry.Name)) { Directory.CreateDirectory(output); continue; }
+            Directory.CreateDirectory(Path.GetDirectoryName(output));
+            if (ShouldPreserve(relative) && File.Exists(output)) continue;
+            ExtractWithRetry(entry, output);
+        }
+    }
+
+    private static void BackupMutableState(string target)
+    {
+        if (!File.Exists(Path.Combine(target, "posts.json")) && !File.Exists(Path.Combine(target, "config.json"))) return;
+        string backup = Path.Combine(target, "update_backups", DateTime.Now.ToString("yyyyMMdd_HHmmss") + "_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(backup);
+        foreach (string file in Directory.GetFiles(target))
+        {
+            string name = Path.GetFileName(file);
+            if (ShouldPreserve(name) && (name.EndsWith(".json", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".bak", StringComparison.OrdinalIgnoreCase)))
+                File.Copy(file, Path.Combine(backup, name), false);
+        }
+        foreach (string directory in new[] { "config", "data" })
+        {
+            string source = Path.Combine(target, directory);
+            if (!Directory.Exists(source)) continue;
+            foreach (string file in Directory.GetFiles(source, "*.json", SearchOption.AllDirectories))
+            {
+                string relative = file.Substring(Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar).Length + 1);
+                string destination = Path.Combine(backup, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                File.Copy(file, destination, false);
+            }
+        }
     }
 
     private static void StopRunningApplication(string target)

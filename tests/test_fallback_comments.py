@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from src.content_packages import fallback_package
 from src.fallback_comments import LEAD_INS, fallback_first_comment
@@ -27,6 +28,35 @@ class FallbackCommentTests(unittest.TestCase):
         url = "https://example.test/blog/one"
         self.assertEqual(generate_curiosity_comment_with_llm("Video", url, enable_llm=False),
                          fallback_first_comment("Video", url))
+
+    def test_retired_task_model_uses_main_model_before_template(self):
+        from src.publisher import website_publisher as publisher
+        url = "https://example.test/blog/one"
+        retired = mock.Mock(status_code=200)
+        retired.json.return_value = {"choices": [{"message": {"content": "Gemini 3.5 Flash is no longer available. Please switch to Gemini 3.7 Flash."}}]}
+        valid = mock.Mock(status_code=200)
+        valid.json.return_value = {"choices": [{"message": {"content": "Watch the full recording: " + url}}]}
+        cfg = {"api_base": "https://router.test/v1", "api_key": "fixture", "model": "working",
+               "task_models": {"first_comment": "retired"}}
+        with mock.patch.object(publisher, "get_llm_config", return_value=cfg), mock.patch.object(
+            publisher, "_text_chat_request", side_effect=[retired, valid]
+        ) as request:
+            comment = publisher.generate_curiosity_comment_with_llm("Video", url)
+        self.assertEqual(comment, "Watch the full recording: " + url)
+        self.assertEqual([call.args[2] for call in request.call_args_list], ["retired", "working"])
+        self.assertNotIn("no longer available", comment)
+
+    def test_retired_main_model_returns_valid_template_not_provider_notice(self):
+        from src.publisher import website_publisher as publisher
+        url = "https://example.test/blog/one"
+        retired = mock.Mock(status_code=200)
+        retired.json.return_value = {"choices": [{"message": {"content": "Gemini 3.5 Flash is no longer available. Please switch to Gemini 3.7 Flash."}}]}
+        with mock.patch.object(publisher, "get_llm_config", return_value={
+            "api_base": "https://router.test/v1", "api_key": "fixture", "model": "retired"
+        }), mock.patch.object(publisher, "_text_chat_request", return_value=retired) as request:
+            comment = publisher.generate_curiosity_comment_with_llm("Video", url)
+        self.assertEqual(comment, fallback_first_comment("Video", url))
+        self.assertEqual(request.call_count, 1)
 
 
 if __name__ == "__main__":

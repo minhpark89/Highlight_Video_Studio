@@ -87,13 +87,17 @@ class Preview31ReconciliationTests(unittest.TestCase):
             }]), encoding="utf-8")
             with mock.patch.object(packages, "QUEUE_FILE", queue), mock.patch.object(
                 packages, "resolve_article_url", return_value=("https://example.test/article", "ready", "")
-            ), mock.patch.object(packages, "generate_package") as generate, mock.patch.object(packages, "_apply_to_posts"):
+            ), mock.patch.object(packages, "generate_package", return_value={
+                "first_comment": "LLM comment https://example.test/article", "source": "llm", "first_comment_source": "llm"
+            }) as generate, mock.patch.object(packages, "_apply_to_posts"):
                 self.assertEqual(packages.retry_package("library-1")["status"], "queued")
                 result = packages.process_content_packages_once()["item"]
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["result"]["caption"], "Existing caption")
             self.assertIn("https://example.test/article", result["result"]["first_comment"])
-            generate.assert_not_called()
+            generate.assert_called_once()
+            self.assertEqual(generate.call_args.kwargs["component"], "first_comment")
+            self.assertEqual(result["result"]["article_html"], "Existing article")
 
     def test_reel_check_requires_published_phase_and_accepts_relative_permalink(self):
         from src.publisher.meta_reel_poster import MetaReelPoster

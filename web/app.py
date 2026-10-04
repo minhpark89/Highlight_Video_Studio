@@ -454,7 +454,30 @@ MAX_CONCURRENT_JOBS = AUTO_CONCURRENT_JOBS
 JOB_QUEUE = Queue()
 ACTIVE_JOB_IDS = set()
 CANCELLED_JOB_IDS = set()
-IS_QUEUE_PAUSED = False
+RENDER_QUEUE_STATE_FILE = DATA_ROOT / "data" / "render_queue_state.json"
+
+
+def load_render_queue_pause():
+    try:
+        return json.loads(RENDER_QUEUE_STATE_FILE.read_text(encoding="utf-8")).get("is_paused") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def set_render_queue_pause(paused):
+    global IS_QUEUE_PAUSED
+    with QUEUE_LOCK:
+        RENDER_QUEUE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = RENDER_QUEUE_STATE_FILE.with_name(f"render_queue_state.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps({"is_paused": bool(paused)}), encoding="utf-8")
+            replace_with_retry(temporary, RENDER_QUEUE_STATE_FILE)
+        finally:
+            temporary.unlink(missing_ok=True)
+        IS_QUEUE_PAUSED = bool(paused)
+
+
+IS_QUEUE_PAUSED = load_render_queue_pause()
 QUEUE_LOCK = threading.Lock()
 
 
@@ -3541,14 +3564,12 @@ def api_queue_status():
 
 @app.route("/api/queue/pause", methods=["POST"])
 def api_queue_pause():
-    global IS_QUEUE_PAUSED
-    IS_QUEUE_PAUSED = True
+    set_render_queue_pause(True)
     return jsonify({"success": True, "is_paused": True, "message": "Đã tạm dừng nhận link mới từ hàng đợi."})
 
 @app.route("/api/queue/resume", methods=["POST"])
 def api_queue_resume():
-    global IS_QUEUE_PAUSED
-    IS_QUEUE_PAUSED = False
+    set_render_queue_pause(False)
     return jsonify({"success": True, "is_paused": False, "message": "Đã tiếp tục xử lý hàng đợi."})
 
 @app.route("/api/queue/clear", methods=["POST"])
@@ -4026,19 +4047,36 @@ def apply_ready_package_to_post(post, package):
     """Keep in-memory scheduled entries consistent with a reused persisted package."""
     result = package.get("result") or {}
     post["content_package_source"] = result.get("source")
-    post["first_comment_source"] = result.get("first_comment_source") or ("template_fallback" if result.get("first_comment") and str(result.get("source") or "").startswith("no_llm") else "")
     post["content"] = result.get("caption") or post.get("content", "")
     post["title"] = result.get("hero_title") or post.get("title", "")
     post["article_url"] = package.get("article_url") or post.get("article_url", "")
     post["website_status"] = package.get("website_status", post.get("website_status"))
     post["website_error"] = package.get("website_error", "")
     post["website_embed_status"] = package.get("embed_status") or "unknown"
-    if not (post.get("status") == "published" and post.get("first_comment_status") == "posted") and not post.get("first_comment_snapshot"):
+    if post.get("first_comment_status") != "posted" and not post.get("first_comment_snapshot"):
         post["first_comment"] = result.get("first_comment") or post.get("first_comment", "")
-    if post["first_comment"]:
-        post["first_comment_snapshot"] = post["first_comment"]
-        post["first_comment_profile_id"] = package.get("first_comment_profile_id") or result.get("first_comment_profile_id") or post.get("first_comment_profile_id", "")
-        post["first_comment_status"] = "ready"
+        if post.get("first_comment"):
+            post["first_comment_snapshot"] = post["first_comment"]
+            post["first_comment_source"] = result.get("first_comment_source") or ("template_fallback" if str(result.get("source") or "").startswith("no_llm") else "")
+            post["first_comment_profile_id"] = package.get("first_comment_profile_id") or result.get("first_comment_profile_id") or post.get("first_comment_profile_id", "")
+            post["first_comment_profile_name"] = result.get("first_comment_profile_name", "")
+            post["first_comment_model"] = result.get("first_comment_model", "")
+            post["first_comment_fallback_reason"] = sanitize_error(result.get("first_comment_fallback_reason", ""))
+            if post.get("first_comment_status") != "pending":
+                post["first_comment_status"] = "ready_after_publish" if post.get("status") in ("published", "processing") else "ready"
+
+
+def content_studio_article_url(payload):
+    url = str(payload.get("article_url") or "").strip()
+    if url:
+        try:
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+                raise ValueError()
+            parsed.port  # Reject malformed ports as well.
+        except ValueError:
+            raise ValueError("URL bài viết phải là HTTP(S) hợp lệ, không chứa tài khoản hoặc mật khẩu.") from None
+    return url
 
 # ---------------------------------------------------------------------------
 # Content Studio: background Content Package queue for rendered clips.
@@ -4047,7 +4085,7 @@ def apply_ready_package_to_post(post, package):
 @app.route("/api/content-studio/queue", methods=["GET"])
 def api_content_studio_queue():
     items = list_packages()
-    llm_counts = {"success": 0, "fallback": 0, "pending": 0, "failed": 0, "disabled": 0, "unknown": 0}
+    llm_counts = {"success": 0, "fallback": 0, "pending": 0, "failed": 0, "disabled": 0, "unknown": 0, "blocked_website": 0}
     for item in items:
         item["component_statuses"] = component_statuses(item)
         item["needs_attention"] = package_needs_attention(item)
@@ -4060,6 +4098,8 @@ def api_content_studio_queue():
             llm_status = "fallback"
         elif item.get("status") in ("queued", "running"):
             llm_status = "pending"
+        elif item.get("status") in ("failed", "retryable") and item.get("website_status") == "failed":
+            llm_status = "blocked_website"
         elif item.get("status") in ("failed", "retryable"):
             llm_status = "failed"
         else:
@@ -4149,11 +4189,13 @@ def api_regenerate_first_comment_profile(profile_id):
         return jsonify({"success": False, "error": "Profile not found."}), 404
     try:
         from src.content_builder import get_llm_candidates, _get_task_model
-        from src.llm_response import json_from_chat_response
+        from src.llm_response import chat_model_unavailable, json_from_chat_response
         cfg = get_llm_candidates()
         endpoint = str(cfg.get("configured_base") or "").strip()
         model = _get_task_model("first_comment") or cfg.get("model")
-        if not endpoint or not model or not cfg.get("api_key"):
+        main_model = str(cfg.get("model") or "").strip()
+        candidate_models = list(dict.fromkeys(item for item in (model, main_model) if item))
+        if not endpoint or not candidate_models or not cfg.get("api_key"):
             return jsonify({"success": False, "error": "Configure a text LLM endpoint, model, and key before generating profile samples."}), 400
         prompt = (
             "Return JSON only as {\"templates\":[30 distinct strings]}. Write short reusable First Comment lead-ins "
@@ -4163,13 +4205,22 @@ def api_regenerate_first_comment_profile(profile_id):
         )
         headers = {"Content-Type": "application/json", "Accept": "application/json",
                    "Authorization": f"Bearer {cfg['api_key']}"}
-        response = requests.post(f"{endpoint.rstrip('/')}/chat/completions", headers=headers,
-                                 json={"model": model, "messages": [{"role": "user", "content": prompt}],
-                                       "max_tokens": 1800, "temperature": 0.65}, timeout=45)
-        if response.status_code != 200:
-            raise RuntimeError(f"Text LLM returned HTTP {response.status_code}.")
-        result = json_from_chat_response(response)
+        result = None
+        for candidate_model in candidate_models:
+            response = requests.post(f"{endpoint.rstrip('/')}/chat/completions", headers=headers,
+                                     json={"model": candidate_model, "messages": [{"role": "user", "content": prompt}],
+                                           "max_tokens": 1800, "temperature": 0.65}, timeout=45)
+            if response.status_code != 200:
+                raise RuntimeError(f"Text LLM returned HTTP {response.status_code}.")
+            if chat_model_unavailable(response):
+                continue
+            result = json_from_chat_response(response)
+            break
+        if result is None:
+            raise RuntimeError("Configured First Comment model is unavailable; choose an active text model or repair the task model setting.")
         samples = result.get("templates") if isinstance(result, dict) else None
+        from src.first_comment_profiles import _valid_lead_ins
+        samples = _valid_lead_ins(samples, minimum=30)
         profile = normalize_profile({**profile, "lead_ins": samples}, profile_id=profile_id)
         store["profiles"] = [profile if item.get("id") == profile_id else item for item in store["profiles"]]
         saved = save_profile_store(FIRST_COMMENT_PROFILES_FILE, store)
@@ -4194,11 +4245,16 @@ def api_content_studio_generate():
         return jsonify({"success": False, "error": "mode phải là auto, llm hoặc no_llm"}), 400
     component = str(payload.get("component") or "").strip()
     try:
+        article_url = content_studio_article_url(payload)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    try:
         result = generate_package(
             title,
             str(payload.get("summary") or ""),
             str(payload.get("video_url") or ""),
             mode=mode,
+            article_url=article_url,
             component=component,
             profile_id=str(payload.get("first_comment_profile_id") or ""),
         )
@@ -4213,6 +4269,10 @@ def api_content_studio_enqueue():
     title = str(payload.get("title") or "").strip()
     if not clip and not title:
         return jsonify({"success": False, "error": "Cần clip_filename hoặc title để xếp hàng"}), 400
+    try:
+        article_url = content_studio_article_url(payload)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
     item = enqueue_content_package(
         clip_filename=clip,
         title=title or clip,
@@ -4220,8 +4280,8 @@ def api_content_studio_enqueue():
         video_url=str(payload.get("video_url") or ""),
         mode=str(payload.get("mode") or "auto"),
         post_ids=list(payload.get("post_ids") or []),
-        article_url=str(payload.get("article_url") or ""),
-        create_website_article=bool(payload.get("create_website_article")),
+        article_url=article_url,
+        create_website_article=bool(payload.get("create_website_article")) and not article_url,
         first_comment_profile_id=str(payload.get("first_comment_profile_id") or ""),
     )
     start_content_package_worker()

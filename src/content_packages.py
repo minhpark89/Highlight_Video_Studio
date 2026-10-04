@@ -28,6 +28,8 @@ _WORKER_THREAD = None
 _WORKER_LOCK = threading.Lock()
 _SECRET_RE = re.compile(r"(access_token|page_token|token|api_key|secret|password|authorization)\s*[=:]\s*[^\s&\"',]+", re.I)
 QUOTA_CODES = {402, 429}
+COMMENT_METADATA = ("first_comment_source", "first_comment_profile_id", "first_comment_profile_name",
+                    "first_comment_model", "first_comment_fallback_reason")
 
 
 def sanitize_error(value, limit=400):
@@ -186,6 +188,7 @@ def _llm_package(title, summary, video_url="", article_url=""):
             )}]
             continue
         data["source"] = "llm"
+        data["llm_model"] = model
         data["first_comment_source"] = "llm" if article_url else "pending_article_url"
         record_llm_success()
         return data
@@ -218,14 +221,22 @@ def generate_package(title, summary="", video_url="", mode="auto", article_url="
             if selected_mode == "llm":
                 raise RuntimeError(reason) from None
             result = {**fallback, "source": "no_llm_error_fallback", "fallback_reason": reason}
+    if article_url and result.get("first_comment"):
+        result.setdefault("first_comment_profile_id", profile_id or profile_store.get("default_profile_id", "builtin_general"))
+        result.setdefault("first_comment_source", "template_fallback" if str(result.get("source") or "").startswith("no_llm") else "llm")
+        selected_profile = next((p for p in profile_store.get("profiles", []) if p.get("id") == result["first_comment_profile_id"]), {})
+        result["first_comment_profile_name"] = selected_profile.get("name", "")
+        result["first_comment_model"] = result.get("llm_model", "") if result["first_comment_source"] == "llm" else ""
+        result["first_comment_fallback_reason"] = ""
+        if result["first_comment_source"] == "template_fallback":
+            result["first_comment_fallback_reason"] = sanitize_error(result.get("fallback_reason") or (
+                "LLM disabled for this package" if selected_mode == "no_llm" else result.get("source", "")))
     if component:
         if component not in fallback:
             raise ValueError("Unknown content component")
         return {component: result.get(component) or fallback[component], "source": result.get("source"),
-                "first_comment_profile_id": profile_id or profile_store.get("default_profile_id", "builtin_general")}
-    if article_url and result.get("first_comment"):
-        result.setdefault("first_comment_profile_id", profile_id or profile_store.get("default_profile_id", "builtin_general"))
-        result.setdefault("first_comment_source", "template_fallback" if str(result.get("source") or "").startswith("no_llm") else "llm")
+                **{key: result.get(key, "") for key in COMMENT_METADATA},
+                "llm_model": result.get("llm_model", ""), "fallback_reason": result.get("fallback_reason", "")}
     return result
 
 
@@ -475,6 +486,9 @@ def _apply_to_posts(item):
         if not post.get("first_comment_snapshot") and post.get("first_comment_status") != "posted":
             post["first_comment_source"] = result.get("first_comment_source") or post.get("first_comment_source", "")
             post["first_comment_profile_id"] = item.get("first_comment_profile_id") or result.get("first_comment_profile_id") or post.get("first_comment_profile_id", "")
+            post["first_comment_profile_name"] = result.get("first_comment_profile_name") or post.get("first_comment_profile_name", "")
+            post["first_comment_model"] = result.get("first_comment_model") or result.get("llm_model", "")
+            post["first_comment_fallback_reason"] = sanitize_error(result.get("first_comment_fallback_reason") or result.get("fallback_reason", ""))
         post["content"] = result.get("caption") or post.get("content", "")
         if result.get("hero_title"):
             post["title"] = result["hero_title"]
@@ -485,9 +499,7 @@ def _apply_to_posts(item):
         post["video_url"] = item.get("video_url") or ""
         post["website_status"] = item.get("website_status", post.get("website_status"))
         post["website_error"] = item.get("website_error", "")
-        if result.get("first_comment") and not (
-            post.get("status") == "published" and post.get("first_comment_status") == "posted"
-        ) and not post.get("first_comment_snapshot"):
+        if result.get("first_comment") and post.get("first_comment_status") != "posted" and not post.get("first_comment_snapshot"):
             previous_comment_status = post.get("first_comment_status")
             post["first_comment"] = result["first_comment"]
             post["first_comment_snapshot"] = result["first_comment"]
@@ -549,6 +561,8 @@ def _apply_failure_to_posts(item):
         post["website_status"] = item.get("website_status") or post.get("website_status") or "not_configured"
         post["website_error"] = item.get("website_error", "")
         post["content_package_error"] = item.get("error", "")
+        if post.get("first_comment_status") == "posted" or post.get("first_comment_snapshot"):
+            continue
         post["first_comment_source"] = "failed"
         if not post.get("first_comment"):
             post["first_comment_status"] = "generation_failed"
@@ -577,12 +591,16 @@ def retry_package_component(package_id, component, mode=None):
         profile_store=snapshot.get("first_comment_profile_store"),
     )
     if component == "first_comment" and str(result.get(component) or "").count(snapshot["article_url"]) != 1:
-        result[component] = fallback_package(
-            snapshot.get("title", ""), snapshot.get("summary", ""), snapshot["article_url"],
-            snapshot.get("first_comment_profile_id", ""),
-            snapshot.get("first_comment_profile_store") or load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json"),
-        )[component]
-        result["source"] = "template_fallback"
+        reason = "First Comment must contain the article URL exactly once"
+        if (mode or snapshot.get("mode", "auto")) == "llm":
+            raise ValueError(reason)
+        store = snapshot.get("first_comment_profile_store") or load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json")
+        profile_id = snapshot.get("first_comment_profile_id") or store.get("default_profile_id", "builtin_general")
+        profile = next((p for p in store.get("profiles", []) if p.get("id") == profile_id), {})
+        result.update({"first_comment": fallback_package(snapshot.get("title", ""), snapshot.get("summary", ""),
+            snapshot["article_url"], profile_id, store)["first_comment"], "first_comment_source": "template_fallback",
+            "first_comment_profile_id": profile_id, "first_comment_profile_name": profile.get("name", ""),
+            "first_comment_model": "", "first_comment_fallback_reason": reason})
     with _LOCK:
         items = _read(QUEUE_FILE, [])
         item = next((entry for entry in items if entry.get("id") == package_id), None)
@@ -591,7 +609,7 @@ def retry_package_component(package_id, component, mode=None):
         merged = item.get("result") if isinstance(item.get("result"), dict) else {}
         merged[component] = result.get(component)
         if component == "first_comment":
-            merged["first_comment_source"] = "llm" if result.get("source") == "llm" else "template_fallback"
+            merged.update({key: result.get(key, "") for key in COMMENT_METADATA})
         else:
             merged["source"] = result.get("source", "unknown")
         # A title/comment-only retry cannot clear an unrelated CMS failure.
@@ -704,12 +722,14 @@ def _process_new_content_package(item):
         if requires_comment:
             comment = str(result.get("first_comment") or "").strip()
             if not comment or comment.count(article_url) != 1:
-                result["first_comment"] = fallback_package(
-                    item["title"], item.get("summary", ""), article_url,
-                    item.get("first_comment_profile_id", ""),
-                    item.get("first_comment_profile_store") or load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json"),
-                )["first_comment"]
-                result["first_comment_source"] = "template_fallback"
+                comment_result = generate_package(
+                    item["title"], item.get("summary", ""), item.get("video_url", ""),
+                    mode=item.get("mode", "auto"), article_url=article_url, component="first_comment",
+                    profile_id=item.get("first_comment_profile_id", ""),
+                    profile_store=item.get("first_comment_profile_store"),
+                )
+                result["first_comment"] = comment_result.get("first_comment", "")
+                result.update({key: comment_result.get(key, "") for key in COMMENT_METADATA})
             elif not result.get("first_comment_source"):
                 result["first_comment_source"] = "template_fallback" if str(result.get("source") or "").startswith("no_llm") else "llm"
             if not result.get("first_comment") or result["first_comment"].count(article_url) != 1:
