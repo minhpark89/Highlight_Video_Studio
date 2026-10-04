@@ -57,3 +57,17 @@ Use the installer to update the existing installation. It backs up and preserves
 - Local support: `E:/OPENCLAW/BOB/support/content-studio1/`; its `tools/` contains live/image probes, isolated UI smoke and installer payload verification. Evidence has no raw provider credentials.
 
 Previous checkpoint: `checkpoints/2026-10-04-dashboard-insights1.md`. Use a new revision for any later changes. This checkpoint describes a local installer delivery; GitHub publication is not recorded as completed.
+
+
+## Final local installer verification
+
+- Packaged code commit: `08727b4d8d1b93f7177b04c277e8010a32f4c7d8`, `source_dirty=false`.
+- Installer: `release/Highlight_Desktop_Test_Setup_v1.1.9-content-studio1.exe`.
+- Size: **680743936 bytes**.
+- SHA-256: **77e9e57aab3548ea451df1f47fcd02b019303fb6d7b4168b161921a3ee178bbd**; the adjacent `.sha256` file matches.
+- Payload: **4431 entries**. The verifier checked 18 packaged source files against the checkout, including both identical HTML mirrors, Content Studio, article formatting, Website publishing, token audit and server entrypoint. Post seed is empty; runtime state and credential values are absent.
+- Full test suite and all release gate groups completed before the final clean-commit packaging. The final packaging used `-SkipTests` to avoid repeating these completed checks; it retained the packaging guards and all payload verification.
+- A standalone copy of this checkpoint is saved as `release/CODEX_CHECKPOINT_v1.1.9-content-studio1.md`.
+- Installer is ready locally. The running user installation has not been replaced, and this revision has not been published to GitHub.
+
+Recheck payload with `support/content-studio1/tools/verify_release.ps1 -ExpectedCommit 08727b4d8d1b93f7177b04c277e8010a32f4c7d8` from the workspace root. After this documentation-only commit, the release identity intentionally remains the packaged code commit above.
