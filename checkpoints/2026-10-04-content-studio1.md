@@ -71,3 +71,14 @@ Previous checkpoint: `checkpoints/2026-10-04-dashboard-insights1.md`. Use a new 
 - Installer is ready locally. The running user installation has not been replaced, and this revision has not been published to GitHub.
 
 Recheck payload with `support/content-studio1/tools/verify_release.ps1 -ExpectedCommit 08727b4d8d1b93f7177b04c277e8010a32f4c7d8` from the workspace root. After this documentation-only commit, the release identity intentionally remains the packaged code commit above.
+
+
+## Follow-up audit after user screenshot
+
+The screenshot was taken from the still-running prior installation at `http://127.0.0.1:60123` (`E:\OPENCLAW\BOB\Highlight destop test\runtime\python.exe`). A read-only POST to that old process still returned the old `CMS image endpoint does not support video upload` message, and its HTML still showed `Ki?m tra upload video` / `X? l? 1 m?c ngay`. This is evidence of an un-updated runtime, not the new source or installer. The new installer must be applied before testing the updated UI.
+
+The clean source route was exercised with the real CMS configuration and read-only CMS access: HTTP 200, `success=true`, `method=youtube_embed`, `status=embed_ready`, `authenticated=true`, `video_upload_supported=false`. The updated UI says **Ki?m tra ???ng video**, explains YouTube embedding versus SCP, and names the queue action **Kh?i ??ng h?ng ??i**. It never calls the CMS image-only MP4 uploader in CMS mode.
+
+The new `support/content-studio1/tools/completion_audit.py` assembled one article using the configured providers and captured all publication arguments without posting a CMS article. It verified text model `ag/gemini-3.6-flash-high` and image model `ag/gemini-3.1-flash-image` were both called once, with 12.28 seconds of overlap. The resulting package contained 862 words, 41 one-sentence paragraphs, three images, a model-generated hero used as `image_url`, two original-video frames, and the original YouTube iframe after the article body. CMS public article verifiers passed against the captured HTML. Forced text-provider failure produced an 829-word title-based fallback with the title, three images, iframe and full-video CTA.
+
+A fresh read-only provider probe then returned a valid normalized image-model thumbnail and a 903-word LLM article in 30.72 seconds; CMS connection remained successful. It made zero Meta writes and published zero test CMS articles. The UI smoke now additionally clicks **Kh?i ??ng h?ng ??i** and verifies the non-blocking feedback, then submits a batch while preserving the selected First Comment profile, niche and rotation strategy.
