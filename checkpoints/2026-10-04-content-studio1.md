@@ -56,7 +56,7 @@ Use the installer to update the existing installation. It backs up and preserves
 - `tests/test_content_studio_pipeline.py`: rotation, concurrency fencing, shared CMS package, quick generation, square image normalization and token counts.
 - Local support: `E:/OPENCLAW/BOB/support/content-studio1/`; its `tools/` contains live/image probes, isolated UI smoke and installer payload verification. Evidence has no raw provider credentials.
 
-Previous checkpoint: `checkpoints/2026-10-04-dashboard-insights1.md`. Use a new revision for any later changes. This checkpoint describes a local installer delivery; GitHub publication is not recorded as completed.
+Previous checkpoint: `checkpoints/2026-10-04-dashboard-insights1.md`. Use a new revision for any later changes. GitHub publication status and download links are recorded below.
 
 
 ## Final local installer verification
@@ -75,10 +75,27 @@ Recheck payload with `support/content-studio1/tools/verify_release.ps1 -Expected
 
 ## Follow-up audit after user screenshot
 
-The screenshot was taken from the still-running prior installation at `http://127.0.0.1:60123` (`E:\OPENCLAW\BOB\Highlight destop test\runtime\python.exe`). A read-only POST to that old process still returned the old `CMS image endpoint does not support video upload` message, and its HTML still showed `Ki?m tra upload video` / `X? l? 1 m?c ngay`. This is evidence of an un-updated runtime, not the new source or installer. The new installer must be applied before testing the updated UI.
+The screenshot was taken from the still-running prior installation at `http://127.0.0.1:60123` (`E:\OPENCLAW\BOB\Highlight destop test\runtime\python.exe`). A read-only POST to that old process still returned the old `CMS image endpoint does not support video upload` message, and its HTML still showed `Kiểm tra upload video` / `Xử lý 1 mục ngay`. This is evidence of an un-updated runtime, not the new source or installer. The new installer must be applied before testing the updated UI.
 
-The clean source route was exercised with the real CMS configuration and read-only CMS access: HTTP 200, `success=true`, `method=youtube_embed`, `status=embed_ready`, `authenticated=true`, `video_upload_supported=false`. The updated UI says **Ki?m tra ???ng video**, explains YouTube embedding versus SCP, and names the queue action **Kh?i ??ng h?ng ??i**. It never calls the CMS image-only MP4 uploader in CMS mode.
+The clean source route was exercised with the real CMS configuration and read-only CMS access: HTTP 200, `success=true`, `method=youtube_embed`, `status=embed_ready`, `authenticated=true`, `video_upload_supported=false`. The updated UI says **Kiểm tra đường video**, explains YouTube embedding versus SCP, and names the queue action **Khởi động hàng đợi**. It never calls the CMS image-only MP4 uploader in CMS mode.
 
 The new `support/content-studio1/tools/completion_audit.py` assembled one article using the configured providers and captured all publication arguments without posting a CMS article. It verified text model `ag/gemini-3.6-flash-high` and image model `ag/gemini-3.1-flash-image` were both called once, with 12.28 seconds of overlap. The resulting package contained 862 words, 41 one-sentence paragraphs, three images, a model-generated hero used as `image_url`, two original-video frames, and the original YouTube iframe after the article body. CMS public article verifiers passed against the captured HTML. Forced text-provider failure produced an 829-word title-based fallback with the title, three images, iframe and full-video CTA.
 
-A fresh read-only provider probe then returned a valid normalized image-model thumbnail and a 903-word LLM article in 30.72 seconds; CMS connection remained successful. It made zero Meta writes and published zero test CMS articles. The UI smoke now additionally clicks **Kh?i ??ng h?ng ??i** and verifies the non-blocking feedback, then submits a batch while preserving the selected First Comment profile, niche and rotation strategy.
+A fresh read-only provider probe then returned a valid normalized image-model thumbnail and a 903-word LLM article in 30.72 seconds; CMS connection remained successful. It made zero Meta writes and published zero test CMS articles. The UI smoke now additionally clicks **Khởi động hàng đợi** and verifies the non-blocking feedback, then submits a batch while preserving the selected First Comment profile, niche and rotation strategy.
+
+## GitHub release and next-session entrypoint
+
+The user has authorized publication of revision `v1.1.9-content-studio1` so they can download and test it. Publication is in progress; the final verification section will record the release ID, uploaded asset digests and public download results. The installer already passed payload verification and retains packaged commit `08727b4d8d1b93f7177b04c277e8010a32f4c7d8`. The release tag will identify that exact commit; later branch commits contain documentation and verification evidence only.
+
+- Release: https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.1.9-content-studio1
+- Installer: https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.1.9-content-studio1/Highlight_Desktop_Test_Setup_v1.1.9-content-studio1.exe
+- SHA-256 file: https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.1.9-content-studio1/Highlight_Desktop_Test_Setup_v1.1.9-content-studio1.sha256
+- Standalone checkpoint: https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.1.9-content-studio1/CODEX_CHECKPOINT_v1.1.9-content-studio1.md
+- Latest checkpoint: https://github.com/minhpark89/Highlight_Video_Studio/blob/release/v1.1.9/CODEX_CHECKPOINT_LATEST.md
+- Source branch: `release/v1.1.9`; start a follow-up session by reading this checkpoint and asking for the user's test result on this installed revision.
+
+Do not overwrite this release or move its tag for a future fix. Preserve configuration, tokens, Page bindings, posts, downloads, outputs and `data/`. Read `build_identity.json` from the active installation before investigating; the visible `1.1.9` header alone cannot identify a revision. The prior live installation was left running at port 60123 during publication, and no production CMS article or Meta post was created by these release checks.
+
+Useful targeted checks: `python -m pytest tests/test_content_studio_pipeline.py tests/test_website_ui_regression.py tests/test_text_auth_package_reuse.py tests/test_youtube_embed_publish.py -q --no-header`; full suite: `python -m pytest -q --no-header`. Always keep the two HTML mirrors byte-identical. A Content Studio item that says `website_status=failed` needs its source video/configuration/CMS failure inspected before retrying; preserve the existing stable slug and any article URL rather than inventing a new one.
+
+For token-count reports, compare the original Token ID in `posts.json` with current `pages.json` and group-specific `page_token_bindings`. Keep Pages-with-posts and configured Pages separate, and do not reassign credentials as a display fix. Provider/image failures are independently diagnosed: verify the configured text model and image model, inspect sanitized HTTP status/fallback metadata, then test an isolated package before changing production state.
