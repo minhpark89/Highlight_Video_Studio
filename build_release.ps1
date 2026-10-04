@@ -42,7 +42,8 @@ if (-not $SkipTests) {
             @("tests/test_page_token_sync.py", "tests/test_parallel_publishing.py", "tests/test_posting_schedule.py"),
             @("tests/test_youtube_embed_publish.py", "tests/test_scheduling_publish_flow.py"),
             @("tests/test_meta_native_handoff.py", "tests/test_meta_queue_handoff.py", "tests/test_meta_scheduling_profiles.py", "tests/test_fallback_comments.py", "tests/test_preview26_source_metadata.py", "tests/test_preview28_long_article_fallback.py"),
-            @("tests/test_first_comment_audit.py", "tests/test_whisper_lazy_fallback.py", "tests/test_installer_data_preservation.py", "tests/test_preview23_image_sources.py")
+            @("tests/test_first_comment_audit.py", "tests/test_whisper_lazy_fallback.py", "tests/test_installer_data_preservation.py", "tests/test_preview23_image_sources.py"),
+            @("tests/test_content_studio_pipeline.py", "tests/test_website_ui_regression.py")
         )
         foreach ($group in $testGroups) {
             & python -m pytest @group -q --no-header

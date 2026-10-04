@@ -2969,7 +2969,16 @@ def api_test_video_uploader():
     if not HAS_WEBSITE_SVC:
         return jsonify({"success": False, "error": "Bản cài thiếu WebsiteArticleService"}), 500
     try:
-        return jsonify(WebsiteArticleService(WEBSITE_CFG_FILE).test_video_uploader())
+        service = WebsiteArticleService(WEBSITE_CFG_FILE)
+        settings = service._video_settings()
+        if settings.get("method") == "cms":
+            connection = service.test_connection()
+            return jsonify({"success": True, "method": "youtube_embed", "status": "embed_ready",
+                            "authenticated": bool(connection.get("authenticated")),
+                            "video_upload_supported": False, "requires_original_youtube": True,
+                            "message": "CMS kết nối tốt. Video YouTube gốc sẽ được nhúng vào bài; ảnh được upload riêng. "
+                                       "Video không có nguồn YouTube cần cấu hình SCP để lưu bản đầy đủ."})
+        return jsonify(service.test_video_uploader())
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 502
 
@@ -3194,6 +3203,8 @@ def api_get_posts():
     from web.dashboard import post_bucket
     from web.meta_diagnostics import diagnose
     posts = load_posts()
+    from web.token_audit import token_audit
+    token_audit(posts, page_manager.list_pages(), token_vault.list_tokens(mask=True), load_token_groups())
     for post in posts:
         post["post_bucket"] = post_bucket(post)
         if post.get("status") == "processing":
@@ -3225,7 +3236,15 @@ def api_get_posts():
         p_id = p.get("id", "")
         return (c_at, s_at, p_id)
     posts = sorted(posts, key=_sort_key, reverse=True)
-    return jsonify(posts)
+    # Raw publishing credentials are server-side data, never UI payloads.
+    return jsonify([{key: value for key, value in post.items() if key not in ("token", "page_token", "access_token")} for post in posts])
+
+
+@app.route("/api/posts/token-audit", methods=["GET"])
+def api_posts_token_audit():
+    from web.token_audit import token_audit
+    return jsonify({"success": True, **token_audit(load_posts(), page_manager.list_pages(),
+                                                token_vault.list_tokens(mask=True), load_token_groups())})
 
 
 @app.route("/api/posts/handoff-meta", methods=["POST"])
@@ -4373,7 +4392,7 @@ from src.content_packages import (list_packages, get_package, process_content_pa
                                  generate_package, fallback_package, circuit_status,
                                  start_content_package_worker, enqueue_content_package, sanitize_error,
                                  retry_package_component, retry_package, component_statuses,
-                                 package_needs_attention)
+                                 package_needs_attention, content_worker_settings, content_worker_status)
 
 
 def apply_ready_package_to_post(post, package):
@@ -4443,6 +4462,7 @@ def api_content_studio_queue():
     return jsonify({
         "success": True,
         "queued": sum(1 for i in items if i.get("status") == "queued"),
+        "running": sum(1 for i in items if i.get("status") == "running"),
         "ready": sum(1 for i in items if i.get("status") == "ready"),
         "failed": sum(1 for i in items if i.get("status") == "failed"),
         "retryable": sum(1 for i in items if i.get("status") == "retryable"),
@@ -4450,7 +4470,19 @@ def api_content_studio_queue():
         "items": items,
         "llm_counts": llm_counts,
         "circuit": circuit_status(),
+        "worker": content_worker_status(),
     })
+
+
+@app.route("/api/content-studio/workers", methods=["GET", "PUT"])
+def api_content_studio_workers():
+    try:
+        settings = content_worker_settings((request.json or {}).get("workers") if request.method == "PUT" else None)
+        if request.method == "PUT":
+            start_content_package_worker()
+        return jsonify({"success": True, "worker": {**content_worker_status(), **settings}})
+    except (TypeError, ValueError) as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
 
 @app.route("/api/first-comment-profiles", methods=["GET"])
@@ -4590,6 +4622,8 @@ def api_content_studio_generate():
             article_url=article_url,
             component=component,
             profile_id=str(payload.get("first_comment_profile_id") or ""),
+            niche=str(payload.get("niche") or "").strip(),
+            fallback_strategy=str(payload.get("fallback_strategy") or "rotate"),
         )
     except Exception as exc:
         return jsonify({"success": False, "error": sanitize_error(exc)}), 502
@@ -4616,6 +4650,8 @@ def api_content_studio_enqueue():
         article_url=article_url,
         create_website_article=bool(payload.get("create_website_article")) and not article_url,
         first_comment_profile_id=str(payload.get("first_comment_profile_id") or ""),
+        niche=str(payload.get("niche") or "").strip(),
+        fallback_strategy=str(payload.get("fallback_strategy") or "rotate"),
     )
     start_content_package_worker()
     return jsonify({"success": True, "item": item})
@@ -4692,6 +4728,8 @@ def api_content_studio_batch():
             clip_filename=str(clip_path), title=title, mode=mode,
             create_website_article=bool(payload.get("create_website_article")),
             first_comment_profile_id=str(payload.get("first_comment_profile_id") or ""),
+            niche=str(payload.get("niche") or "").strip(),
+            fallback_strategy=str(payload.get("fallback_strategy") or "rotate"),
         )
         created.append(created_item)
         existing_keys.update(keys)
@@ -4738,7 +4776,9 @@ def api_content_studio_fallback():
 
 @app.route("/api/content-studio/process", methods=["POST"])
 def api_content_studio_process():
-    return jsonify({"success": True, **(process_content_packages_once() or {})})
+    start_content_package_worker()
+    return jsonify({"success": True, "queued": True, "worker": content_worker_status(),
+                    "message": "Hàng đợi tự xử lý các clip đang chờ; theo dõi video và từng bước tại Content Studio."}), 202
 
 
 if __name__ == "__main__":

@@ -59,3 +59,5 @@ build/
 artifacts/canary-temp/
 artifacts/hardware_profile.json
 artifacts/render_smoke_result.json
+data/first_comment_rotation.json
+data/content_worker_settings.json

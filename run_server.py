@@ -54,6 +54,8 @@ if __name__ == "__main__":
     port = int(os.environ.get("HIGHLIGHT_PORT", "5080"))
     print(f"Highlight Video Studio starting on http://{bind_host}:{port}...")
     try:
+        from src.content_packages import start_content_package_worker
+        start_content_package_worker()
         waitress.serve(app, host=bind_host, port=port, threads=8, channel_timeout=30)
     finally:
         server_lease.release()

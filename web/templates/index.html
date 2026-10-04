@@ -421,6 +421,22 @@
     @keyframes cs-spin { to { transform: rotate(360deg); } }
     #pane-content-studio .form-control { min-width: 0; }
     #pane-content-studio .table td:last-child { white-space: nowrap; }
+    #pane-content-studio .table { width:100%; min-width:1040px; border-collapse:collapse; table-layout:fixed; }
+    #pane-content-studio .table th, #pane-content-studio .table td { padding:12px; text-align:left; vertical-align:top; border-bottom:1px solid #23304d; overflow-wrap:anywhere; }
+    #pane-content-studio .table th { color:#94a3b8; background:#0d1527; font-size:11px; }
+    #pane-content-studio .table th:nth-child(1) { width:15%; }
+    #pane-content-studio .table th:nth-child(2) { width:18%; }
+    #pane-content-studio .table th:nth-child(3) { width:7%; }
+    #pane-content-studio .table th:nth-child(4) { width:15%; }
+    #pane-content-studio .table th:nth-child(5) { width:26%; }
+    #pane-content-studio td.content-studio-actions { display:table-cell; white-space:normal; }
+    #pane-content-studio td.content-studio-actions .btn { margin-bottom:8px; white-space:normal; min-width:0; }
+    #pane-content-studio .btn-outline { background:transparent; color:#cbd5e1; border-color:#334155; }
+    #pane-content-studio .btn:disabled { opacity:.45; cursor:default; }
+    #pane-content-studio a { color:#38bdf8; }
+    #posts-token-audit table { min-width:760px; width:100%; border-collapse:collapse; }
+    #posts-token-audit th, #posts-token-audit td { padding:8px; text-align:left; vertical-align:top; border-bottom:1px solid #23304d; }
+    #posts-token-audit th { color:#94a3b8; }
     /* Grid layout */
     .row {
       display: flex;
@@ -1065,6 +1081,13 @@
             QUÁ HẠN
           </div>
 
+          <details style="margin-bottom:14px;border:1px solid #334155;border-radius:10px;padding:12px;">
+            <summary style="cursor:pointer;font-weight:700;">Đối chiếu Token → Page → bài đăng</summary>
+            <div style="color:#94a3b8;font-size:12px;margin:8px 0;">Page cấu hình là gán mặc định hiện tại; Page trong nhóm là gán riêng của Token Group. Page có bài là số Page khác nhau trong toàn bộ lịch sử/lịch chờ của token gốc.</div>
+            <div id="posts-token-audit" style="overflow-x:auto;">Đang tải thống kê token...</div>
+          </details>
+          <label for="posts-token-filter">Lọc bài theo token:</label>
+          <select id="posts-token-filter" class="form-control" style="max-width:440px;margin:8px 0 16px;" onchange="loadPostsTable({quiet:true})"><option value="">Tất cả Token</option></select>
           <!-- Bảng danh sách bài đăng chuẩn LoHa -->
           <div style="overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel-bg);">
             <table class="table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;">
@@ -1889,9 +1912,9 @@
             </div>
             <div style="border-top:1px solid #23304d; margin:20px 0 16px; padding-top:18px;">
               <div style="font-weight:800; margin-bottom:6px;"><i class="bi bi-camera-video"></i> Upload video bài viết</div>
-              <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;">Mặc định dùng upload trực tiếp qua CMS. SCP/SSH chỉ dành cho cấu hình nâng cao hoặc hệ thống cũ.</div>
+              <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;">CMS dùng ảnh upload riêng và nhúng YouTube gốc vào bài. Chỉ dùng SCP/SSH khi cần tự lưu video MP4.</div>
               <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-                <div style="grid-column:1/-1"><label class="form-label">Phương thức upload</label><select id="cfg_video_method" class="form-control" onchange="updateVideoUploadAdvancedVisibility()"><option value="cms" selected>Upload trực tiếp qua CMS (mặc định)</option><option value="scp">SCP/SSH (nâng cao / tương thích cấu hình cũ)</option></select></div>
+                <div style="grid-column:1/-1"><label class="form-label">Phương thức video</label><select id="cfg_video_method" class="form-control" onchange="updateVideoUploadAdvancedVisibility()"><option value="cms" selected>Nhúng YouTube gốc + upload ảnh qua CMS (khuyên dùng)</option><option value="scp">SCP/SSH lưu MP4 (nâng cao)</option></select></div>
               </div>
               <div id="cfg_video_advanced" style="display:none;margin-top:12px;padding:14px;border:1px solid #334155;border-radius:8px;background:#0b1329;">
                 <div style="font-size:12px;font-weight:700;color:#f59e0b;margin-bottom:10px;"><i class="bi bi-sliders"></i> Cấu hình SCP/SSH nâng cao</div>
@@ -1904,7 +1927,7 @@
                   <div style="grid-column:1/-1"><label class="form-label">Public video URL</label><input id="cfg_video_public" class="form-control" placeholder="https://studio.example.com/videos"></div>
                 </div>
               </div>
-              <div id="cfg_video_status" style="font-size:12px;color:#94a3b8;margin-top:10px;">Chưa kiểm tra máy chủ video.</div>
+              <div id="cfg_video_status" style="font-size:12px;color:#94a3b8;margin-top:10px;">Chưa kiểm tra nguồn video cho bài Website.</div>
             </div>
             <div style="display: flex; align-items: center; gap: 12px;">
               <button type="submit" class="btn btn-primary" style="font-weight: 700; padding: 10px 20px;">
@@ -1914,7 +1937,7 @@
                 <i class="bi bi-broadcast"></i> Kiểm tra kết nối
               </button>
               <button type="button" class="btn btn-secondary" onclick="testVideoUploader()" style="font-weight: 600;">
-                <i class="bi bi-cloud-arrow-up"></i> Kiểm tra upload video
+                <i class="bi bi-check2-circle"></i> Kiểm tra đường video
               </button>
               <span id="website-save-msg" style="font-size: 12.5px; font-weight: 600;"></span>
             </div>
@@ -1932,7 +1955,7 @@
                 Content Studio cho clip đã render
               </h2>
               <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">
-                Tạo tiêu đề hero, bài viết, First Comment và caption theo 3 chế độ: auto (ưu tiên LLM), llm (bắt buộc LLM), no_llm (fallback tất định).
+                Tạo tiêu đề hero, bài viết, First Comment và caption theo 3 chế độ: auto (ưu tiên LLM), llm (bắt buộc LLM), no_llm (dùng bài và ảnh dự phòng).
               </div>
             </div>
             <button class="btn btn-secondary" onclick="loadContentStudioQueue()"><i class="bi bi-arrow-repeat"></i> Làm mới hàng đợi</button>
@@ -1950,6 +1973,8 @@
               </div>
               <label class="form-label">Tiêu đề (tuỳ chọn)</label>
               <input id="cs-title" class="form-control" placeholder="Để trống sẽ lấy metadata clip" style="margin-bottom: 10px;">
+              <label class="form-label">Niche / hướng nội dung (tuỳ chọn)</label>
+              <input id="cs-niche" class="form-control" placeholder="Ví dụ: bodycam, bóng đá, tin nóng..." style="margin-bottom: 10px;">
               <label class="form-label" for="cs-article-url">URL bài Website đã có (tuỳ chọn)</label>
               <input id="cs-article-url" class="form-control" type="url" placeholder="https://.../blog/bai-viet" style="margin-bottom: 6px;">
               <div style="font-size:12px;color:#94a3b8;margin-bottom:12px;">Có URL: tạo First Comment cho bài đó. Để trống: tạo bản nháp; hàng đợi sẽ tạo bài Website.</div>
@@ -1957,16 +1982,21 @@
               <select id="cs-mode" class="form-control" style="margin-bottom: 12px;">
                 <option value="auto" selected>auto — ưu tiên LLM, dùng mẫu khi LLM lỗi</option>
                 <option value="llm">llm — bắt buộc LLM, báo lỗi nếu không gọi được</option>
-                <option value="no_llm">no_llm — không gọi LLM (tất định)</option>
+                <option value="no_llm">no_llm — bài theo tiêu đề + frame video gốc</option>
               </select>
-              <label class="form-label">First Comment niche</label>
+              <label class="form-label">Mẫu fallback khi LLM lỗi</label>
+              <select id="cs-fallback-strategy" class="form-control" style="margin-bottom: 12px;">
+                <option value="rotate" selected>Xoay vòng 30 mẫu, không lặp trước khi hết vòng</option>
+                <option value="deterministic">Ổn định theo tiêu đề và URL</option>
+              </select>
+              <label class="form-label">Profile First Comment</label>
               <div style="display:flex;gap:8px;margin-bottom:12px;">
-                <select id="cs-first-comment-profile" class="form-control"></select>
+                <select aria-label="Profile First Comment" id="cs-first-comment-profile" class="form-control"></select>
                 <button type="button" class="btn btn-secondary" onclick="openFirstCommentProfileEditor()">Quản lý mẫu</button>
               </div>
               <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                <button class="btn btn-primary" onclick="generateContentPackage()"><i class="bi bi-stars"></i> Tạo nội dung</button>
-                <button class="btn btn-secondary" onclick="enqueueContentPackage()"><i class="bi bi-inboxes"></i> Đưa vào hàng đợi</button>
+                <button class="btn btn-primary" onclick="generateContentPackage()"><i class="bi bi-stars"></i> Xem nháp nội dung</button>
+                <button class="btn btn-secondary" onclick="enqueueContentPackage()"><i class="bi bi-inboxes"></i> Tạo bài Website + ảnh</button>
               </div>
               <div id="cs-generate-msg" style="font-size: 12.5px; font-weight: 600; margin-top: 10px;"></div>
             </div>
@@ -1975,7 +2005,11 @@
               <div style="font-weight: 800; margin-bottom: 12px;"><i class="bi bi-clock-history"></i> Trạng thái hàng đợi</div>
               <div id="cs-queue-stats" style="font-size: 13px; color: #cbd5e1; line-height: 1.7;">Chưa tải.</div>
               <div id="cs-circuit" style="font-size: 12px; color: #94a3b8; margin-top: 10px;"></div>
-              <button class="btn btn-secondary" style="margin-top: 12px;" onclick="processContentStudioQueue()"><i class="bi bi-play-fill"></i> Xử lý 1 mục ngay</button>
+              <label class="form-label" for="cs-workers" style="margin-top:12px;">Số video xử lý song song</label>
+              <select id="cs-workers" class="form-control" onchange="csSaveWorkers()"><option value="1">1 video</option><option value="2" selected>2 video (khuyên dùng)</option><option value="3">3 video</option><option value="4">4 video</option></select>
+              <div id="cs-active-videos" role="status" aria-live="polite" style="margin-top:12px;line-height:1.7;"></div>
+              <div style="font-size:12px;color:#94a3b8;margin-top:10px;">Hàng đợi tự chạy khi thêm clip. Bài viết và thumbnail được tạo cùng lúc; mỗi bài có ít nhất 3 ảnh và video đầy đủ ở cuối.</div>
+              <button class="btn btn-secondary" style="margin-top: 12px;" onclick="processContentStudioQueue(this)"><i class="bi bi-play-fill"></i> Khởi động hàng đợi</button>
             </div>
           </div>
 
@@ -5040,7 +5074,7 @@
   }
   async function testVideoUploader() {
     const el = document.getElementById('cfg_video_status');
-    el.textContent = 'Đang kiểm tra SSH/thư mục upload...'; el.style.color = '#f59e0b';
+    el.textContent = 'Đang kiểm tra CMS và đường video...'; el.style.color = '#f59e0b';
     try {
       const res = await fetch('/api/website-config/test-video', { method: 'POST' });
       const d = await res.json();
@@ -6043,6 +6077,8 @@
     return ({meta_handoff:'sending',meta_scheduled:'meta',processing:'processing',publishing:'publishing'})[p.status] || 'other';
   }
   function postsMatchScheduleFilter(p) {
+    const tokenFilter = document.getElementById('posts-token-filter')?.value || '';
+    if (tokenFilter && String(p.token_id || '') !== tokenFilter) return false;
     if (postsScheduleFilter === 'all') return true;
     if (postsScheduleFilter === 'planned') return ['app','sending','meta'].includes(postBucket(p));
     return postBucket(p) === postsScheduleFilter;
@@ -6223,6 +6259,20 @@
     pollMetaPostErrors();
     setInterval(pollMetaPostErrors, 15000);
   });
+  async function loadPostsTokenAudit() {
+    const target = document.getElementById('posts-token-audit');
+    try {
+      const response = await fetch('/api/posts/token-audit');
+      const data = await response.json(); if (!response.ok || !data.success) throw new Error(data.error || 'Không tải được');
+      const picker = document.getElementById('posts-token-filter');
+      const selected = picker.value;
+      picker.innerHTML = '<option value="">Tất cả Token</option>' + data.tokens.map(row => `<option value="${escapeHtml(row.token_id)}">${escapeHtml(row.name)} · ${escapeHtml(row.token_id)}</option>`).join('');
+      picker.value = selected;
+      const pageNames = new Map((data.pages || []).map(page => [page.page_id, page.name]));
+      const pageList = ids => ids.map(id => escapeHtml(pageNames.get(id) || id)).join(', ') || '—';
+      target.innerHTML = `<table class="table" style="font-size:12px;width:100%;"><thead><tr><th>Token / ID</th><th>Page cấu hình</th><th>Page trong nhóm</th><th>Page có bài</th><th>Đã đăng</th><th>Đang chờ</th><th>Lỗi</th></tr></thead><tbody>${data.tokens.map(row => `<tr><td><strong>${escapeHtml(row.name)}</strong><br><small>${escapeHtml(row.token_id)}</small>${!row.vault_present ? '<br><span style="color:#fbbf24">Không còn trong Vault</span>' : ''}</td><td><details><summary>${row.configured_pages} Page</summary>${pageList(row.configured_page_ids)}</details></td><td><details><summary>${row.group_assigned_pages} Page</summary>${pageList(row.group_page_ids)}</details></td><td><details><summary>${row.posting_pages} Page · ${row.posts} bài</summary>${pageList(row.posting_page_ids)}</details></td><td>${row.published}</td><td>${row.pending}</td><td>${row.failed}</td></tr>`).join('')}</tbody></table>${data.unknown_posts ? `<div style="color:#fbbf24">${data.unknown_posts} bài cũ chưa lưu Token ID.</div>` : ''}`;
+    } catch (e) { if (target) target.textContent = 'Thống kê token: ' + e.message; }
+  }
   async function loadPostsTable({quiet = false} = {}) {
     const tbody = document.getElementById('posts-table-body');
     if (!tbody || postsTableLoading) return;
@@ -6242,6 +6292,7 @@
       const posts = await res.json();
       if (!res.ok || !Array.isArray(posts)) throw new Error(posts.error || 'Không tải được bài đăng');
       postsSnapshot = posts;
+      await loadPostsTokenAudit();
       updateMetaHandoffControls();
       showNewMetaPostErrors(posts);
 
@@ -6273,7 +6324,7 @@
         const safeMedia = escapeHtml(p.media_file || '');
         const safePageName = escapeHtml(p.page_name || p.page_id || '');
         const safePageId = escapeHtml(String(p.page_id || ''));
-        const safeTokenName = escapeHtml(p.token_name || 'System User');
+        const safeTokenName = escapeHtml(p.token_display_name || p.token_name || 'Chưa lưu Token ID');
         const safeComment = escapeHtml(p.first_comment || '');
         const safeArticleUrl = /^https?:\/\//i.test(p.article_url || '') ? escapeHtml(p.article_url) : '';
         const embedLabel = p.website_embed_status === 'ready'
@@ -6397,6 +6448,11 @@
               <span style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); padding: 2px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 700;">
                 <i class="bi bi-key-fill"></i> ${safeTokenName}
               </span>
+              <div style="font-size:10px;color:#94a3b8;overflow-wrap:anywhere;margin-top:4px;">${escapeHtml(p.token_id || 'Token ID không được lưu ở bài cũ')}</div>
+              ${p.token_owner_name && p.token_owner_name !== p.token_display_name ? `<div style="font-size:11px;color:#94a3b8;">Meta: ${escapeHtml(p.token_owner_name)}</div>` : ''}
+              <div style="font-size:11px;color:#cbd5e1;margin-top:5px;white-space:normal;">Cấu hình: ${p.token_stats?.configured_pages || 0} Page · Nhóm: ${p.token_stats?.group_assigned_pages || 0} Page<br>Có bài: ${p.token_stats?.posting_pages || 0} Page · ${p.token_stats?.posts || 0} bài</div>
+              ${p.token_assignment_match === false ? '<div style="font-size:11px;color:#fbbf24;white-space:normal;">Token gốc khác gán hiện tại</div>' : ''}
+              ${p.token_id && !p.token_vault_present ? '<div style="font-size:11px;color:#fbbf24;">Token gốc không còn trong Vault</div>' : ''}
             </td>
             <td style="padding: 12px 14px; max-width: 250px;">
               <div style="font-size: 11.5px; color: #cbd5e1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${safeComment}">
@@ -6498,7 +6554,7 @@
   // ============================================================
   function csEscape(value) {
     return String(value === undefined || value === null ? '' : value)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
   function csSetBusy(button, busy, label) {
     if (!button) return;
@@ -6523,6 +6579,7 @@
     document.getElementById('fc-profile-pick').value = profile.id;
     document.getElementById('fc-profile-name').value = profile.name || '';
     document.getElementById('fc-profile-niche').value = profile.niche || 'general';
+    document.getElementById('fc-profile-strategy').value = profile.fallback_strategy || 'rotate';
     document.getElementById('fc-profile-default').checked = profile.id === firstCommentProfileStore.default_profile_id;
     document.getElementById('fc-profile-lead-ins').value = (profile.lead_ins || []).join('\n');
   }
@@ -6561,7 +6618,8 @@
     const profileId = picker.value;
     const body = {
       name: document.getElementById('fc-profile-name').value.trim(),
-      niche: document.getElementById('fc-profile-niche').value,
+      niche: document.getElementById('fc-profile-niche').value.trim(),
+      fallback_strategy: document.getElementById('fc-profile-strategy').value,
       lead_ins: document.getElementById('fc-profile-lead-ins').value.split(/\r?\n/).map(x => x.trim()).filter(Boolean),
       make_default: document.getElementById('fc-profile-default').checked,
     };
@@ -6605,10 +6663,15 @@
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Kh\u00f4ng t\u1ea3i \u0111\u01b0\u1ee3c h\u00e0ng \u0111\u1ee3i');
       const allItems = data.items || [];
+      const workerSelect = document.getElementById('cs-workers');
+      if (workerSelect && data.worker) workerSelect.value = String(data.worker.workers || 2);
+      const stages = {preparing:'Chuẩn bị', checking_source:'Kiểm tra video gốc', checking_existing_article:'Kiểm tra bài đã có', generating_text_and_images:'Tạo nội dung + ảnh', publishing_article:'Đăng bài Website', verifying_article:'Xác minh bài và video', complete:'Hoàn tất'};
+      const active = allItems.filter(item => item.status === 'running');
+      document.getElementById('cs-active-videos').innerHTML = active.length ? '<strong style="color:#fbbf24">Đang xử lý:</strong><br>' + active.map(item => `• ${csEscape(item.title || item.clip_filename)}<br><small style="color:#94a3b8">${csEscape(stages[item.stage] || item.stage || 'Đang chạy')} · ${csEscape(item.clip_filename || '')}</small>`).join('<br>') : '<span style="color:#94a3b8">' + (data.worker?.alive ? 'Worker đang chờ clip mới.' : 'Worker chưa chạy; bấm Khởi động hàng đợi.') + '</span>';
       const failedOnly = document.getElementById('cs-status-filter')?.value === 'failed';
       const items = failedOnly ? allItems.filter(item => item.needs_attention) : allItems;
       const lc = data.llm_counts || {};
-      stats.innerHTML = `Đang chờ: <strong>${data.queued}</strong> · Sẵn sàng: <strong>${data.ready}</strong> · LLM thành công: <strong style="color:#4ade80">${lc.success || 0}</strong> · Fallback: <strong style="color:#fbbf24">${lc.fallback || 0}</strong> · LLM lỗi: <strong style="color:#f87171">${lc.failed || 0}</strong> · LLM chưa chạy do Website lỗi: <strong style="color:#fbbf24">${lc.blocked_website || 0}</strong> · Cần xử lý: <strong>${data.needs_attention}</strong>`;
+      stats.innerHTML = `Đang chờ: <strong>${data.queued}</strong> · Đang xử lý: <strong>${data.running || 0}</strong> · Sẵn sàng: <strong>${data.ready}</strong> · LLM thành công: <strong style="color:#4ade80">${lc.success || 0}</strong> · Fallback: <strong style="color:#fbbf24">${lc.fallback || 0}</strong> · LLM lỗi: <strong style="color:#f87171">${lc.failed || 0}</strong> · LLM chưa chạy do Website lỗi: <strong style="color:#fbbf24">${lc.blocked_website || 0}</strong> · Cần xử lý: <strong>${data.needs_attention}</strong>`;
       const c = data.circuit || {};
       circuit.textContent = c.open
         ? `Circuit breaker \u0110ANG M\u1ede \u2014 th\u1eed l\u1ea1i sau ${c.retry_after_seconds}s (l\u1ed7i quota).`
@@ -6643,8 +6706,8 @@
           <td>${csEscape(item.clip_filename || '\u2014')}</td>
           <td>${csEscape(item.title || '\u2014')}</td>
           <td>${csEscape(mode)}</td>
-          <td>${csEscape(pending)}${item.error ? `<div style="color:#f87171;font-size:11px;white-space:normal;">${csEscape(item.error)}</div>` : ''}${websiteError && websiteError !== item.error ? `<div style="color:#f87171;font-size:11px;white-space:normal;">CMS: ${csEscape(websiteError)}</div>` : ''}</td>
-          <td style="line-height:1.6;"><strong style="color:${llmColor}">${csEscape(llmLabels[llmState])}</strong><br>${mark('hero_title','Ti\u00eau \u0111\u1ec1')}<br>${mark('article_html','B\u00e0i vi\u1ebft')}<br>${mark('first_comment','First Comment')}${commentInfo}${mark('website_link','Link web')}<br><small style="color:#94a3b8;">${csEscape(source)}</small>${fallbackReason ? `<br><small style="color:#fbbf24;">LLM fallback: ${csEscape(fallbackReason)}</small>` : ''}</td>
+          <td>${csEscape(stages[item.stage] || pending)}${item.error ? `<div style="color:#f87171;font-size:11px;white-space:normal;">${csEscape(item.error)}</div>` : ''}${websiteError && websiteError !== item.error ? `<div style="color:#f87171;font-size:11px;white-space:normal;">CMS: ${csEscape(websiteError)}</div>` : ''}</td>
+          <td style="line-height:1.6;"><strong style="color:${llmColor}">${csEscape(llmLabels[llmState])}</strong><br>${mark('hero_title','Ti\u00eau \u0111\u1ec1')}<br>${mark('article_html','B\u00e0i vi\u1ebft')}<br>${mark('first_comment','First Comment')}${commentInfo}${mark('website_link','Link web')}<br>${item.hero_image_url ? `<a href="${csEscape(item.hero_image_url)}" target="_blank" rel="noopener">Thumbnail: ${csEscape(item.image_source === 'image_model' ? 'Model ảnh' : 'Frame gốc')}</a><br>` : ''}${item.result?.word_count ? `${item.result.word_count} từ · 1 câu/đoạn<br>` : ''}<small style="color:#94a3b8;">${csEscape(source)}</small>${fallbackReason ? `<br><small style="color:#fbbf24;">LLM fallback: ${csEscape(fallbackReason)}</small>` : ''}</td>
           <td class="content-studio-actions">
             ${item.needs_attention && !['queued', 'running'].includes(item.status) ? `<input type="checkbox" class="cs-failed-select" value="${csEscape(item.id)}" aria-label="Chọn bài lỗi ${csEscape(item.title || item.id)}">` : ''}
             ${item.needs_attention && !['queued', 'running'].includes(item.status) ? `<button class="btn btn-sm btn-outline cs-retry-btn" onclick="csRetryPackage('${csEscape(item.id)}', this)">Thử lại CMS / nội dung</button>` : ''}
@@ -6660,7 +6723,7 @@
     const msg = document.getElementById('cs-generate-msg');
     msg.style.color = '#94a3b8'; msg.textContent = '\u0110ang t\u1ea1o n\u1ed9i dung...';
     try {
-      const res = await fetch('/api/content-studio/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clip_filename: document.getElementById('cs-clip-filename').value.trim(), title: document.getElementById('cs-title').value.trim(), article_url: document.getElementById('cs-article-url').value.trim(), mode: document.getElementById('cs-mode').value, first_comment_profile_id: document.getElementById('cs-first-comment-profile').value }) });
+      const res = await fetch('/api/content-studio/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clip_filename: document.getElementById('cs-clip-filename').value.trim(), title: document.getElementById('cs-title').value.trim(), article_url: document.getElementById('cs-article-url').value.trim(), mode: document.getElementById('cs-mode').value, niche: document.getElementById('cs-niche').value.trim(), fallback_strategy: document.getElementById('cs-fallback-strategy').value, first_comment_profile_id: document.getElementById('cs-first-comment-profile').value }) });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'T\u1ea1o n\u1ed9i dung th\u1ea5t b\u1ea1i');
       const pkg = data.package || {};
@@ -6675,7 +6738,7 @@
     msg.style.color = '#94a3b8'; msg.textContent = '\u0110ang \u0111\u01b0a v\u00e0o h\u00e0ng \u0111\u1ee3i...';
     try {
       const articleUrl = document.getElementById('cs-article-url').value.trim();
-      const res = await fetch('/api/content-studio/enqueue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clip_filename: document.getElementById('cs-clip-filename').value.trim(), title: document.getElementById('cs-title').value.trim(), article_url: articleUrl, mode: document.getElementById('cs-mode').value, create_website_article: !articleUrl, first_comment_profile_id: document.getElementById('cs-first-comment-profile').value }) });
+      const res = await fetch('/api/content-studio/enqueue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clip_filename: document.getElementById('cs-clip-filename').value.trim(), title: document.getElementById('cs-title').value.trim(), article_url: articleUrl, mode: document.getElementById('cs-mode').value, niche: document.getElementById('cs-niche').value.trim(), fallback_strategy: document.getElementById('cs-fallback-strategy').value, create_website_article: !articleUrl, first_comment_profile_id: document.getElementById('cs-first-comment-profile').value }) });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Kh\u00f4ng x\u1ebfp h\u00e0ng \u0111\u01b0\u1ee3c');
       msg.style.color = '#4ade80'; msg.textContent = '\u0110\u00e3 \u0111\u01b0a v\u00e0o h\u00e0ng \u0111\u1ee3i: ' + data.item.id; window.loadContentStudioQueue();
@@ -6687,7 +6750,7 @@
     if (!folder) { msg.style.color = '#f87171'; msg.textContent = 'Vui l\u00f2ng nh\u1eadp \u0111\u01b0\u1eddng d\u1eabn th\u01b0 m\u1ee5c.'; return; }
     msg.style.color = '#94a3b8'; msg.textContent = '\u0110ang qu\u00e9t folder v\u00e0 \u0111\u01b0a clip m\u1edbi v\u00e0o h\u00e0ng \u0111\u1ee3i...';
     try {
-      const res = await fetch('/api/content-studio/batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: folder, mode: document.getElementById('cs-mode').value, create_website_article: true }) });
+      const res = await fetch('/api/content-studio/batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: folder, mode: document.getElementById('cs-mode').value, niche: document.getElementById('cs-niche').value.trim(), fallback_strategy: document.getElementById('cs-fallback-strategy').value, first_comment_profile_id: document.getElementById('cs-first-comment-profile').value, create_website_article: true }) });
       const data = await res.json(); if (!data.success) throw new Error(data.error || 'Batch th\u1ea5t b\u1ea1i');
       msg.style.color = '#4ade80'; msg.textContent = `\u0110\u00e3 \u0111\u01b0a ${data.count} clip m\u1edbi v\u00e0o h\u00e0ng \u0111\u1ee3i; b\u1ecf qua ${data.skipped_count || 0} clip \u0111\u00e3 x\u1eed l\u00fd.`; window.loadContentStudioQueue();
     } catch (e) { msg.style.color = '#f87171'; msg.textContent = 'L\u1ed7i: ' + e.message; }
@@ -6753,17 +6816,31 @@
     } catch (e) { if (feedback) { feedback.style.color = '#f87171'; feedback.textContent = 'Lỗi thử lại: ' + e.message; } }
     finally { csSetBusy(button, false); }
   };
+  window.csSaveWorkers = async function() {
+    const feedback = document.getElementById('cs-action-msg');
+    try {
+      const res = await fetch('/api/content-studio/workers', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({workers:Number(document.getElementById('cs-workers').value)})});
+      const data = await res.json(); if (!res.ok || !data.success) throw new Error(data.error || 'Không lưu được số worker');
+      feedback.style.color = '#4ade80'; feedback.textContent = `Đã đặt ${data.worker.workers} video xử lý song song. Tác vụ đang chạy sẽ hoàn tất trước khi giảm số worker.`;
+    } catch (e) { feedback.style.color = '#f87171'; feedback.textContent = e.message; }
+  };
   window.processContentStudioQueue = async function(button) {
-    csSetBusy(button, true, '\u0110ang x\u1eed l\u00fd...');
-    try { const res = await fetch('/api/content-studio/process', { method: 'POST' }); const data = await res.json(); await window.loadContentStudioQueue(); alert('\u0110\u00e3 x\u1eed l\u00fd ' + (data.processed || 0) + ' m\u1ee5c.'); }
-    catch (e) { alert('L\u1ed7i x\u1eed l\u00fd: ' + e.message); } finally { csSetBusy(button, false); }
+    csSetBusy(button, true, 'Đang khởi động...');
+    const feedback = document.getElementById('cs-action-msg');
+    try {
+      const res = await fetch('/api/content-studio/process', {method:'POST'});
+      const data = await res.json(); if (!res.ok || !data.success) throw new Error(data.error || 'Không khởi động được');
+      feedback.style.color = '#4ade80'; feedback.textContent = 'Hàng đợi đã chạy. Theo dõi video và bước xử lý tại bảng trạng thái.';
+      await window.loadContentStudioQueue();
+    } catch (e) { feedback.style.color = '#f87171'; feedback.textContent = e.message; }
+    finally { csSetBusy(button, false); }
   };
   setInterval(() => {
     const pane = document.getElementById('pane-content-studio');
     if (pane && pane.classList.contains('active') && !document.querySelector('.cs-failed-select:checked')) {
       window.loadContentStudioQueue();
     }
-  }, 10000);
+  }, 3000);
 
 </script>  <!-- MODAL 1: TRÌNH PHÁT XEM VIDEO GỐC TRỰC TIẾP TRÊN WEB -->
   <div id="modal-video-player" class="app-modal-overlay">
@@ -7558,7 +7635,7 @@
       <div class="app-modal-body">
         <label for="fc-profile-pick" style="display:block;margin:0 0 6px;">Profile</label><select id="fc-profile-pick" class="form-control" style="margin-bottom:14px;" onchange="selectFirstCommentProfile()"></select>
         <label for="fc-profile-name" style="display:block;margin:0 0 6px;">Tên profile</label><input id="fc-profile-name" class="form-control" style="margin-bottom:14px;" maxlength="80">
-        <label for="fc-profile-niche" style="display:block;margin:0 0 6px;">Niche</label><select id="fc-profile-niche" class="form-control" style="margin-bottom:14px;"><option value="police">Police</option><option value="sports">Sports</option><option value="news">News</option><option value="rescue">Rescue</option><option value="reality">Reality</option><option value="general">General</option></select>
+        <label for="fc-profile-niche" style="display:block;margin:0 0 6px;">Niche (nhập tự do)</label><input id="fc-profile-niche" class="form-control" list="fc-niche-suggestions" maxlength="120" style="margin-bottom:14px;"><datalist id="fc-niche-suggestions"><option value="police"><option value="sports"><option value="news"><option value="rescue"><option value="reality"><option value="general"></datalist><label for="fc-profile-strategy">Chọn mẫu khi LLM lỗi</label><select id="fc-profile-strategy" class="form-control" style="margin-bottom:14px;"><option value="rotate">Xoay vòng, dùng hết mẫu rồi mới lặp</option><option value="deterministic">Ổn định theo tiêu đề và URL</option></select>
         <label for="fc-profile-default" style="display:flex;align-items:center;gap:8px;margin:0 0 16px;"><input id="fc-profile-default" type="checkbox" style="width:auto;margin:0;"> Dùng mặc định cho bài mới</label>
         <label for="fc-profile-lead-ins" style="display:block;margin:0 0 6px;">30 câu dẫn chung (mỗi dòng một mẫu; URL được thêm khi tạo comment)</label><textarea id="fc-profile-lead-ins" class="form-control" rows="14" spellcheck="false"></textarea>
         <div id="fc-profile-msg" role="status" aria-live="polite"></div>

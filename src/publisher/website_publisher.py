@@ -604,7 +604,10 @@ The image should work as a website article hero. Do not include false claims or 
     temp_dir = HVS_DIR / "temp"
     temp_dir.mkdir(parents=True, exist_ok=True)
     import hashlib
-    out_file = str(temp_dir / f"llm_hook_{hashlib.sha256(video_title.encode('utf-8')).hexdigest()[:16]}.jpg")
+    cache_key = f"{model}\n{generation_url or api_base}\n{video_title}"
+    out_file = str(temp_dir / f"llm_hook_{hashlib.sha256(cache_key.encode('utf-8')).hexdigest()[:16]}.jpg")
+    if Path(out_file).is_file() and _valid_image_file(out_file, landscape=True):
+        return out_file
 
     def save_image_value(value) -> str:
         if not value:
@@ -612,23 +615,47 @@ The image should work as a website article hero. Do not include false claims or 
         if isinstance(value, dict):
             value = value.get("url") or value.get("b64_json")
         value = str(value)
+        import uuid
+        from multi_pc.json_io import replace_with_retry
+        candidate = Path(out_file).with_name(f".{Path(out_file).stem}.{uuid.uuid4().hex}.jpg")
         try:
             if value.startswith("http://") or value.startswith("https://"):
                 downloaded = requests.get(value, timeout=90)
                 downloaded.raise_for_status()
-                Path(out_file).write_bytes(downloaded.content)
+                candidate.write_bytes(downloaded.content)
             else:
                 raw_b64 = value.split("base64,", 1)[1] if "base64," in value else value
-                Path(out_file).write_bytes(base64.b64decode(raw_b64))
-            if _valid_image_file(out_file, landscape=True):
+                candidate.write_bytes(base64.b64decode(raw_b64))
+            # Some image gateways ignore the requested 16:9 composition and
+            # return a square image. Keep the complete artwork/headline in a
+            # landscape canvas instead of rejecting a successful generation.
+            if Image is not None:
+                try:
+                    from PIL import ImageOps, ImageFilter
+                    with Image.open(candidate) as picture:
+                        if picture.width < 160 or picture.height < 120:
+                            raise ValueError("Generated image dimensions too small")
+                        foreground = picture.convert("RGB")
+                    if abs(foreground.width / foreground.height - 16 / 9) > 0.03:
+                        normalized = ImageOps.fit(foreground, (1280, 720)).filter(ImageFilter.GaussianBlur(24))
+                        foreground.thumbnail((1280, 720), Image.Resampling.LANCZOS)
+                        normalized.paste(foreground, ((1280 - foreground.width) // 2, (720 - foreground.height) // 2))
+                    else:
+                        normalized = ImageOps.fit(foreground, (1280, 720))
+                    normalized.save(candidate, format="JPEG", quality=90, optimize=True)
+                except Exception:
+                    # _valid_image_file below remains the final decode gate.
+                    pass
+            if _valid_image_file(str(candidate), landscape=True):
+                replace_with_retry(candidate, Path(out_file))
                 logger.info("Generated image-provider Hook Image: %s", out_file)
                 return out_file
-            Path(out_file).unlink(missing_ok=True)
             return ""
         except Exception as exc:
-            Path(out_file).unlink(missing_ok=True)
             logger.warning("Cannot save generated image response (%s); use source-frame fallback", type(exc).__name__)
             return ""
+        finally:
+            candidate.unlink(missing_ok=True)
 
     image_payload = {
         "model": model,
@@ -701,8 +728,13 @@ def upload_long_video_to_public_stream(meta: dict, clip_filename: str) -> str:
     svc.verify_public_media(public_url, require_range=True)
     return public_url
 
-def extract_and_upload_article_assets(clip_filename: str, video_title: str) -> tuple:
-    """Upload three landscape frames from the original long video only."""
+def extract_and_upload_article_assets(clip_filename: str, video_title: str, *, mode="auto", metadata=None) -> tuple:
+    """Upload a hero thumbnail and two source frames for the article.
+
+    A configured image model gets first chance to create the hero thumbnail.
+    The two body images always come from the original horizontal recording so
+    the article keeps an auditable source trail when the image model is down.
+    """
     _, cfg_file = get_website_config()
     if not HAS_WEBSITE_SVC or not cfg_file.exists():
         return "", []
@@ -747,9 +779,69 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str) -> t
                 logger.warning("Original-source frame upload failed: %s", exc)
     if len(images) < 3:
         raise WebsiteServiceError("Cần 3 ảnh ngang từ video gốc; không dùng ảnh AI, thumbnail YouTube hoặc clip dọc")
-    return images[0], images[1:3]
+    hero = images[0]
+    image_config = get_image_provider_config()
+    if metadata is not None:
+        metadata.update(image_source="source_frame", image_model="", image_fallback_reason="")
+    if mode != "no_llm" and str(image_config.get("model") or "") != "__video_frame__":
+        try:
+            generated = generate_llm_hook_image(video_title)
+            if generated and _valid_image_file(generated, landscape=True):
+                uploaded_hook = svc._presign_and_upload(sess, generated)
+                if uploaded_hook and uploaded_hook not in images:
+                    hero = uploaded_hook
+                    if metadata is not None:
+                        metadata.update(image_source="image_model", image_model=image_config.get("model", ""))
+                    logger.info("Article hero thumbnail source=image_model")
+            elif metadata is not None:
+                metadata["image_fallback_reason"] = "Model ảnh chưa trả ảnh hợp lệ; dùng frame video gốc."
+        except Exception as exc:
+            logger.info("Article hero image model unavailable; using source frame (%s)", type(exc).__name__)
+    if metadata is not None:
+        metadata.update(hero_image_url=hero, body_image_urls=images[:2] if hero != images[0] else images[1:3])
+    return hero, images[:2] if hero != images[0] else images[1:3]
 
-def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: list, video_stream_url: str = "", youtube_id: str = "", source_summary: str = "") -> tuple:
+
+def render_content_package_article(video_title, hero_img, body_imgs, *, package,
+                                   youtube_id="", video_stream_url="", source_summary=""):
+    """Render the exact package used by the queue, with its images and player."""
+    from src.article_format import normalize_article, paragraph_html, viewing_article, word_count, MIN_ARTICLE_WORDS
+    article = normalize_article(package.get("article_html", ""))
+    if word_count(article) < MIN_ARTICLE_WORDS:
+        if package.get("required_llm"):
+            raise WebsiteServiceError("Bài LLM chưa đủ 600 từ; chọn auto để dùng bài dự phòng hoặc thử lại.")
+        article = viewing_article(video_title, source_summary, package.get("niche", ""))
+        package["article_source"] = "no_llm_short_article"
+        package["article_fallback_reason"] = "Bài LLM chưa đủ 600 từ; dùng bài theo tiêu đề và nguồn video."
+    else:
+        package["article_source"] = package.get("source", "unknown")
+    package["article_html"] = article
+    package["word_count"] = word_count(article)
+    title = html.escape(str(video_title), quote=True)
+    figure = lambda url, caption: (f'<figure style="margin:24px 0"><img src="{html.escape(str(url), quote=True)}" '
+        f'alt="{title}" loading="lazy" style="width:100%;border-radius:12px">'
+        f'<figcaption>{html.escape(caption)}</figcaption></figure>')
+    blocks = re.findall(r'<(?:p|h2|h3)>.*?</(?:p|h2|h3)>', article, re.S)
+    for index, url in reversed(list(enumerate(body_imgs[:2]))):
+        position = max(1, int(len(blocks) * (index + 1) / 3))
+        blocks.insert(position, figure(url, "Reference frame from the original video; watch the complete sequence below."))
+    if youtube_id:
+        player = build_youtube_embed_html(youtube_id, video_title)
+    elif str(video_stream_url).startswith("https://"):
+        player = (f'<video controls playsinline preload="metadata" poster="{html.escape(hero_img, quote=True)}" '
+                  f'style="width:100%"><source src="{html.escape(video_stream_url, quote=True)}" type="video/mp4"></video>')
+    else:
+        raise WebsiteServiceError("Cần video YouTube gốc hoặc HTTPS video đã xác minh.")
+    hero_caption = "Editorial illustration created with the configured image model." if package.get("image_source") == "image_model" else "Reference frame from the original recording."
+    body = (f'<article class="article-content" style="max-width:820px;margin:auto;line-height:1.8">'
+            f'{figure(hero_img, hero_caption)}<section class="original-video-summary"><h2>Original video summary</h2>'
+            f'{paragraph_html(source_summary or "Follow the full recording below for the sequence behind this title.")}</section>'
+            f'{"".join(blocks)}<section id="full-video" class="full-video-section"><h2>Full Uncut Footage</h2>'
+            '<p>Watch the full video below and follow the sequence from beginning to end.</p>'
+            f'{player}</section></article>')
+    return package.get("hero_title") or video_title, body
+
+def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: list, video_stream_url: str = "", youtube_id: str = "", source_summary: str = "", prepared_package=None) -> tuple:
     """
     Sinh bài viết dài chuyên sâu 500+ từ chuẩn báo chí quốc tế:
     - ĐẦU BÀI: Hiển thị ngay tấm ảnh Hook LLM to sắc nét (Hero Banner)!
@@ -757,6 +849,9 @@ def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: li
     - 2 phần phân tích chuyên sâu + ảnh minh họa diễn biến
     - CUỐI BÀI: Ưu tiên YouTube iframe; giữ HTML5 MP4 làm fallback cho job cũ.
     """
+    if prepared_package is not None:
+        return render_content_package_article(video_title, hero_img, body_imgs, package=prepared_package,
+            youtube_id=youtube_id, video_stream_url=video_stream_url, source_summary=source_summary)
     clean_youtube_id = extract_youtube_video_id(youtube_id)
     if clean_youtube_id:
         video_player_html = build_youtube_embed_html(clean_youtube_id, video_title)
@@ -812,12 +907,13 @@ def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: li
     prompt = f"""You are a senior sports and viral investigative journalist writing an in-depth article for a global media publication.
 Write an authentic, context-rich article in English for the topic: "{title}".
 Requirements:
-1. "lead_paragraph": A dramatic 3-sentence introduction detailing the high stakes, tension, and what stunned the spectators.
+1. "lead_paragraph": An engaging introduction grounded in the supplied title and source summary; do not invent stakes, reactions, quotes or an outcome.
 2. "section_1_title": "The Decisive Breakdown: What Truly Unfolded"
-3. "section_1_content": 2 rich paragraphs breaking down the technical precision, the immediate reaction, and why conventional wisdom failed.
+3. "section_1_content": Explain the source context and what readers can review in the full video without unsupported claims.
 4. "section_2_title": "Inside the Climax: Tactical Genius & Aftermath"
-5. "section_2_content": 2 paragraphs exploring the aftermath, expert opinions, and the lasting significance of this scene.
-6. Make it thorough, journalistic, and captivating (650-900 words; never below 600 words).
+5. "section_2_content": Build curiosity around the source and invite readers to watch the full video at the end; use only supplied facts.
+6. Make it thorough and captivating (750-950 words; never below 600 words), one sentence per paragraph.
+Source summary: {source_summary}
 Output strictly valid JSON only:
 {{
   "seo_title": "{title} - Full Uncut Breakdown & Scene Analysis",
@@ -958,6 +1054,10 @@ Output strictly valid JSON only:
     </div>
     """
 
+    # CMS ad placement can count words between paragraphs reliably.
+    from src.article_format import paragraph_html
+    body_html = re.sub(r'<p\b([^>]*)>(.*?)</p>', lambda match: paragraph_html(
+        html.unescape(re.sub(r'<[^>]+>', ' ', match.group(2)))), body_html, flags=re.S | re.I)
     return seo_title, body_html
 
 def generate_curiosity_comment_with_llm(video_title: str, article_url: str, enable_llm: bool = True, profile_id: str = "") -> str:
@@ -1027,7 +1127,8 @@ Rules:
 
     return fallback_comment
 
-def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> tuple:
+def publish_clip_to_website_cms(clip_filename: str, video_title: str = None, *, content_factory=None,
+                              mode="auto", progress=None, asset_metadata=None) -> tuple:
     """
     Tự động:
     1. Nhúng VIDEO GỐC bằng YouTube iframe; chỉ upload MP4 khi job cũ không có YouTube ID
@@ -1037,6 +1138,10 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
     5. Đăng bài lên CMS với slug & title 100% sạch, KHÔNG BAO GIỜ dính chữ "Clip 1", "Clip 2" hay mã job.
     Trả về: (article_url, hero_image_url)
     """
+    from concurrent.futures import ThreadPoolExecutor
+    progress = progress or (lambda stage: None)
+    asset_metadata = asset_metadata if asset_metadata is not None else {}
+    progress("checking_source")
     cfg_data, cfg_file = get_website_config()
     if not HAS_WEBSITE_SVC:
         raise WebsiteServiceError("Bản cài thiếu WebsiteArticleService")
@@ -1048,6 +1153,7 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
     meta = get_clip_metadata(clip_filename)
     if not video_title or re.search(r'^(video highlight|job_\d+|clip_\d+)', video_title, re.IGNORECASE):
         video_title = meta.get("video_title") or meta.get("clean_title")
+    meta["article_title"] = video_title
 
     # 2. Ưu tiên nhúng YouTube gốc để không lưu MP4 trên server. Chỉ upload
     # video dài làm fallback cho các job cũ không có nguồn YouTube hợp lệ.
@@ -1069,6 +1175,7 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
     # A lost CMS response is ambiguous. Before POST, look up the stable URL;
     # if it already holds this video's embed, use it instead of making a copy.
     expected_url = f"{base_url}/blog/{slug}"
+    progress("checking_existing_article")
     try:
         existing = requests.get(expected_url, timeout=15)
     except requests.RequestException as exc:
@@ -1081,17 +1188,32 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
     if existing.status_code != 404 and (existing.status_code != 200 or urlparse(existing.url).path.rstrip("/") != urlparse(base_url).path.rstrip("/")):
         raise WebsiteServiceError(f"CMS article lookup HTTP {existing.status_code}; publication paused to avoid duplicates")
 
-    # 4. Tạo ảnh và bài viết sau khi biết chắc slug chưa được đăng.
-    hero_img, body_imgs = extract_and_upload_article_assets(clip_filename, video_title)
+    # Generate one package while extracting/uploading its images. The same
+    # article_html is persisted in Content Studio and rendered into the CMS.
+    if content_factory is None:
+        from src.content_packages import generate_package
+        content_factory = lambda url, metadata: generate_package(
+            video_title, metadata.get("description", ""), metadata.get("youtube_url", ""), mode=mode, article_url=url)
+    progress("generating_text_and_images")
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="article-assets") as pool:
+        text_future = pool.submit(content_factory, expected_url, meta)
+        assets_future = pool.submit(extract_and_upload_article_assets, clip_filename, video_title,
+                                    mode=mode, metadata=asset_metadata)
+        package = text_future.result()
+        hero_img, body_imgs = assets_future.result()
+    package["required_llm"] = mode == "llm"
+    package["image_source"] = asset_metadata.get("image_source", "source_frame")
     if len({url for url in [hero_img, *body_imgs] if str(url).strip()}) < 3:
         raise WebsiteServiceError("Article requires three distinct source images before CMS publication")
     seo_title, body_html = generate_deep_article_content(
         video_title, hero_img, body_imgs, video_stream_url=video_stream_url, youtube_id=youtube_id,
-        source_summary=_source_video_summary(meta, video_title),
+        source_summary=meta.get("description") or _source_video_summary({"clip_filename": clip_filename}, video_title),
+        prepared_package=package,
     )
 
     # 6. Publish lên CMS qua WebsiteArticleService kèm Hero Image (Hook Thumbnail)
     svc = WebsiteArticleService(str(cfg_file))
+    progress("publishing_article")
     res = svc.publish_article(
         title=seo_title,
         slug=slug,
@@ -1102,6 +1224,7 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None) -> 
     article_url = res.get("article_url")
     if res.get("status") != "success" or not article_url:
         raise WebsiteServiceError("CMS không xác nhận bài viết đã được tạo")
+    progress("verifying_article")
     svc.verify_article(article_url)
     svc.verify_article_embed(article_url, youtube_id=youtube_id, video_stream_url=video_stream_url)
     svc.verify_article_quality(article_url, minimum_words=600, minimum_images=3,

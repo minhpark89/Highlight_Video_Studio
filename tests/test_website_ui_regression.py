@@ -110,8 +110,8 @@ class WebsiteUiRegressionTests(unittest.TestCase):
         for path in TEMPLATE_PATHS:
             with self.subTest(template=path.relative_to(BASE_DIR)):
                 html = path.read_text(encoding="utf-8")
-                self.assertIn('<option value="cms" selected>Upload trực tiếp qua CMS (mặc định)</option>', html)
-                self.assertIn('<option value="scp">SCP/SSH (nâng cao / tương thích cấu hình cũ)</option>', html)
+                self.assertIn('<option value="cms" selected>Nhúng YouTube gốc + upload ảnh qua CMS (khuyên dùng)</option>', html)
+                self.assertIn('<option value="scp">SCP/SSH lưu MP4 (nâng cao)</option>', html)
                 self.assertIn('id="cfg_video_advanced" style="display:none', html)
                 self.assertIn("advanced.style.display = method === 'scp' ? 'block' : 'none'", html)
                 self.assertIn("cfg_video_method: video.method || 'cms'", html)

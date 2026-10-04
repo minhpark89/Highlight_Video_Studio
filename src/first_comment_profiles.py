@@ -3,9 +3,14 @@ from __future__ import annotations
 
 import json
 import uuid
+import threading
 from pathlib import Path
 
 from src.fallback_comments import LEAD_INS, fallback_first_comment
+from multi_pc.data_root import canonical_data_root
+from multi_pc.json_io import replace_with_retry
+
+_ROTATION_LOCK = threading.RLock()
 
 
 PROFILE_LABELS = {
@@ -50,8 +55,8 @@ def _valid_lead_ins(values, *, minimum=30):
 
 def normalize_profile(payload, *, profile_id=None, builtin=False):
     niche = str(payload.get("niche") or "general").strip().lower()
-    if niche not in PROFILE_LABELS:
-        raise ValueError("Choose one of the supported First Comment niches.")
+    if not niche or len(niche) > 120:
+        raise ValueError("Niche must be between 1 and 120 characters.")
     name = " ".join(str(payload.get("name") or niche.title()).split()).strip()
     if not name or len(name) > 80:
         raise ValueError("Profile name must be between 1 and 80 characters.")
@@ -59,6 +64,7 @@ def normalize_profile(payload, *, profile_id=None, builtin=False):
         "id": str(profile_id or payload.get("id") or f"fcprof_{uuid.uuid4().hex}"),
         "name": name, "niche": niche,
         "lead_ins": _valid_lead_ins(payload.get("lead_ins")),
+        "fallback_strategy": payload.get("fallback_strategy") if payload.get("fallback_strategy") in ("rotate", "deterministic") else "rotate",
         "builtin": bool(builtin),
     }
 
@@ -118,8 +124,35 @@ def profile_first_comment(title: str, article_url: str, profile_id: str = "", st
     if not profile:
         profile = next((item for item in store.get("profiles", []) if str(item.get("id")) == "builtin_general"), None)
     lead_ins = (profile or {}).get("lead_ins") or list(LEAD_INS)
-    if str((profile or {}).get("id")) == "builtin_general":
+    strategy = store.get("selection_strategy") or (profile or {}).get("fallback_strategy", "deterministic")
+    if str((profile or {}).get("id")) == "builtin_general" and strategy != "rotate":
         return fallback_first_comment(title, url)
     key = f"{title}\n{url}\n{target}".encode("utf-8")
-    index = int.from_bytes(sha256(key).digest()[:8], "big") % len(lead_ins)
+    if strategy == "rotate":
+        # Persist only digests and indices. The same article keeps its selection
+        # across retries; new articles consume every sample before wrapping.
+        path = Path(store.get("rotation_path") or canonical_data_root() / "data" / "first_comment_rotation.json")
+        digest = sha256(key).hexdigest()
+        pool = sha256((target + "\n" + "\n".join(lead_ins)).encode("utf-8")).hexdigest()
+        with _ROTATION_LOCK:
+            try:
+                state = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                state = {}
+            history = state.setdefault(pool, {"next": 0, "articles": {}})
+            if digest not in history["articles"]:
+                history["articles"][digest] = int(history["next"]) % len(lead_ins)
+                history["next"] = int(history["next"]) + 1
+                if len(history["articles"]) > 3000:
+                    del history["articles"][next(iter(history["articles"]))]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+                try:
+                    temp.write_text(json.dumps(state), encoding="utf-8")
+                    replace_with_retry(temp, path)
+                finally:
+                    temp.unlink(missing_ok=True)
+            index = history["articles"][digest]
+    else:
+        index = int.from_bytes(sha256(key).digest()[:8], "big") % len(lead_ins)
     return f"{lead_ins[index]} {url}"

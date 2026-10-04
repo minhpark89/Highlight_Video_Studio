@@ -8,6 +8,7 @@ import re
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from src.llm_response import chat_model_unavailable, chat_stream_incomplete, jso
 from src.text_llm_diagnostics import chat_endpoint, chat_failure
 from src.fallback_comments import fallback_first_comment
 from src.first_comment_profiles import load_profile_store, profile_first_comment
+from src.article_format import normalize_article, viewing_article, word_count
 
 DATA_ROOT = canonical_data_root()
 QUEUE_FILE = DATA_ROOT / "data" / "content_packages.json"
@@ -26,6 +28,7 @@ CIRCUIT_FILE = DATA_ROOT / "data" / "llm_circuit.json"
 _LOCK = threading.RLock()
 _WORKER_THREAD = None
 _WORKER_LOCK = threading.Lock()
+_POST_SYNC_LOCK = threading.RLock()
 _SECRET_RE = re.compile(r"(access_token|page_token|token|api_key|secret|password|authorization)\s*[=:]\s*[^\s&\"',]+", re.I)
 QUOTA_CODES = {402, 429}
 COMMENT_METADATA = ("first_comment_source", "first_comment_profile_id", "first_comment_profile_name",
@@ -59,18 +62,12 @@ def _now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def fallback_package(title: str, summary: str = "", article_url: str = "", profile_id: str = "", profile_store=None) -> dict:
+def fallback_package(title: str, summary: str = "", article_url: str = "", profile_id: str = "", profile_store=None, niche: str = "") -> dict:
     clean = " ".join(str(title or "Untold Highlight").split()).strip()
     context = " ".join(str(summary or "").split()).strip()
     hero = clean[:110]
     lead = context or f"A guide to reviewing the original video associated with {clean}."
-    article = (
-        f"<h2>{html.escape(hero)}</h2><p>{html.escape(lead)}</p>"
-        "<h3>Start with the source</h3><p>Watch the original full-length recording before drawing conclusions from a short highlight or its title. Identify the relevant passage and note what appears before and after it. A title and a short description provide a subject, not independent confirmation of what happened, who was involved, or how the event ended. If the source is unavailable, this guide cannot verify those details.</p>"
-        "<h3>Review the sequence</h3><p>Replay the relevant passage at normal speed, then pause at the start, middle and end. Compare what is actually visible across those points. Notice when a cut, camera change, replay or overlay changes the view. A still image can help locate a moment in the source but cannot establish continuity on its own. Keep direct observations separate from interpretation, and leave details unresolved if the video does not show them clearly.</p>"
-        "<h3>Check the context</h3><p>Look at the surrounding minutes to see whether they add context to the selected passage. On-screen captions, audio and a camera angle can be useful clues, but none should be presented as a verified outside source without corroboration. The recording may show actions in frame while leaving motivations, audience reactions and events outside the frame unknown. Return to the original footage for any claim that matters, and seek an independent source if the claim goes beyond what the recording can support.</p>"
-        "<h3>What remains open</h3><p>This no-LLM overview deliberately does not invent a result, a quote, a location or a cause. The full video is the reference for judging the selected moment; the article is a viewing guide rather than a reported account. If a decisive detail is not visible, describe the uncertainty instead of treating an attractive narrative as evidence.</p>"
-    )
+    article = viewing_article(clean, context, niche)
     link = str(article_url or "").strip()
     comment = profile_first_comment(clean, link, profile_id, profile_store) if link else ""
     caption = f"🔥 {clean}\n\n{lead}\n\nWhat detail did you notice first?\n\n#highlight #viral #trending #mustwatch"
@@ -120,12 +117,12 @@ def record_llm_success():
     _write(CIRCUIT_FILE, {"opened_at": 0, "retry_at": 0, "failures": 0, "reason": ""})
 
 
-def _llm_package(title, summary, video_url="", article_url=""):
+def _llm_package(title, summary, video_url="", article_url="", *, niche="", component=""):
     from src.content_builder import get_llm_candidates, _get_task_model
 
     cfg = get_llm_candidates()
     endpoint = str(cfg.get("configured_base") or "").strip()
-    model = _get_task_model("content_package") or cfg.get("model")
+    model = _get_task_model("first_comment" if component == "first_comment" else "article") or cfg.get("model")
     if not endpoint:
         raise RuntimeError("Text LLM api_base missing: configure llm.api_base for the text route")
     if not model or not cfg.get("api_key"):
@@ -133,12 +130,21 @@ def _llm_package(title, summary, video_url="", article_url=""):
     prompt = (
         "Create a content package for a rendered highlight. Return one JSON object ONLY (no reasoning, "
         "markdown or prose) with string keys hero_title, article_html, first_comment, caption, "
-        "and an array of strings hashtags. Article HTML must be a useful 350+ word story, "
+        "and an array of strings hashtags. Article HTML must be a useful 750-950 word article, "
+        "with exactly one sentence per <p>, clear headings, and frequent paragraph breaks. "
+        "Invite readers to scroll to the full video at the end without inventing its outcome. "
         "but do not invent events or facts not supported by the inputs. "
         "If an Article URL is provided, write a unique first_comment tied to this video's title and "
         "include that exact Article URL once. If no Article URL is provided, set first_comment to an empty string.\n"
-        f"Title: {title}\nSummary: {summary}\nSource: {video_url}\nArticle URL: {article_url}"
+        f"Title: {title}\nSummary: {summary}\nNiche / editorial direction: {niche}\nSource: {video_url}\nArticle URL: {article_url}"
     )
+    if component:
+        prompt = (f"Return JSON only with the requested key {component}. Write this component for the video "
+                  f"titled {title}. Context: {summary}. Niche: {niche}. "
+                  f"For first_comment include this exact URL once: {article_url}; invite the reader to the full video "
+                  "at the end of the article, keep under 400 characters, and do not invent details. "
+                  "hashtags must be an array of strings; every other component must be a string. "
+                  "article_html must be 750-950 words with one sentence per paragraph.")
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if cfg.get("api_key"):
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
@@ -150,8 +156,9 @@ def _llm_package(title, summary, video_url="", article_url=""):
         response = requests.post(
             chat_endpoint(endpoint), headers=headers,
             json={"model": model, "messages": messages, "stream": False,
-                  "max_tokens": 2048, "temperature": 0.45 if attempt == 0 else 0.2},
-            timeout=45,
+                  "max_tokens": 4000 if not component or component == "article_html" else 400,
+                  "temperature": 0.45 if attempt == 0 else 0.2},
+            timeout=(5, 45),
         )
         if response.status_code in QUOTA_CODES:
             raise QuotaError(f"LLM quota HTTP {response.status_code}")
@@ -165,16 +172,16 @@ def _llm_package(title, summary, video_url="", article_url=""):
             data = json_from_chat_response(response)
             if not isinstance(data, dict):
                 raise ValueError("LLM returned a non-object content package")
-            if not all(isinstance(data.get(key), str) and data[key].strip()
-                       for key in ("hero_title", "article_html", "caption")):
+            required = [component] if component and component != "hashtags" else ([] if component else ["hero_title", "article_html", "caption"])
+            if not all(isinstance(data.get(key), str) and data[key].strip() for key in required):
                 raise ValueError("LLM returned an incomplete content package")
-            if not isinstance(data.get("first_comment"), str):
+            if component in ("", "first_comment") and not isinstance(data.get("first_comment"), str):
                 raise ValueError("LLM returned an incomplete content package")
-            if article_url and data["first_comment"].count(article_url) != 1:
+            if component in ("", "first_comment") and article_url and data["first_comment"].count(article_url) != 1:
                 raise ValueError("LLM First Comment must contain the verified article URL exactly once")
-            if not isinstance(data.get("hashtags"), list) or not all(
+            if component in ("", "hashtags") and (not isinstance(data.get("hashtags"), list) or not all(
                 isinstance(tag, str) for tag in data["hashtags"]
-            ):
+            )):
                 raise ValueError("LLM returned an incomplete content package")
         except ValueError:
             if attempt:
@@ -198,9 +205,16 @@ class QuotaError(RuntimeError):
     pass
 
 
-def generate_package(title, summary="", video_url="", mode="auto", article_url="", component="", profile_id="", profile_store=None):
-    profile_store = profile_store or load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json")
-    fallback = fallback_package(title, summary, article_url, profile_id, profile_store)
+def generate_package(title, summary="", video_url="", mode="auto", article_url="", component="", profile_id="", profile_store=None, niche="", fallback_strategy=None):
+    profile_store = dict(profile_store or load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json"))
+    if fallback_strategy in ("rotate", "deterministic"):
+        profile_store["selection_strategy"] = fallback_strategy
+    profile_store.setdefault("rotation_path", str(DATA_ROOT / "data" / "first_comment_rotation.json"))
+    selected_profile = next((profile for profile in profile_store.get("profiles", [])
+                             if profile.get("id") == (profile_id or profile_store.get("default_profile_id"))), {})
+    niche = str(niche or selected_profile.get("niche") or "").strip()[:300]
+    # Reserve a rotating template only if fallback is actually needed.
+    fallback = fallback_package(title, summary, "", profile_id, profile_store, niche)
     selected_mode = str(mode or "auto").lower()
     if selected_mode == "no_llm":
         result = fallback
@@ -210,7 +224,7 @@ def generate_package(title, summary="", video_url="", mode="auto", article_url="
         result = {**fallback, "source": "no_llm_circuit_open", "circuit": circuit_status()}
     else:
         try:
-            result = _llm_package(title, summary, video_url, article_url)
+            result = _llm_package(title, summary, video_url, article_url, niche=niche, component=component)
         except QuotaError as exc:
             if selected_mode == "llm":
                 raise RuntimeError(sanitize_error(exc)) from None
@@ -221,6 +235,12 @@ def generate_package(title, summary="", video_url="", mode="auto", article_url="
             if selected_mode == "llm":
                 raise RuntimeError(reason) from None
             result = {**fallback, "source": "no_llm_error_fallback", "fallback_reason": reason}
+    result["niche"] = niche
+    if article_url and str(result.get("source") or "").startswith("no_llm"):
+        result["first_comment"] = profile_first_comment(title, article_url, profile_id, profile_store)
+    if result.get("article_html"):
+        result["article_html"] = normalize_article(result["article_html"])
+        result["word_count"] = word_count(result["article_html"])
     if article_url and result.get("first_comment"):
         result.setdefault("first_comment_profile_id", profile_id or profile_store.get("default_profile_id", "builtin_general"))
         result.setdefault("first_comment_source", "template_fallback" if str(result.get("source") or "").startswith("no_llm") else "llm")
@@ -242,7 +262,7 @@ def generate_package(title, summary="", video_url="", mode="auto", article_url="
 
 def enqueue_content_package(*, clip_filename, title, summary="", video_url="", mode="auto", post_ids=None,
                             components=None, article_url="", create_website_article=False, source_job_id="", source_clip_id="",
-                            first_comment_profile_id=""):
+                            first_comment_profile_id="", niche="", fallback_strategy="rotate"):
     profile_store = load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json")
     selected_profile_id = str(first_comment_profile_id or profile_store.get("default_profile_id") or "builtin_general")
     selected_profile = next((profile for profile in profile_store["profiles"] if profile["id"] == selected_profile_id), None)
@@ -257,13 +277,17 @@ def enqueue_content_package(*, clip_filename, title, summary="", video_url="", m
             "source_clip_id": str(source_clip_id or "").strip(),
             "title": str(title or ""),
             "summary": str(summary or ""),
+            "niche": str(niche or selected_profile.get("niche") or "").strip()[:300],
+            "fallback_strategy": fallback_strategy if fallback_strategy in ("rotate", "deterministic") else "rotate",
             "video_url": str(video_url or ""),
             "mode": mode if mode in ("auto", "llm", "no_llm") else "auto",
             "components": components or ["hero_title", "article_html", "first_comment", "caption"],
             "post_ids": list(post_ids or []),
             "article_url": str(article_url or ""),
             "first_comment_profile_id": selected_profile_id,
-            "first_comment_profile_store": {"default_profile_id": selected_profile_id, "profiles": [selected_profile]},
+            "first_comment_profile_store": {"default_profile_id": selected_profile_id, "profiles": [selected_profile],
+                "selection_strategy": fallback_strategy if fallback_strategy in ("rotate", "deterministic") else "rotate",
+                "rotation_path": str(DATA_ROOT / "data" / "first_comment_rotation.json")},
             "embed_status": "ready" if str(video_url or "").strip() else "pending_generation",
             "video_url": str(video_url or ""),
             "create_website_article": bool(create_website_article),
@@ -452,10 +476,31 @@ def resolve_article_url(item):
     try:
         from src.publisher.website_publisher import publish_clip_to_website_cms
 
+        store = dict(item.get("first_comment_profile_store") or load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json"))
+        store["selection_strategy"] = item.get("fallback_strategy", "rotate")
+        store["rotation_path"] = str(DATA_ROOT / "data" / "first_comment_rotation.json")
+
+        def content_factory(expected_url, metadata):
+            item["title"] = metadata.get("article_title") or item.get("title", "")
+            generated = generate_package(
+                item.get("title", ""), item.get("summary") or metadata.get("description", ""),
+                item.get("video_url") or metadata.get("youtube_url", ""), item.get("mode", "auto"),
+                article_url=expected_url, profile_id=item.get("first_comment_profile_id", ""),
+                profile_store=store, niche=item.get("niche", ""),
+                fallback_strategy=item.get("fallback_strategy", "rotate"))
+            item["result"] = generated
+            item["youtube_id"] = metadata.get("youtube_id", "")
+            item["video_url"] = metadata.get("youtube_url") or item.get("video_url", "")
+            item.pop("regenerate_text", None)
+            return generated
+
         result = publish_clip_to_website_cms(
-            item.get("clip_filename", ""),
-            item.get("title", ""),
+            item.get("clip_filename", ""), item.get("title", ""), content_factory=content_factory,
+            mode=item.get("mode", "auto"), progress=lambda stage: update_package_progress(item, stage),
+            asset_metadata=item,
         )
+        if isinstance(result, tuple) and len(result) > 1:
+            item["website_thumbnail_url"] = str(result[1] or "")
         url = result[0] if isinstance(result, tuple) else str(result or "")
         if not url:
             raise RuntimeError("CMS không trả Website URL")
@@ -499,6 +544,10 @@ def _apply_to_posts(item):
         post["video_url"] = item.get("video_url") or ""
         post["website_status"] = item.get("website_status", post.get("website_status"))
         post["website_error"] = item.get("website_error", "")
+        post["website_thumbnail_url"] = item.get("hero_image_url") or item.get("website_thumbnail_url", "")
+        post["website_image_source"] = item.get("image_source", "")
+        post["website_image_count"] = len(item.get("body_image_urls") or []) + bool(post["website_thumbnail_url"])
+        post["website_article_word_count"] = result.get("word_count", 0)
         if result.get("first_comment") and post.get("first_comment_status") != "posted" and not post.get("first_comment_snapshot"):
             previous_comment_status = post.get("first_comment_status")
             post["first_comment"] = result["first_comment"]
@@ -589,6 +638,7 @@ def retry_package_component(package_id, component, mode=None):
         article_url=snapshot.get("article_url", ""),
         profile_id=snapshot.get("first_comment_profile_id", ""),
         profile_store=snapshot.get("first_comment_profile_store"),
+        niche=snapshot.get("niche", ""),
     )
     if component == "first_comment" and str(result.get(component) or "").count(snapshot["article_url"]) != 1:
         reason = "First Comment must contain the article URL exactly once"
@@ -649,11 +699,16 @@ def retry_package(package_id, mode=None):
 def process_content_packages_once():
     with _LOCK:
         items = _read(QUEUE_FILE, [])
-        item = next((entry for entry in items if entry.get("status") == "queued" or (entry.get("status") == "retryable" and not circuit_status().get("open"))), None)
+        running = [entry for entry in items if entry.get("status") == "running"]
+        item = next((entry for entry in items if (entry.get("status") == "queued" or
+                     (entry.get("status") == "retryable" and not circuit_status().get("open")))
+                     and not any(_same_clip(active, entry.get("clip_filename"), entry.get("source_job_id"),
+                                           entry.get("source_clip_id")) for active in running)), None)
         if not item:
             return {"processed": 0, "items": items}
         item["status"] = "running"
         item["started_at"] = _now()
+        item["stage"] = "preparing"
         item["attempts"] = int(item.get("attempts") or 0) + 1
         _write(QUEUE_FILE, items)
     try:
@@ -684,14 +739,19 @@ def process_content_packages_once():
                 break
         _write(QUEUE_FILE, latest)
     try:
-        if item.get("status") == "ready":
-            _apply_to_posts(item)
-        elif item.get("status") in ("failed", "retryable"):
-            _apply_failure_to_posts(item)
+        with _POST_SYNC_LOCK:
+            if item.get("status") == "ready":
+                _apply_to_posts(item)
+            elif item.get("status") in ("failed", "retryable"):
+                _apply_failure_to_posts(item)
     except Exception as post_exc:
         item["error"] = sanitize_error(f"{item.get('error', '')}; post sync: {post_exc}")
         with _LOCK:
-            _write(QUEUE_FILE, latest)
+            current = _read(QUEUE_FILE, [])
+            for entry in current:
+                if entry.get("id") == item.get("id"):
+                    entry["error"] = item["error"]
+            _write(QUEUE_FILE, current)
     return {"processed": 1, "item": item, "items": latest}
 
 
@@ -710,14 +770,16 @@ def _process_new_content_package(item):
         # Keep already generated article/caption when only the CMS link or
         # comment needs repair. This also avoids spending another LLM call.
         result = dict(item.get("result") or {})
-        if (item.get("regenerate_text") or
-                str(result.get("source") or "") in ("no_llm_error_fallback", "no_llm_quota_fallback") or
-                not result.get("caption") or not result.get("article_html")):
+        if item.get("regenerate_text") or not result.get("caption") or not result.get("article_html"):
+            store = dict(item.get("first_comment_profile_store") or load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json"))
+            store["selection_strategy"] = item.get("fallback_strategy") or store.get("selection_strategy", "rotate")
+            store["rotation_path"] = str(DATA_ROOT / "data" / "first_comment_rotation.json")
             result = generate_package(
                 item["title"], item.get("summary", ""), item.get("video_url", ""),
                 item.get("mode", "auto"), article_url=article_url,
                 profile_id=item.get("first_comment_profile_id", ""),
-                profile_store=item.get("first_comment_profile_store"),
+                profile_store=store, niche=item.get("niche", ""),
+                fallback_strategy=item.get("fallback_strategy", "rotate"),
             )
         if requires_comment:
             comment = str(result.get("first_comment") or "").strip()
@@ -726,7 +788,8 @@ def _process_new_content_package(item):
                     item["title"], item.get("summary", ""), item.get("video_url", ""),
                     mode=item.get("mode", "auto"), article_url=article_url, component="first_comment",
                     profile_id=item.get("first_comment_profile_id", ""),
-                    profile_store=item.get("first_comment_profile_store"),
+                    profile_store=item.get("first_comment_profile_store"), niche=item.get("niche", ""),
+                    fallback_strategy=item.get("fallback_strategy", "rotate"),
                 )
                 result["first_comment"] = comment_result.get("first_comment", "")
                 result.update({key: comment_result.get(key, "") for key in COMMENT_METADATA})
@@ -734,10 +797,47 @@ def _process_new_content_package(item):
                 result["first_comment_source"] = "template_fallback" if str(result.get("source") or "").startswith("no_llm") else "llm"
             if not result.get("first_comment") or result["first_comment"].count(article_url) != 1:
                 raise RuntimeError("First Comment không chứa đúng URL bài CMS mới")
-        retryable = str(result.get("source") or "").startswith("no_llm_quota_fallback")
-        item.update({"status": "retryable" if retryable else "ready", "result": result, "error": "" if not retryable else "LLM quota exhausted; sẽ tự retry khi quota khả dụng.", "completed_at": _now()})
-        if not retryable:
-            item.pop("regenerate_text", None)
+        item.update({"status": "ready", "stage": "complete", "result": result, "error": "", "completed_at": _now()})
+        item.pop("regenerate_text", None)
+
+
+def update_package_progress(item, stage):
+    item["stage"] = stage
+    item["stage_started_at"] = _now()
+    with _LOCK:
+        items = _read(QUEUE_FILE, [])
+        for entry in items:
+            if entry.get("id") == item.get("id"):
+                entry.update({"stage": stage, "stage_started_at": item["stage_started_at"]})
+                if item.get("result"):
+                    entry["result"] = item["result"]
+                break
+        _write(QUEUE_FILE, items)
+
+
+def content_worker_settings(workers=None):
+    path = DATA_ROOT / "data" / "content_worker_settings.json"
+    with _LOCK:
+        settings = _read(path, {"workers": 2})
+        if workers is not None:
+            if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 4:
+                raise ValueError("Số video xử lý song song phải từ 1 đến 4.")
+            settings = {"workers": workers}
+            _write(path, settings)
+        return {"workers": max(1, min(4, int(settings.get("workers") or 2))), "max_workers": 4}
+
+
+def content_worker_status():
+    from multi_pc.data_root import _local_pid_alive
+    alive = bool(_WORKER_THREAD and _WORKER_THREAD.is_alive())
+    if not alive:
+        try:
+            owner = (DATA_ROOT / "run" / "content-package-worker.lease" / "owner").read_text()
+            fields = dict(line.split("=", 1) for line in owner.splitlines() if "=" in line)
+            alive = fields.get("host") == __import__("socket").gethostname() and _local_pid_alive(int(fields.get("pid") or 0))
+        except (OSError, ValueError):
+            pass
+    return {"alive": alive, **content_worker_settings()}
 
 
 def recover_abandoned_packages():
@@ -767,10 +867,25 @@ def _worker_loop():
         return
     try:
         recover_abandoned_packages()
-        while True:
-            lease.touch()
-            result = process_content_packages_once()
-            time.sleep(1 if result.get("processed") else 3)
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="content-video") as pool:
+            active = set()
+            while True:
+                lease.touch()
+                finished = {future for future in active if future.done()}
+                for future in finished:
+                    try:
+                        future.result()
+                    except Exception:
+                        pass
+                active -= finished
+                limit = content_worker_settings()["workers"]
+                if any(item.get("status") == "queued" or (item.get("status") == "retryable" and
+                       not circuit_status().get("open")) for item in list_packages()):
+                    for _ in range(max(0, limit - len(active))):
+                        active.add(pool.submit(process_content_packages_once))
+                if active:
+                    wait(active, timeout=0.5, return_when=FIRST_COMPLETED)
+                time.sleep(0.25 if active else 1)
     finally:
         lease.release()
 
