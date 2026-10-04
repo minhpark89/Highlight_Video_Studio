@@ -9,6 +9,7 @@ from pathlib import Path
 from src.fallback_comments import LEAD_INS, fallback_first_comment
 from multi_pc.data_root import canonical_data_root
 from multi_pc.json_io import replace_with_retry
+from src.english_text import assert_english, is_english
 
 _ROTATION_LOCK = threading.RLock()
 
@@ -46,6 +47,7 @@ def _valid_lead_ins(values, *, minimum=30):
     for value in clean:
         if not value or len(value) > 220 or "http://" in value.lower() or "https://" in value.lower():
             raise ValueError("Templates must be 1–220 characters and must not contain a URL.")
+        assert_english(value, "First Comment template")
         key = value.casefold()
         if key in seen:
             raise ValueError("Templates must be unique within a profile.")
@@ -123,7 +125,7 @@ def profile_first_comment(title: str, article_url: str, profile_id: str = "", st
     profile = next((item for item in store.get("profiles", []) if str(item.get("id")) == target), None)
     if not profile:
         profile = next((item for item in store.get("profiles", []) if str(item.get("id")) == "builtin_general"), None)
-    lead_ins = (profile or {}).get("lead_ins") or list(LEAD_INS)
+    lead_ins = [line for line in ((profile or {}).get("lead_ins") or list(LEAD_INS)) if is_english(line)] or list(LEAD_INS)
     strategy = store.get("selection_strategy") or (profile or {}).get("fallback_strategy", "deterministic")
     if str((profile or {}).get("id")) == "builtin_general" and strategy != "rotate":
         return fallback_first_comment(title, url)

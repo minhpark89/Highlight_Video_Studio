@@ -21,6 +21,7 @@ from src.text_llm_diagnostics import chat_endpoint, chat_failure
 from src.fallback_comments import fallback_first_comment
 from src.first_comment_profiles import load_profile_store, profile_first_comment
 from src.article_format import normalize_article, viewing_article, word_count
+from src.english_text import ENGLISH_INSTRUCTION, assert_english_package, english_or_default, package_is_english
 
 DATA_ROOT = canonical_data_root()
 QUEUE_FILE = DATA_ROOT / "data" / "content_packages.json"
@@ -63,8 +64,9 @@ def _now():
 
 
 def fallback_package(title: str, summary: str = "", article_url: str = "", profile_id: str = "", profile_store=None, niche: str = "") -> dict:
-    clean = " ".join(str(title or "Untold Highlight").split()).strip()
-    context = " ".join(str(summary or "").split()).strip()
+    clean = english_or_default(title, "Original Video")
+    context = english_or_default(summary)
+    niche = english_or_default(niche)
     hero = clean[:110]
     lead = context or f"A guide to reviewing the original video associated with {clean}."
     article = viewing_article(clean, context, niche)
@@ -78,6 +80,7 @@ def fallback_package(title: str, summary: str = "", article_url: str = "", profi
         "caption": caption,
         "hashtags": ["#highlight", "#viral", "#trending", "#mustwatch"],
         "source": "no_llm",
+        "language": "en",
     }
 
 
@@ -145,6 +148,7 @@ def _llm_package(title, summary, video_url="", article_url="", *, niche="", comp
                   "at the end of the article, keep under 400 characters, and do not invent details. "
                   "hashtags must be an array of strings; every other component must be a string. "
                   "article_html must be 750-950 words with one sentence per paragraph.")
+    prompt = ENGLISH_INSTRUCTION + "\n" + prompt
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if cfg.get("api_key"):
         headers["Authorization"] = f"Bearer {cfg['api_key']}"
@@ -183,6 +187,7 @@ def _llm_package(title, summary, video_url="", article_url="", *, niche="", comp
                 isinstance(tag, str) for tag in data["hashtags"]
             )):
                 raise ValueError("LLM returned an incomplete content package")
+            assert_english_package(data)
         except ValueError:
             if attempt:
                 raise
@@ -191,10 +196,11 @@ def _llm_package(title, summary, video_url="", article_url="", *, niche="", comp
                 "Your previous response could not be used. Return exactly one complete JSON object "
                 "with hero_title, article_html, first_comment, caption and hashtags. "
                 "No thinking, explanation, fences or extra text. first_comment may be an empty string; "
-                "hashtags must be an array of strings."
+                "hashtags must be an array of strings. " + ENGLISH_INSTRUCTION
             )}]
             continue
         data["source"] = "llm"
+        data["language"] = "en"
         data["llm_model"] = model
         data["first_comment_source"] = "llm" if article_url else "pending_article_url"
         record_llm_success()
@@ -355,6 +361,8 @@ def _same_clip(entry, clip_filename, source_job_id="", source_clip_id=""):
 def _reusable(entry, *, needs_article, article_url=""):
     if entry.get("status") != "ready" or not (entry.get("result") or {}).get("caption"):
         return False
+    if not package_is_english(entry.get("result")):
+        return False
     url = str(entry.get("article_url") or "").strip()
     if article_url and url != str(article_url).strip():
         return False
@@ -367,6 +375,8 @@ def _reusable(entry, *, needs_article, article_url=""):
 def package_needs_attention(item):
     """A ready caption does not hide a failed CMS or a missing required comment."""
     source = str((item.get("result") or {}).get("source") or "")
+    if not package_is_english(item.get("result")):
+        return True
     if item.get("status") in ("failed", "retryable"):
         return True
     if item.get("status") in ("queued", "running"):
@@ -470,6 +480,8 @@ def resolve_article_url(item):
     """
     existing = str(item.get("article_url") or "").strip()
     if existing:
+        if item.get("result") and not package_is_english(item["result"]):
+            return existing, "failed", "Existing CMS article contains non-English content. Repair that same URL before reusing or regenerating this package."
         return existing, "ready", ""
     if not item.get("create_website_article"):
         return "", "not_configured", ""
@@ -520,6 +532,7 @@ def _apply_to_posts(item):
     posts_file = DATA_ROOT / "posts.json"
     posts = load_posts_file(posts_file)
     result = item.get("result") or {}
+    assert_english_package(result)
     wanted = set(item["post_ids"])
     comments_to_queue = []
     for post in posts:
@@ -770,7 +783,7 @@ def _process_new_content_package(item):
         # Keep already generated article/caption when only the CMS link or
         # comment needs repair. This also avoids spending another LLM call.
         result = dict(item.get("result") or {})
-        if item.get("regenerate_text") or not result.get("caption") or not result.get("article_html"):
+        if item.get("regenerate_text") or not result.get("caption") or not result.get("article_html") or not package_is_english(result):
             store = dict(item.get("first_comment_profile_store") or load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json"))
             store["selection_strategy"] = item.get("fallback_strategy") or store.get("selection_strategy", "rotate")
             store["rotation_path"] = str(DATA_ROOT / "data" / "first_comment_rotation.json")

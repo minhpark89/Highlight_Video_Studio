@@ -127,6 +127,47 @@ def test_expired_native_schedule_does_not_silently_publish_now():
     assert not diagnose(post, pending_observation())["can_finish_existing"]
 
 
+def test_replacement_schedule_finishes_same_id_once_despite_queued_token_rows(isolated_diagnostics):
+    import time
+    api, client, path, original, vault = isolated_diagnostics
+    original.update(publish_mode="meta_scheduled", meta_scheduled_publish_time=int(time.time()) - 60)
+    path.write_text(json.dumps([original, {"id": "queued", "status": "meta_handoff", "token_id": original["token_id"]}]))
+    assert diagnose(original, pending_observation())["can_reschedule_existing"]
+    publish_at = int(time.time()) + 3600
+    def finish(*args, **kwargs):
+        saved = json.loads(path.read_text(encoding="utf-8"))[0]
+        assert saved["meta_finish_recovery_attempts"] == 1
+        assert saved["meta_scheduled_publish_time"] == kwargs["schedule_time"] == publish_at
+        assert args[2] == "9001"
+        return {"accepted": True, "state": "accepted", "error": ""}
+    body = {"confirm_existing_upload": True, "video_id": "9001", "schedule_time": publish_at}
+    with mock.patch.object(api.reel_poster, "finish_existing_reel", side_effect=finish) as write, \
+         mock.patch.object(api.reel_poster, "publish_reel") as upload:
+        assert client.post("/api/posts/slow/finish-existing-upload", json=body).status_code == 200
+        assert client.post("/api/posts/slow/finish-existing-upload", json=body).status_code == 409
+    write.assert_called_once()
+    upload.assert_not_called()
+    saved = json.loads(path.read_text(encoding="utf-8"))[0]
+    assert saved["status"] == "processing" and saved["original_scheduled_time"] == original["scheduled_time"]
+    assert saved["first_comment_snapshot"] == original["first_comment_snapshot"]
+
+
+def test_invalid_replacement_or_foreign_description_cannot_claim_finish(isolated_diagnostics):
+    import time
+    api, client, path, original, vault = isolated_diagnostics
+    original.update(publish_mode="meta_scheduled", meta_scheduled_publish_time=int(time.time()) - 60)
+    path.write_text(json.dumps([original]))
+    body = {"confirm_existing_upload": True, "video_id": "9001", "schedule_time": int(time.time()) + 60}
+    with mock.patch.object(api.reel_poster, "finish_existing_reel") as write:
+        assert client.post("/api/posts/slow/finish-existing-upload", json=body).status_code == 400
+        original["meta_description_snapshot"] = "外国語の記事"
+        path.write_text(json.dumps([original]))
+        body["schedule_time"] = int(time.time()) + 3600
+        assert client.post("/api/posts/slow/finish-existing-upload", json=body).status_code == 409
+    write.assert_not_called()
+    assert not json.loads(path.read_text(encoding="utf-8"))[0].get("meta_finish_recovery_attempts")
+
+
 def test_finish_transport_sends_only_existing_id_and_unknown_outcome_is_not_success():
     response = mock.Mock(ok=True, status_code=200, headers={})
     response.json.return_value = {"success": True}

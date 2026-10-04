@@ -5,9 +5,15 @@ from urllib.parse import urlparse
 from multi_pc.meta_scheduling import MetaScheduleTimeError, parse_meta_schedule_time
 from src.content_packages import scheduled_video_path
 from src.publisher.meta_preflight import preflight_pages
+from src.english_text import assert_english
 
 
 def handoff_eligibility(post, output_dir, *, now_ts=None):
+    try:
+        for key in ("title", "content", "first_comment", "first_comment_snapshot"):
+            assert_english(post.get(key, ""), key)
+    except ValueError:
+        return False, "Nội dung phải là tiếng Anh. Sửa Content Studio trước khi giao lịch Meta."
     if post.get("status") != "scheduled" or post.get("publish_mode") == "meta_scheduled":
         return False, "Chỉ chuyển bài đang do app giữ lịch."
     if any(post.get(key) for key in ("meta_video_id", "meta_upload_video_id", "meta_post_id", "post_fb_id", "publish_started_at", "outcome_unknown")):
@@ -117,7 +123,10 @@ def process_next_handoff(posts, save, poster, output_dir, vault, pages, *, now=N
                      "first_comment_queue_id": comment_result.get("queue_id") or ""})
     elif video_id or result.get("outcome_unknown") or result.get("processing"):
         post.update({"meta_video_id": video_id, "meta_upload_video_id": video_id,
-                     "meta_schedule_status": "verification_pending",
+                     "meta_schedule_status": result.get("meta_schedule_status") or "verification_pending",
+                     "meta_finish_not_sent": bool(result.get("finish_not_sent")),
+                     "outcome_unknown": bool(result.get("outcome_unknown", True)),
+                     "meta_publish_error": sanitize_error(result.get("error")),
                      "error": sanitize_error(result.get("error") or "Chờ đối soát lịch trên Meta.")})
     else:
         # A definitive pre-upload failure leaves the original app schedule intact.

@@ -38,6 +38,7 @@ def diagnose(post, seen=None):
     upload_id = str(post.get("meta_upload_video_id") or "")
     result = {"state": "unverified", "message": "Chờ xác minh trạng thái trên Meta",
               "detail": "Bấm Kiểm tra Meta để đọc trạng thái hiện tại.", "can_finish_existing": False,
+              "can_reschedule_existing": False,
               "video_id": upload_id or str(post.get("meta_video_id") or post.get("meta_post_id") or "")}
     if not seen:
         return result
@@ -65,7 +66,8 @@ def diagnose(post, seen=None):
             try:
                 parse_meta_schedule_time(post.get("meta_scheduled_publish_time") or post.get("scheduled_time"))
             except (ValueError, TypeError):
-                result.update(can_finish_existing=False, detail="Giờ Meta đã hết cửa sổ hợp lệ. Cần kiểm tra và chọn giờ mới; app không tự chuyển sang đăng ngay.")
+                result.update(can_reschedule_existing=result["can_finish_existing"], can_finish_existing=False,
+                              detail="Video đã upload đủ nhưng giờ Meta hết cửa sổ hợp lệ. Chọn giờ mới để hoàn tất đúng ID này; không cần upload lại.")
         if post.get("meta_finish_recovery_attempts"):
             result["detail"] = "Đã gửi một yêu cầu hoàn tất cho video này; tiếp tục đối soát trước khi có thao tác khác. " + safe_error(post.get("meta_finish_recovery_error"))
     elif "error" in (publishing, processing, seen.get("video_status")) or "failed" in (publishing, processing):

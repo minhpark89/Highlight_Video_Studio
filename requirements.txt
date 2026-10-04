@@ -3,5 +3,6 @@ waitress
 requests
 yt-dlp
 pillow
+langdetect==1.0.9
 youtube-transcript-api==1.2.4
 faster-whisper==1.2.1

@@ -7,6 +7,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageOps
 from multi_pc.data_root import canonical_data_root
 from src.llm_response import json_from_chat_response
+from src.english_text import ENGLISH_INSTRUCTION, assert_english
 
 BASE_DIR = canonical_data_root()
 TEMP_DIR = BASE_DIR / "temp"
@@ -131,7 +132,8 @@ Thông tin video:
 }}
 """
     headers = {"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"}
-    payload = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.45}
+    payload = {"model": model, "messages": [{"role": "system", "content": ENGLISH_INSTRUCTION},
+                                           {"role": "user", "content": prompt}], "temperature": 0.45}
     try:
         response = requests.post(chat_endpoint(base), json=payload, headers=headers, timeout=30)
     except requests.RequestException as exc:
@@ -141,6 +143,10 @@ Thông tin video:
     result = json_from_chat_response(response)
     if not isinstance(result, dict) or not all(result.get(field) for field in ("viral_title", "facebook_post", "first_comment")):
         raise RuntimeError("Text LLM returned incomplete viral content")
+    for field in ("viral_title", "facebook_post", "first_comment"):
+        assert_english(result[field], field)
+    for tag in result.get("hashtags") or []:
+        assert_english(tag, "hashtags")
     return result
 
 def render_stylish_thumbnail(video_path: str, output_path: str, banner_text: str = "", timestamp_sec: float = 2.5):

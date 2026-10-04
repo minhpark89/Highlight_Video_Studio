@@ -7826,16 +7826,20 @@
       if(!response.ok || !data.success) throw new Error(data.error || 'Không đọc được Meta');
       currentMetaDiagnosis=data; const seen=data.observation || {}, diag=data.diagnosis || {};
       body.innerHTML=`<h4 style="font-size:14px;margin-bottom:4px;">${escapeHtml(data.title || '')}</h4><div style="color:#94a3b8;margin-bottom:14px;">${escapeHtml(data.page_name || '')}</div><div style="border:1px solid #b45309;background:rgba(245,158,11,.08);padding:14px;border-radius:10px;margin-bottom:14px;"><b>${escapeHtml(diag.message || '')}</b><div style="color:#cbd5e1;margin-top:5px;">${escapeHtml(diag.detail || '')}</div></div><dl style="display:grid;grid-template-columns:120px minmax(0,1fr);gap:7px;font-size:12px;"><dt>Meta ID</dt><dd>${escapeHtml(diag.video_id || 'Chưa có')}</dd><dt>Video</dt><dd>${escapeHtml(seen.video_status || 'Chưa đọc được')}</dd><dt>Upload</dt><dd>${escapeHtml(seen.uploading_status || '—')}${seen.bytes_transferred!=null ? ' · '+Number(seen.bytes_transferred).toLocaleString('vi-VN')+' bytes' : ''}</dd><dt>Xử lý</dt><dd>${escapeHtml(seen.processing_status || '—')}</dd><dt>Đăng bài</dt><dd>${escapeHtml(seen.publishing_status || '—')}</dd><dt>Lần đọc</dt><dd>${escapeHtml(seen.checked_at ? new Date(seen.checked_at).toLocaleString('vi-VN') : '—')}</dd></dl>`;
-      document.getElementById('meta-finish-existing').style.display=diag.can_finish_existing ? '' : 'none';
+      if(diag.can_reschedule_existing){ const input=document.createElement('input'); input.type='datetime-local'; input.id='meta-replacement-time'; input.style='margin-top:16px;padding:8px;background:#0f172a;color:white;border:1px solid #475569;border-radius:6px;'; const label=document.createElement('label'); label.textContent='Giờ đăng mới (nên chọn ít nhất 30 phút từ bây giờ để có thời gian xử lý): '; label.appendChild(input); body.appendChild(label); }
+      document.getElementById('meta-finish-existing').style.display=(diag.can_finish_existing || diag.can_reschedule_existing) ? '' : 'none';
+      document.getElementById('meta-finish-existing').textContent=diag.can_reschedule_existing ? 'Đặt giờ mới cho video đã upload' : 'Hoàn tất video đã upload';
     }catch(error){body.textContent=error.message;}
   }
   async function finishExistingUpload(){
-    if(metaFinishBusy || !currentMetaDiagnosis?.diagnosis?.can_finish_existing) return;
+    if(metaFinishBusy || !(currentMetaDiagnosis?.diagnosis?.can_finish_existing || currentMetaDiagnosis?.diagnosis?.can_reschedule_existing)) return;
+    const replacement=currentMetaDiagnosis.diagnosis.can_reschedule_existing ? document.getElementById('meta-replacement-time')?.value : null;
+    if(currentMetaDiagnosis.diagnosis.can_reschedule_existing && !replacement){alert('Chọn giờ đăng mới trước khi hoàn tất.');return;}
     const videoId=currentMetaDiagnosis.diagnosis.video_id;
-    if(!confirm(`Hoàn tất đăng cho video Meta ID ${videoId} đã tải đủ?\n\nGiữ nguyên Page, Token và nội dung. App gửi đúng một yêu cầu hoàn tất cho ID này rồi tiếp tục xác minh trạng thái đăng.`)) return;
+    if(!confirm(`Hoàn tất đăng cho video Meta ID ${videoId} đã tải đủ?${replacement ? '\nGiờ đăng mới: '+replacement.replace('T',' ') : ''}\n\nGiữ nguyên Page, Token và nội dung. App gửi đúng một yêu cầu hoàn tất cho ID này rồi tiếp tục xác minh trạng thái đăng.`)) return;
     metaFinishBusy=true; const button=document.getElementById('meta-finish-existing');button.disabled=true;
     try{
-      const response=await fetch('/api/posts/'+encodeURIComponent(currentMetaDiagnosisPost)+'/finish-existing-upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_existing_upload:true,video_id:videoId})});
+      const response=await fetch('/api/posts/'+encodeURIComponent(currentMetaDiagnosisPost)+'/finish-existing-upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_existing_upload:true,video_id:videoId,...(replacement ? {schedule_time:replacement} : {})})});
       const data=await response.json();if(!response.ok || !data.success) throw new Error(data.error || 'Không hoàn tất được upload');
       document.getElementById('meta-diagnosis-body').textContent=data.message;button.style.display='none';loadDashboard();loadPostsTable({quiet:true});
     }catch(error){document.getElementById('meta-diagnosis-body').textContent=error.message;}finally{metaFinishBusy=false;button.disabled=false;}

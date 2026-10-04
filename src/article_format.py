@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import re
 from html.parser import HTMLParser
+from src.english_text import english_or_default
 
 MIN_ARTICLE_WORDS = 600
 
@@ -71,8 +72,9 @@ def word_count(source):
 
 
 def viewing_article(title, summary="", niche=""):
-    title = " ".join(str(title or "Original Video").split())
-    context = " ".join(str(summary or "").split())[:2400]
+    title = english_or_default(title, "Original Video")
+    context = english_or_default(summary)[:2400]
+    niche = english_or_default(niche)
     blocks = [
         ("h2", title),
         ("p", f"The full recording behind {title} gives you more room to follow the sequence than a short highlight can offer."),

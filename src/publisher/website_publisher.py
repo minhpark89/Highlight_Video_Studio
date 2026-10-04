@@ -20,6 +20,7 @@ from pathlib import Path
 import requests
 from multi_pc.data_root import canonical_data_root
 from src.llm_response import chat_model_unavailable, chat_stream_incomplete, chat_text_from_response, json_from_chat_response
+from src.english_text import ENGLISH_INSTRUCTION, assert_english, assert_english_package, english_or_default, is_english
 
 logger = logging.getLogger("website_publisher")
 
@@ -806,6 +807,9 @@ def render_content_package_article(video_title, hero_img, body_imgs, *, package,
                                    youtube_id="", video_stream_url="", source_summary=""):
     """Render the exact package used by the queue, with its images and player."""
     from src.article_format import normalize_article, paragraph_html, viewing_article, word_count, MIN_ARTICLE_WORDS
+    assert_english_package(package)
+    video_title = english_or_default(package.get("hero_title"), english_or_default(video_title, "Original Video"))
+    source_summary = english_or_default(package.get("source_summary"), english_or_default(source_summary))
     article = normalize_article(package.get("article_html", ""))
     if word_count(article) < MIN_ARTICLE_WORDS:
         if package.get("required_llm"):
@@ -852,6 +856,9 @@ def generate_deep_article_content(video_title: str, hero_img: str, body_imgs: li
     if prepared_package is not None:
         return render_content_package_article(video_title, hero_img, body_imgs, package=prepared_package,
             youtube_id=youtube_id, video_stream_url=video_stream_url, source_summary=source_summary)
+    original_title, original_summary = video_title, source_summary
+    video_title = english_or_default(video_title, "Original Video")
+    source_summary = english_or_default(source_summary)
     clean_youtube_id = extract_youtube_video_id(youtube_id)
     if clean_youtube_id:
         video_player_html = build_youtube_embed_html(clean_youtube_id, video_title)
@@ -913,7 +920,8 @@ Requirements:
 4. "section_2_title": "Inside the Climax: Tactical Genius & Aftermath"
 5. "section_2_content": Build curiosity around the source and invite readers to watch the full video at the end; use only supplied facts.
 6. Make it thorough and captivating (750-950 words; never below 600 words), one sentence per paragraph.
-Source summary: {source_summary}
+Original source title (translate to English): {original_title}
+Source summary (translate to English): {original_summary}
 Output strictly valid JSON only:
 {{
   "seo_title": "{title} - Full Uncut Breakdown & Scene Analysis",
@@ -961,7 +969,7 @@ Output strictly valid JSON only:
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": "You write structured, thorough journalistic feature articles. Respond with valid JSON only."},
+                {"role": "system", "content": ENGLISH_INSTRUCTION + " Respond with valid JSON only."},
                 {"role": "user", "content": prompt}
             ],
             "max_tokens": 1800,
@@ -976,6 +984,8 @@ Output strictly valid JSON only:
                         "section_2_title", "section_2_content")
             if any(not isinstance(d.get(key), str) or not d[key].strip() for key in required):
                 raise ValueError("Incomplete article response")
+            for key in (*required, "seo_title"):
+                assert_english(d.get(key, ""), key)
             if len(re.findall(r"\b[A-Za-z]+\b", " ".join(d[key] for key in required))) < 600:
                 raise ValueError("Article response below 600-word gate")
             seo_title = d.get("seo_title") if isinstance(d.get("seo_title"), str) and d["seo_title"].strip() else seo_title
@@ -1096,7 +1106,7 @@ Rules:
             payload = {
                 "model": candidate_model,
                 "messages": [
-                    {"role": "system", "content": "You write viral, curiosity-piquing first comments in English. Return only the final comment text."},
+                    {"role": "system", "content": ENGLISH_INSTRUCTION + " Return only the final comment text."},
                     {"role": "user", "content": prompt}
                 ],
                 "max_tokens": 120,
@@ -1109,6 +1119,7 @@ Rules:
             comment = chat_text_from_response(resp).strip()
             if not comment:
                 raise ValueError("LLM comment response is empty")
+            assert_english(comment, "First Comment")
             if comment.count(article_url) > 1:
                 return fallback_comment
             if comment.startswith('"') and comment.endswith('"'):
@@ -1184,6 +1195,15 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None, *, 
         marker = (f"youtube-nocookie.com/embed/{youtube_id}" if youtube_id else video_stream_url)
         if not marker or marker not in existing.text:
             raise WebsiteServiceError("CMS slug already exists with a different or missing video embed")
+        try:
+            # A matching embed alone cannot make a legacy foreign article reusable.
+            from src.english_text import assert_english
+            article = re.search(r"<article\b[^>]*>(.*?)</article>", existing.text, re.S | re.I)
+            public = article.group(1) if article else existing.text
+            public = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", "", public, flags=re.S | re.I)
+            assert_english(public, "Existing CMS article")
+        except ValueError as exc:
+            raise WebsiteServiceError("Repair the non-English article at its existing URL before reusing it") from exc
         return expected_url, ""
     if existing.status_code != 404 and (existing.status_code != 200 or urlparse(existing.url).path.rstrip("/") != urlparse(base_url).path.rstrip("/")):
         raise WebsiteServiceError(f"CMS article lookup HTTP {existing.status_code}; publication paused to avoid duplicates")

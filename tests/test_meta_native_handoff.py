@@ -95,6 +95,32 @@ def test_schedule_mismatch_is_not_accepted_as_handoff():
     assert not result["verified"] and result["status"] == "schedule_mismatch"
 
 
+def test_schedule_expiring_during_transfer_keeps_id_without_finish_or_retry(tmp_path):
+    from multi_pc.meta_scheduling import MetaScheduleTimeError
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"video")
+    publish_at = int(time.time()) + 900
+    responses = [meta_response({"video_id": "9001"}), meta_response({"success": True})]
+    with mock.patch("multi_pc.meta_scheduling.parse_meta_schedule_time", side_effect=[publish_at, MetaScheduleTimeError("schedule_expired", "expired")]), \
+         mock.patch("src.publisher.meta_reel_poster.requests.post", side_effect=responses) as write:
+        result = MetaReelPoster().publish_reel("9901", "fixture", video, schedule_time=publish_at)
+    assert write.call_count == 2
+    assert result["upload_video_id"] == "9001" and result["meta_scheduled_publish_time"] == publish_at
+    assert result["finish_not_sent"] and not result["outcome_unknown"] and not result["retryable"]
+    assert result["meta_schedule_status"] == "schedule_expired"
+
+
+def test_unverified_native_object_keeps_observed_upload_phases():
+    status = {"id": "9001", "status": {"video_status": "upload_complete",
+              "uploading_phase": {"status": "complete"}, "processing_phase": {"status": "not_started"},
+              "publishing_phase": {"status": "not_started"}}}
+    with mock.patch("src.publisher.meta_reel_poster.requests.get", return_value=meta_response(status)):
+        result = MetaReelPoster().check_scheduled_reel("9001", "fixture", 1800000900)
+    assert not result["verified"]
+    assert result["meta_observation"]["uploading_status"] == "complete"
+    assert result["meta_observation"]["publishing_status"] == "not_started"
+
+
 @pytest.fixture
 def isolated_api(tmp_path, monkeypatch):
     from web import app as web_app

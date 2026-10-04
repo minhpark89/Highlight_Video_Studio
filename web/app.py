@@ -3156,15 +3156,37 @@ def api_finish_existing_upload(post_id):
             return jsonify({"success": False, "error": "Meta upload ID đã khác; hãy kiểm tra lại bài."}), 409
         seen, mapping = _inspect_post_meta(post)
         diagnostic = diagnose(post, seen)
+        replacement_schedule = body.get("schedule_time")
+        if replacement_schedule is not None:
+            if not diagnostic.get("can_reschedule_existing"):
+                return jsonify({"success": False, "error": "Upload này không đủ điều kiện chọn giờ mới.", "diagnosis": diagnostic}), 409
+            from multi_pc.meta_scheduling import parse_meta_schedule_time
+            try:
+                replacement_schedule = parse_meta_schedule_time(replacement_schedule)
+            except ValueError as exc:
+                return jsonify({"success": False, "error": str(exc)}), 400
+            diagnostic = diagnose({**post, "meta_scheduled_publish_time": replacement_schedule}, seen)
         if not diagnostic["can_finish_existing"] or not mapping:
             return jsonify({"success": False, "error": diagnostic["message"], "diagnosis": diagnostic}), 409
         if not credential_ready(token_vault.get_token_by_id(mapping["token_id"])):
             return jsonify({"success": False, "error": "Token đang cooldown hoặc bị hạn chế; chờ trước khi gửi Finish."}), 409
-        if any(item.get("id") != post_id and item.get("status") in ("publishing", "meta_handoff") and
+        if any(item.get("id") != post_id and item.get("status") == "publishing" and
                (item.get("token_id") == post.get("token_id") or item.get("page_id") == post.get("page_id")) for item in posts):
             return jsonify({"success": False, "error": "Token/Page đang có upload khác; hãy chờ hoàn tất."}), 409
         native = post.get("publish_mode") == "meta_scheduled" or bool(post.get("meta_scheduled_publish_time"))
         schedule = (post.get("meta_scheduled_publish_time") or post.get("scheduled_time")) if native else None
+        description = post.get("meta_description_snapshot") or f"{post.get('title') or ''}\n\n{post.get('content') or ''}"
+        from src.english_text import assert_english
+        try:
+            assert_english(description, "Reel description")
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 409
+        if replacement_schedule is not None:
+            post.setdefault("original_scheduled_time", post.get("scheduled_time"))
+            schedule = replacement_schedule
+            post.update(meta_scheduled_publish_time=schedule,
+                        scheduled_time=datetime.fromtimestamp(schedule).strftime("%Y-%m-%d %H:%M:%S"),
+                        meta_schedule_status="verification_pending")
         post.update(meta_finish_recovery_attempts=1, meta_finish_recovery_state="requesting",
                     meta_finish_recovery_started_at=datetime.now().astimezone().isoformat(),
                     meta_observation=seen, outcome_unknown=True, retryable=False)
@@ -3174,7 +3196,6 @@ def api_finish_existing_upload(post_id):
             save_posts(posts)
         except Exception:
             return jsonify({"success": False, "error": "Không thể lưu khóa an toàn trước khi gửi Finish; Meta chưa được gọi."}), 500
-        description = post.get("meta_description_snapshot") or f"{post.get('title') or ''}\n\n{post.get('content') or ''}"
         try:
             result = reel_poster.finish_existing_reel(post["page_id"], mapping["page_token"], post["meta_upload_video_id"],
                 description, schedule_time=schedule, token_id=mapping["token_id"])
@@ -4398,6 +4419,8 @@ from src.content_packages import (list_packages, get_package, process_content_pa
 def apply_ready_package_to_post(post, package):
     """Keep in-memory scheduled entries consistent with a reused persisted package."""
     result = package.get("result") or {}
+    from src.english_text import assert_english_package
+    assert_english_package(result)
     post["content_package_source"] = result.get("source")
     post["content"] = result.get("caption") or post.get("content", "")
     post["title"] = result.get("hero_title") or post.get("title", "")
@@ -4563,7 +4586,7 @@ def api_regenerate_first_comment_profile(profile_id):
         if not endpoint or not candidate_models or not cfg.get("api_key"):
             return jsonify({"success": False, "error": "Configure a text LLM endpoint, model, and key before generating profile samples."}), 400
         prompt = (
-            "Return JSON only as {\"templates\":[30 distinct strings]}. Write short reusable First Comment lead-ins "
+            "Return JSON only as {\"templates\":[30 distinct strings]}. Write short reusable First Comment lead-ins in English only "
             "for niche=" + profile["niche"] + ". Keep every line factual and generic: no named people, event claims, "
             "outcomes, dates, invented details, questions implying an event, or URLs. Each line should invite the reader "
             "to open the article for more context. Lead-in only; the verified article URL is appended later."

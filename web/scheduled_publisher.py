@@ -402,8 +402,8 @@ def _process_scheduled_posts_once(
     selected_due = []
     def token_key(post):
         return str(post.get("token_id") or f"page:{post.get('page_id')}")
-    reserved_tokens = {token_key(p) for p in posts if p.get("status") in ("publishing", "processing")}
-    reserved_pages = {str(p.get("page_id")) for p in posts if p.get("status") in ("publishing", "processing")}
+    reserved_tokens = {token_key(p) for p in posts if p.get("status") == "publishing"}
+    reserved_pages = {str(p.get("page_id")) for p in posts if p.get("status") == "publishing"}
     candidates = list(posts)
     rate_blocked = 0
     for _ in range(len(posts)):
@@ -476,14 +476,10 @@ def _process_scheduled_posts_once(
     if claimed_posts or recovered or reconciled or queue_result.get("changed") or removed:
         save_posts(posts)
     from web.meta_handoff import process_next_handoff
-    reserved_tokens = {token_key(p) for p in posts if p.get("status") in ("publishing", "processing")}
-    reserved_pages = {str(p.get("page_id")) for p in posts if p.get("status") in ("publishing", "processing")}
-    last_started = {}
-    for row in posts:
-        for field in ("publish_started_at", "meta_handoff_started_at"):
-            started = _parse_scheduled_time(row.get(field))
-            if started:
-                last_started[token_key(row)] = max(last_started.get(token_key(row), started), started)
+    # Processing is remote reconciliation, not an active local upload. Each
+    # existing post keeps its duplicate fence; independent posts may proceed.
+    reserved_tokens = {token_key(p) for p in posts if p.get("status") == "publishing"}
+    reserved_pages = {str(p.get("page_id")) for p in posts if p.get("status") == "publishing"}
     handoffs = []
     for row in sorted((p for p in posts if p.get("status") == "meta_handoff"),
                       key=lambda p: (str(p.get("scheduled_time") or ""), str(p.get("id")))):
@@ -494,9 +490,9 @@ def _process_scheduled_posts_once(
         entry = token_vault.get_token_by_id(str(row.get("token_id") or ""))
         if entry and entry.get("status") == "ACTIVE" and not credential_ready(entry):
             continue
-        started = last_started.get(key)
-        if started and now_ts - started.timestamp() < int(row.get("token_gap_seconds") or 900):
-            continue
+        # token_gap_seconds controls the actual publish timetable. Native
+        # schedule handoffs can drain now; usage/cooldown and one active transfer
+        # per token/Page in this batch still bound provider load.
         handoffs.append(row)
         reserved_tokens.add(key)
         reserved_pages.add(pid)

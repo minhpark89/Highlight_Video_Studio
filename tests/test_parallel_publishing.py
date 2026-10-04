@@ -202,6 +202,37 @@ def test_native_handoffs_run_in_parallel_with_distinct_tokens_and_preserve_ids(t
     assert saved["p2"]["status"] == "meta_handoff"
 
 
+def test_native_handoffs_ignore_publish_gap_and_remote_processing_reservations(tmp_path):
+    from web import scheduled_publisher as worker
+    path = tmp_path / "posts.json"
+    now = datetime(2026, 10, 1, 11)
+    rows = [{"id": "remote", "page_id": "page-a", "token_id": "token-a", "status": "processing",
+             "meta_next_check_at": now.timestamp() + 300, "meta_upload_video_id": "9001",
+             "meta_handoff_started_at": "2026-10-01 10:59:00"},
+            {"id": "next", "page_id": "page-a", "token_id": "token-a", "status": "meta_handoff",
+             "scheduled_time": "2026-10-01 12:00:00", "token_gap_seconds": 900},
+            {"id": "same-batch", "page_id": "page-a", "token_id": "token-a", "status": "meta_handoff",
+             "scheduled_time": "2026-10-01 12:15:00"}]
+    save_posts_file(path, rows)
+    def handoff(posts, save, *args, post_id=None, **kwargs):
+        post = next(row for row in posts if row["id"] == post_id)
+        post.update(status="processing", meta_video_id="9002")
+        save(posts)
+        return 1
+    with mock.patch.object(worker, "POSTS_FILE", path), \
+         mock.patch("src.publisher.first_comment_queue.process_due_first_comments", return_value={}), \
+         mock.patch("src.publisher.token_vault.TokenVault") as vault, \
+         mock.patch("src.publisher.page_manager.PageManager"), \
+         mock.patch("web.meta_handoff.process_next_handoff", side_effect=handoff) as called:
+        vault.return_value.get_token_by_id.return_value = {"status": "ACTIVE"}
+        result = worker.process_scheduled_posts_once(now=now)
+    assert result["handed_off"] == 1 and called.call_count == 1
+    saved = {row["id"]: row for row in load_posts_file(path)}
+    assert saved["remote"]["meta_upload_video_id"] == "9001"
+    assert saved["next"]["meta_video_id"] == "9002"
+    assert saved["same-batch"]["status"] == "meta_handoff"
+
+
 def test_requested_meta_schedule_never_silently_becomes_app_publish(tmp_path):
     from web import scheduled_publisher as worker
     path = tmp_path / "posts.json"

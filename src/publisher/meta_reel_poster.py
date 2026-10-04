@@ -2,6 +2,7 @@ import os
 import time
 import requests
 import re
+from src.english_text import assert_english
 from pathlib import Path
 from datetime import datetime
 
@@ -82,6 +83,10 @@ class MetaReelPoster:
     def finish_existing_reel(self, page_id, page_token, video_id, description, *, schedule_time=None, token_id=None):
         """Finish an existing upload only; never initialize or transfer another video."""
         from web.meta_diagnostics import safe_error
+        try:
+            assert_english(description, "Reel description")
+        except ValueError as exc:
+            return {"accepted": False, "state": "rejected", "error": str(exc)}
         if not re.fullmatch(r"[0-9]+", str(video_id or "")):
             return {"accepted": False, "state": "rejected", "error": "Meta upload ID không hợp lệ."}
         payload = {"upload_phase": "finish", "access_token": page_token, "video_id": str(video_id),
@@ -104,48 +109,47 @@ class MetaReelPoster:
             return {"accepted": False, "state": "unknown", "error": "Phản hồi Finish chưa rõ; không gửi lại tự động."}
 
     def check_scheduled_reel(self, candidate_id, page_token, expected_publish_time=None, token_id=None):
-        """Read the Reel object and verify Meta's accepted schedule state."""
+        """Read the Reel object and retain phase evidence even before acceptance."""
+        from web.meta_diagnostics import observation
         if not re.fullmatch(r"[0-9]+(?:_[0-9]+)?", str(candidate_id or "")) or not page_token:
             return {"verified": False, "status": "unverified"}
         try:
             response = requests.get(f"{self.base_url}/{candidate_id}", params={
-                "fields": "id,status,permalink_url",
-                "access_token": page_token,
+                "fields": "id,status,permalink_url", "access_token": page_token,
             }, timeout=12)
             self._track_headers(token_id or page_token, response)
-            if not response.ok:
-                return {"verified": False, "status": "unverified"}
             data = response.json()
-            status = data.get("status") or {}
-            if not isinstance(status, dict):
-                status = {}
-            phase = status.get("publishing_phase") or data.get("publishing_phase") or {}
-            if not isinstance(phase, dict):
-                phase = {}
-            publish_state = str(phase.get("publish_status") or "").lower()
-            raw_time = (status.get("publish_time") or data.get("publish_time") or phase.get("publish_time"))
+            seen = observation(data, response.status_code)
+            seen["error"] = seen["error"].replace(page_token, "[redacted]")
+            result = {"verified": False, "status": "unverified", "meta_observation": seen}
+            if not response.ok or not isinstance(data, dict) or str(data.get("id") or "") != str(candidate_id):
+                return result
+            publish_state = seen["publishing_status"]
             try:
-                publish_time = int(raw_time) if raw_time is not None else 0
+                publish_time = int(seen["publish_time"] or 0)
             except (TypeError, ValueError):
                 publish_time = 0
-            if str(data.get("id") or "") != str(candidate_id):
-                return {"verified": False, "status": "unverified"}
             if publish_state == "scheduled" and publish_time:
                 if expected_publish_time is not None and abs(publish_time - int(expected_publish_time)) > 60:
-                    return {"verified": False, "status": "schedule_mismatch", "publish_time": publish_time}
-                return {"verified": True, "status": "scheduled", "publish_time": publish_time,
+                    return {**result, "status": "schedule_mismatch", "publish_time": publish_time}
+                return {**result, "verified": True, "status": "scheduled", "publish_time": publish_time,
                         "video_id": str(data["id"]), "fb_url": str(data.get("permalink_url") or "")}
             if publish_state == "published":
                 public_check = self.check_processing_reel(candidate_id, page_token, token_id)
-                return {**public_check, "status": "published", "publish_time": publish_time}
+                return {**result, **public_check, "status": "published", "publish_time": publish_time}
             if publish_state in ("error", "failed", "rejected"):
-                return {"verified": False, "status": publish_state,
+                return {**result, "status": publish_state,
                         "publish_time": publish_time, "video_id": str(data["id"])}
+            return result
         except (requests.RequestException, ValueError, TypeError):
-            pass
-        return {"verified": False, "status": "unverified"}
+            return {"verified": False, "status": "unverified", "meta_observation": observation({}, 503)}
 
     def publish_reel(self, page_id, page_token, video_path, description="", first_comment="", schedule_time=None, token_id=None, reconcile_seconds=0, post_id=None, on_upload_initialized=None):
+        try:
+            assert_english(description, "Reel description")
+            assert_english(first_comment, "First Comment")
+        except ValueError as exc:
+            return {"success": False, "retryable": False, "error": str(exc), "code": "non_english_content"}
         video_path = Path(video_path)
         if not video_path.exists():
             return {"success": False, "error": f"Video không tồn tại: {video_path}"}
@@ -222,7 +226,12 @@ class MetaReelPoster:
                 try:
                     target_ts = parse_meta_schedule_time(schedule_time)
                 except ValueError as exc:
-                    return {"success": False, "error": str(exc), "code": getattr(exc, "code", "invalid_schedule_time")}
+                    return {"success": False, "processing": True, "outcome_unknown": False,
+                            "upload_video_id": str(video_id), "meta_video_id": str(video_id),
+                            "meta_scheduled_publish_time": target_ts, "meta_schedule_status": "schedule_expired",
+                            "code": getattr(exc, "code", "invalid_schedule_time"),
+                            "retryable": False, "finish_not_sent": True,
+                            "error": "Video upload completed, but the Meta scheduling window expired before Finish. Choose a new time for this existing upload."}
                 finish_payload["video_state"] = "SCHEDULED"
                 finish_payload["scheduled_publish_time"] = target_ts
                 is_scheduled = True
@@ -328,6 +337,10 @@ class MetaReelPoster:
 
     def post_first_comment(self, object_id, page_token, comment_text, token_id=None):
         """Bắn First Comment vào Reel hoặc Post"""
+        try:
+            assert_english(comment_text, "First Comment")
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
         url = f"{self.base_url}/{object_id}/comments"
         payload = {
             "message": comment_text,

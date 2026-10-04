@@ -58,13 +58,15 @@ New-Item -ItemType Directory -Force -Path $stage, $release | Out-Null
 # A unique stage prevents stale preview processes from locking or corrupting a rebuild.
 $stageRuntime = Join-Path $stage "runtime"
 $lockedRuntime = Join-Path $root "build\desktop-test-v$Version\runtime-locked"
-if (Test-Path -LiteralPath (Join-Path $lockedRuntime "requirements.lock.txt")) {
+$expectedRequirements = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root "requirements.txt")).Hash.ToLowerInvariant()
+$cachedLockPath = Join-Path $lockedRuntime "requirements.lock.txt"
+$cachedLockMatches = (Test-Path -LiteralPath $cachedLockPath) -and ((Get-Content -LiteralPath $cachedLockPath -Raw).Contains("requirements=$expectedRequirements"))
+if ($cachedLockMatches) {
     Copy-Item -LiteralPath $lockedRuntime -Destination $stageRuntime -Recurse -Force
     Write-Host "Reusing locked embedded runtime: $lockedRuntime"
 }
 elseif ($RuntimeSource) {
     $sourceRuntime = (Resolve-Path -LiteralPath $RuntimeSource).Path
-    $expectedRequirements = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root "requirements.txt")).Hash.ToLowerInvariant()
     $lockText = Get-Content -LiteralPath (Join-Path $sourceRuntime "requirements.lock.txt") -Raw
     if (-not $lockText.Contains("requirements=$expectedRequirements")) { throw "RuntimeSource lock does not match requirements.txt" }
     Copy-Item -LiteralPath $sourceRuntime -Destination $stageRuntime -Recurse -Force
@@ -154,6 +156,8 @@ if (-not (Test-Path -LiteralPath $stagedRuntime)) { throw "Staged runtime missin
 foreach ($required in @("runtime\Lib\site-packages\flask", "runtime\Lib\site-packages\waitress", "runtime\Lib\site-packages\faster_whisper", "runtime\Lib\site-packages\tqdm", "bin\ffmpeg.exe", "bin\ffprobe.exe", "models\faster-whisper-small\model.bin")) {
     if (-not (Test-Path -LiteralPath (Join-Path $stage $required))) { throw "Staged package incomplete, missing: $required" }
 }
+& $stagedRuntime -c "import langdetect; from src.english_text import assert_english; assert_english('Watch the original video for full context.')"
+if ($LASTEXITCODE -ne 0) { throw "English validation dependency missing from embedded runtime" }
 
 # Fail-closed packaging guard: a public release must never ship this machine's
 # hardware identity, per-user state, or runtime/local-environment files. Scan the

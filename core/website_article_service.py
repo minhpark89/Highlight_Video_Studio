@@ -162,6 +162,62 @@ class WebsiteArticleService:
             "response_ok": bool(payload.get("ok", True)),
         }
 
+    def read_existing_article(self, article_url, *, _session=None):
+        """Resolve an exact existing slug through authenticated CMS access."""
+        parsed = urlparse(str(article_url))
+        origin = urlparse(self.cfg.base_url)
+        if (parsed.scheme, parsed.netloc) != (origin.scheme, origin.netloc) or not parsed.path.startswith("/blog/"):
+            raise WebsiteServiceError("Existing article URL does not belong to this CMS")
+        slug = parsed.path.rstrip("/").rsplit("/", 1)[1]
+        session = _session or _BackendSession(self.cfg)
+        self._ensure_session(session)
+        response = session.http.get(f"{self.cfg.api_base_url}/posts", params={"search": slug}, timeout=self.cfg.timeout)
+        data = self._response_payload(response).get("data") or {}
+        rows = data.get("data", []) if isinstance(data, dict) else data
+        matches = [row for row in rows if row.get("slug") == slug]
+        if len(matches) != 1:
+            raise WebsiteServiceError("CMS did not resolve exactly one existing article")
+        response = session.http.get(f"{self.cfg.api_base_url}/posts/{matches[0]['id']}", timeout=self.cfg.timeout)
+        article = self._response_payload(response).get("data") or {}
+        if article.get("slug") != slug or article.get("id") != matches[0]["id"]:
+            raise WebsiteServiceError("Existing CMS article identity changed")
+        return article
+
+    def update_existing_article(self, article_url, *, title, body_html, expected_article, _session=None):
+        """Correct text in place; preserve slug, media and CMS publication state."""
+        from src.english_text import assert_english
+        assert_english(title, "CMS title")
+        assert_english(body_html, "CMS article")
+        session = _session or _BackendSession(self.cfg)
+        current = self.read_existing_article(article_url, _session=session)
+        for key in ("id", "slug", "version", "description"):
+            if current.get(key) != expected_article.get(key):
+                raise WebsiteServiceError("CMS article changed after preparation; inspect before updating")
+        for tag in ("img", "iframe", "video", "source"):
+            pattern = fr'<{tag}\b[^>]*\bsrc=["\']([^"\']+)'
+            if re.findall(pattern, str(current.get("description") or ""), re.I) != re.findall(pattern, body_html, re.I):
+                raise WebsiteServiceError("Article repair must preserve every existing media URL")
+        payload = {key: current.get(key) for key in (
+            "slug", "image", "is_active", "is_home", "is_top", "is_ai_generated", "series_id", "chapter_number",
+            "chapter_summary", "prev_chapter", "next_chapter", "canonical_url", "robots", "seo_keywords")}
+        payload.update(title=title, description=body_html, version=str(current.get("version") or ""),
+                       seo_title=title[:255], og_title=title[:255], twitter_title=title[:255],
+                       seo_description=re.sub(r"<[^>]+>", " ", body_html)[:300],
+                       og_description=re.sub(r"<[^>]+>", " ", body_html)[:300],
+                       twitter_description=re.sub(r"<[^>]+>", " ", body_html)[:300],
+                       og_image=current.get("og_image") or current.get("image"),
+                       twitter_image=current.get("twitter_image") or current.get("image"),
+                       category_ids=[row["id"] for row in current.get("categories", [])],
+                       tag_ids=[row["id"] for row in current.get("tags", [])])
+        self._ensure_session(session)
+        response = session.http.put(f"{self.cfg.api_base_url}/posts/{current['id']}", json=payload,
+                                    timeout=max(self.cfg.timeout, 60))
+        result = self._response_payload(response)
+        if not result.get("ok", True):
+            raise WebsiteServiceError("CMS did not confirm the existing article update")
+        self.verify_article(article_url)
+        return {"status": "success", "article_url": article_url, "post_id": current["id"]}
+
     def _presign_and_upload(self, session: _BackendSession, file_path: str) -> str:
         path = Path(file_path)
         if not path.is_file():
@@ -444,6 +500,19 @@ class WebsiteArticleService:
             raise WebsiteServiceError(f"BÃ i public chá»‰ cÃ³ {words} tá»«, cáº§n {minimum_words}")
         return {"success": True, "url": response.url, "word_count": words, "image_count": image_count}
 
+    def verify_article_english(self, article_url, *, public_html=None):
+        """Check the rendered article, excluding scripts and navigation."""
+        from src.english_text import assert_english
+        if public_html is None:
+            response = requests.get(article_url, timeout=self.cfg.timeout)
+            response.raise_for_status()
+            public_html = response.text
+        article = re.search(r"<article\b[^>]*>(.*?)</article>", public_html, re.S | re.I)
+        public = article.group(1) if article else public_html
+        public = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", "", public, flags=re.S | re.I)
+        assert_english(public, "Public CMS article")
+        return {"success": True, "language": "en", "url": article_url}
+
     def publish_article(
         self,
         title: str,
@@ -454,6 +523,9 @@ class WebsiteArticleService:
         dry_run: bool = False,
     ) -> Dict[str, Any]:
         clean_title = str(title or "").strip()
+        from src.english_text import assert_english
+        assert_english(clean_title, "CMS title")
+        assert_english(body_html, "CMS article")
         clean_slug = re.sub(r"[^a-z0-9-]+", "-", str(slug or "").lower()).strip("-")
         if not clean_title or not clean_slug or not str(body_html or "").strip():
             raise WebsiteServiceError("Thiếu title, slug hoặc nội dung bài viết")
