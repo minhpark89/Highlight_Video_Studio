@@ -247,6 +247,8 @@ for d in [DOWNLOADS_DIR, OUTPUT_DIR, TEMP_DIR]:
 token_vault = TokenVault(BASE_DIR)
 page_manager = PageManager(BASE_DIR)
 reel_poster = MetaReelPoster(token_vault=token_vault)
+from web.page_insights import PageInsightsService
+page_insights_service = PageInsightsService(BASE_DIR, token_vault, page_manager)
 
 
 JOBS_LOCK = threading.RLock()
@@ -1178,6 +1180,7 @@ def api_dashboard_summary():
         groups = page_manager.list_groups()
         jobs = load_jobs()
         data = overview(load_posts(), pages, tokens, groups, jobs)
+        data["insights"] = page_insights_service.summary(pages)
         data["mapping_health"] = page_manager.mapping_health()
         from multi_pc.publishing_settings import load_publishing_settings
         data.update(load_publishing_settings(POSTS_FILE.parent))
@@ -1199,6 +1202,30 @@ def api_dashboard_summary():
         except Exception:
             message = "Không đọc được dữ liệu tổng quan."
         return jsonify({"success": False, "error": message}), 500
+
+
+@app.route("/api/dashboard/insights", methods=["GET"])
+def api_dashboard_insights():
+    pages = page_manager.list_pages()
+    page_id = str(request.args.get("page_id") or "").strip()
+    if page_id and not any(str(page.get("page_id")) == page_id for page in pages):
+        return jsonify({"success": False, "error": "Không tìm thấy Page."}), 404
+    return jsonify({"success": True, "insights": page_insights_service.summary(pages, page_id)})
+
+
+@app.route("/api/dashboard/insights/sync", methods=["POST"])
+def api_dashboard_insights_sync():
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"success": False, "error": "Yêu cầu đồng bộ không hợp lệ."}), 400
+    page_id = body.get("page_id") or ""
+    if not isinstance(page_id, str):
+        return jsonify({"success": False, "error": "Page ID không hợp lệ."}), 400
+    try:
+        progress = page_insights_service.start_sync(page_manager.list_pages(), page_id.strip())
+        return jsonify({"success": True, "progress": progress}), 202 if progress.get("running") else 200
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 404
 
 @app.route("/api/settings", methods=["GET", "POST"])
 def api_settings():

@@ -747,6 +747,20 @@
     .dashboard-health-item strong {font-size:12px;font-weight:600;color:#cbd5e1;}
     .folder-entry {display:block;text-align:left;width:100%;padding:11px;background:var(--panel-bg-alt);border:1px solid var(--border);border-radius:8px;color:#cbd5e1;margin-bottom:6px;cursor:pointer;overflow-wrap:anywhere;}
     .folder-entry:hover {border-color:#8b5cf6;}
+    .dashboard-analytics-grid {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:18px 0 20px;}
+    .dashboard-analytics-card {background:linear-gradient(135deg,#162238,#111b2f);border:1px solid var(--border);border-radius:17px;padding:18px 20px;min-width:0;overflow:hidden;}
+    .dashboard-analytics-label {display:flex;align-items:center;gap:9px;color:#94a3b8;font-size:12px;margin-bottom:13px;}
+    .dashboard-analytics-icon {width:31px;height:31px;display:flex;align-items:center;justify-content:center;border-radius:10px;background:color-mix(in srgb,var(--metric-color),transparent 86%);color:var(--metric-color);font-size:15px;}
+    .dashboard-analytics-value {font-size:29px;font-weight:800;line-height:1.2;color:#f8fafc;display:block;}
+    .dashboard-analytics-detail {font-size:10px;color:#94a3b8;line-height:1.5;min-height:30px;margin-top:5px;}
+    .dashboard-sparkline {height:48px;margin-top:10px;}
+    .dashboard-sparkline svg {display:block;width:100%;height:48px;}
+    .dashboard-analytics-toolbar {display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:22px;}
+    .dashboard-insights-table {width:100%;font-size:11px;border-collapse:collapse;margin-top:12px;}
+    .dashboard-insights-table th,.dashboard-insights-table td {text-align:left;padding:10px;border-bottom:1px solid var(--border);}
+    .dashboard-insights-table td {color:#94a3b8;}
+    @media(max-width:900px) {.dashboard-analytics-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
+    @media(max-width:550px) {.dashboard-analytics-card{padding:14px;}.dashboard-analytics-value{font-size:24px;}}
     @media(max-width:1250px) {.dashboard-grid{gap:12px;}.dashboard-stat{padding:15px;gap:10px;}.dashboard-stat small{font-size:11px;}.dashboard-status-bars{flex-direction:column;gap:8px;}.dashboard-status-list{width:100%;}.dashboard-donut{flex-basis:auto;width:180px;}}
     @media(max-width:900px) {.dashboard-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.dashboard-columns{grid-template-columns:1fr;}.dashboard-status-bars{flex-direction:row;}.dashboard-donut{width:190px;flex-basis:190px;}}
     @media(max-width:550px) {.dashboard-stat{padding:12px;}.dashboard-stat-icon{width:32px;height:32px;font-size:16px;}.dashboard-stat strong{font-size:23px;}.dashboard-panel{padding:16px;}.dashboard-status-bars{flex-direction:column;}.dashboard-donut{flex-basis:auto;}.dashboard-heading{gap:12px;}}
@@ -892,6 +906,24 @@
           <button class="dashboard-stat stat-amber" onclick="switchTab('pane-tokens')"><span class="dashboard-stat-icon"><i class="bi bi-key-fill"></i></span><span><small>Token hoạt động</small><strong id="dash-active-tokens">—</strong></span></button>
           <button class="dashboard-stat stat-teal" onclick="switchTab('pane-pages')"><span class="dashboard-stat-icon"><i class="bi bi-shield-check"></i></span><span><small>Page đã xác minh</small><strong id="dash-verified-pages">—</strong></span></button>
         </div>
+        <div class="dashboard-analytics-toolbar">
+          <div><strong style="font-size:13px;">Hiệu quả Fanpage</strong><div id="dash-insights-status" role="status" style="color:#94a3b8;font-size:11px;margin-top:4px;">Chưa đồng bộ Meta</div></div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <select id="dash-insights-page" class="form-select" aria-label="Page để xem Insights" onchange="loadDashboardInsights()" style="width:240px;max-width:100%;font-size:12px;"><option value="">Tất cả Fanpage</option></select>
+            <button id="dash-insights-sync" class="btn btn-outline btn-sm" onclick="syncDashboardInsights()"><i class="bi bi-cloud-arrow-down"></i> Đồng bộ Meta</button>
+          </div>
+        </div>
+        <div class="dashboard-analytics-grid">
+          <div class="dashboard-analytics-card" style="--metric-color:#fbbf24;"><div class="dashboard-analytics-label"><span class="dashboard-analytics-icon"><i class="bi bi-people"></i></span>Followers</div><strong id="dash-insights-followers" class="dashboard-analytics-value">—</strong><div id="dash-insights-followers-detail" class="dashboard-analytics-detail">Chưa đồng bộ Meta</div><div id="dash-insights-followers-chart" class="dashboard-sparkline"></div></div>
+          <div class="dashboard-analytics-card" style="--metric-color:#22d3ee;"><div class="dashboard-analytics-label"><span class="dashboard-analytics-icon"><i class="bi bi-broadcast"></i></span>Reach 7 ngày</div><strong id="dash-insights-reach" class="dashboard-analytics-value">—</strong><div id="dash-insights-reach-detail" class="dashboard-analytics-detail">Chưa đồng bộ Meta</div><div id="dash-insights-reach-chart" class="dashboard-sparkline"></div></div>
+          <div class="dashboard-analytics-card" style="--metric-color:#f472b6;"><div class="dashboard-analytics-label"><span class="dashboard-analytics-icon"><i class="bi bi-heart"></i></span>Tương tác 7 ngày</div><strong id="dash-insights-engagement" class="dashboard-analytics-value">—</strong><div id="dash-insights-engagement-detail" class="dashboard-analytics-detail">Chưa đồng bộ Meta</div><div id="dash-insights-engagement-chart" class="dashboard-sparkline"></div></div>
+          <div class="dashboard-analytics-card" style="--metric-color:#a78bfa;"><div class="dashboard-analytics-label"><span class="dashboard-analytics-icon"><i class="bi bi-eye"></i></span>Views 7 ngày</div><strong id="dash-insights-views" class="dashboard-analytics-value">—</strong><div id="dash-insights-views-detail" class="dashboard-analytics-detail">Chưa đồng bộ Meta</div><div id="dash-insights-views-chart" class="dashboard-sparkline"></div></div>
+        </div>
+        <details class="panel dashboard-panel" style="margin-bottom:20px;">
+          <summary style="font-size:12px;cursor:pointer;">Chi tiết dữ liệu từng Page</summary>
+          <div style="font-size:11px;color:#94a3b8;line-height:1.6;margin-top:12px;">Followers là số người theo dõi hiện tại. Views là lượt nội dung được hiển thị; tương tác gồm các hành động trên bài. Số liệu 7 ngày theo kỳ báo cáo của Meta. Khi một số Page chưa có dữ liệu, tổng được ghi rõ là chưa đủ. Reach cộng riêng từng Page có thể tính trùng người giữa các Page.</div>
+          <div style="overflow-x:auto;"><table class="dashboard-insights-table"><thead><tr><th>Fanpage</th><th>Followers</th><th>Reach</th><th>Tương tác</th><th>Views</th></tr></thead><tbody id="dash-insights-details"><tr><td colspan="5">Chưa đồng bộ Meta</td></tr></tbody></table></div>
+        </details>
         <div class="dashboard-columns">
           <div class="panel dashboard-panel">
             <div class="dashboard-panel-title"><span><i class="bi bi-bar-chart-line-fill"></i> Phân bổ trạng thái bài viết</span><span id="dash-status-total" style="font-size:11px;color:var(--text-dim);"></span></div>
@@ -7627,6 +7659,56 @@
     if(unknownDates) svg+=`<div style="font-size:10px;color:#64748b;margin-top:10px;">${unknownDates} bài không có ngày xác minh nên chưa đưa vào biểu đồ.</div>`;
     document.getElementById('dash-activity-chart').innerHTML=svg;
   }
+  function insightsNumber(value) { return value == null ? '—' : Number(value).toLocaleString('vi-VN'); }
+  function renderInsightsSparkline(targetId, series, color) {
+    const target=document.getElementById(targetId); if(!target) return;
+    if(!Array.isArray(series)||series.length<2){target.innerHTML='';return;}
+    const values=series.map(row=>Number(row.value||0)), max=Math.max(...values,1), min=Math.min(...values,0), span=Math.max(1,max-min);
+    const points=values.map((value,index)=>`${(index/(values.length-1))*100},${44-((value-min)/span)*38}`).join(' ');
+    target.innerHTML=`<svg viewBox="0 0 100 48" preserveAspectRatio="none" aria-label="Biểu đồ 7 ngày"><polyline points="0,48 ${points} 100,48" fill="${color}" opacity=".12"/><polyline points="${points}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+  }
+  function renderDashboardInsights(insights={}) {
+    const metrics=insights.metrics || {};
+    const selected=insights.page_id || '';
+    const select=document.getElementById('dash-insights-page');
+    const knownPages=insights.pages || [];
+    if(select && !selected && knownPages.length && select.dataset.pageIds !== knownPages.map(page=>page.page_id).join(',')){
+      select.innerHTML='<option value="">Tất cả Fanpage</option>'+knownPages.map(page=>`<option value="${escapeHtml(String(page.page_id))}">${escapeHtml(page.page_name || page.page_id)}</option>`).join('');
+      select.dataset.pageIds=knownPages.map(page=>page.page_id).join(',');
+      select.value=selected;
+    }
+    const ids={followers:'dash-insights-followers',reach:'dash-insights-reach',engagement:'dash-insights-engagement',views:'dash-insights-views'};
+    Object.entries(ids).forEach(([key,id])=>{
+      const metric=metrics[key] || {}, value=document.getElementById(id), detail=document.getElementById(id+'-detail');
+      if(value) value.textContent=insightsNumber(metric.value);
+      if(detail){
+        const coverage=metric.total_pages ? ` · ${Number(metric.coverage||0)}/${Number(metric.total_pages)} Page` : '';
+        const partial=metric.partial ? ' · chưa đủ dữ liệu' : '';
+        detail.textContent=metric.status === 'ok' ? `Meta${coverage}${partial}` : (metric.reasons?.[0] || 'Chưa đồng bộ Meta');
+      }
+      renderInsightsSparkline(id+'-chart',metric.series,key==='followers'?'#fbbf24':key==='reach'?'#22d3ee':key==='engagement'?'#f472b6':'#a78bfa');
+    });
+    const status=document.getElementById('dash-insights-status'), progress=insights.progress || {};
+    const syncButton=document.getElementById('dash-insights-sync'); if(syncButton) syncButton.disabled=!!progress.running;
+    if(status){
+      if(progress.running) status.textContent=`Đang đọc Meta: ${Number(progress.completed||0)}/${Number(progress.total||0)} Page`;
+      else if(insights.updated_at) status.textContent=`Đã đồng bộ ${new Date(Number(insights.updated_at)*1000).toLocaleString('vi-VN')}${insights.stale?' · dữ liệu đã cũ':''}`;
+      else status.textContent='Chưa đồng bộ Meta';
+      if(progress.error) status.textContent=progress.error;
+    }
+    const rows=document.getElementById('dash-insights-details');
+    if(rows) rows.innerHTML=knownPages.map(page=>`<tr><td>${escapeHtml(page.page_name || page.page_id)}</td>${['followers','reach','engagement','views'].map(key=>`<td>${insightsNumber(page.metrics?.[key]?.value)}${page.metrics?.[key]?.status !== 'ok' ? `<br><span style="font-size:10px;">${escapeHtml(page.metrics?.[key]?.message || 'Chưa có dữ liệu')}</span>` : ''}</td>`).join('')}</tr>`).join('') || '<tr><td colspan="5">Chưa đồng bộ Meta</td></tr>';
+  }
+  async function loadDashboardInsights() {
+    const pageId=document.getElementById('dash-insights-page')?.value || '';
+    try { const response=await fetch('/api/dashboard/insights'+(pageId?'?page_id='+encodeURIComponent(pageId):'')); const data=await response.json(); if(!response.ok||!data.success) throw new Error(data.error||'Không đọc được Insights'); if((document.getElementById('dash-insights-page')?.value || '')===pageId) renderDashboardInsights(data.insights); return data.insights; }
+    catch(error){ const status=document.getElementById('dash-insights-status'); if(status) status.textContent=error.message; }
+  }
+  async function syncDashboardInsights() {
+    const button=document.getElementById('dash-insights-sync'); if(!button||button.disabled)return; button.disabled=true;
+    try { const pageId=document.getElementById('dash-insights-page')?.value || ''; const response=await fetch('/api/dashboard/insights/sync',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({page_id:pageId})}); const data=await response.json(); if(!response.ok||!data.success) throw new Error(data.error||'Không thể đồng bộ Insights'); if(!data.progress?.running){await loadDashboardInsights();document.getElementById('dash-insights-status').textContent=data.progress?.message || 'Không có Page cần đồng bộ';button.disabled=false;return;} document.getElementById('dash-insights-status').textContent=`Đang đọc Meta: 0/${Number(data.progress.total||0)} Page`; const poll=async()=>{const current=await loadDashboardInsights(); if(current?.progress?.running) setTimeout(poll,1500); else button.disabled=false;}; setTimeout(poll,800); }
+    catch(error){ document.getElementById('dash-insights-status').textContent=error.message; button.disabled=false; }
+  }
   async function loadDashboard() {
     if(dashboardLoading) return; dashboardLoading=true;
     try{
@@ -7635,6 +7717,7 @@
       const counts=data.post_counts || {}, values={'dash-total-pages':data.total_pages,'dash-total-posts':data.total_posts,'dash-published':counts.published,'dash-scheduled':data.scheduled_total,'dash-failed':counts.failed,'dash-processing':counts.processing,'dash-active-tokens':data.active_tokens,'dash-verified-pages':data.mapping_health?.verified};
       Object.entries(values).forEach(([id,value])=>{document.getElementById(id).textContent=Number(value || 0).toLocaleString('vi-VN');});
       renderDashboardDonut(counts,data.total_posts || 0); renderDashboardActivity(data.series,data.unknown_chart_dates);
+      if(document.getElementById('dash-insights-page')?.value) loadDashboardInsights(); else renderDashboardInsights(data.insights || {});
       document.getElementById('dashboard-last-refresh').textContent='Cập nhật '+new Date().toLocaleTimeString('vi-VN');
       document.getElementById('dash-attention-list').innerHTML=(data.attention || []).map(post=>`<div class="dashboard-attention"><span class="dashboard-dot" style="background:${dashboardColors[post.bucket] || '#94a3b8'};margin-top:7px;"></span><div class="dashboard-attention-content"><div class="dashboard-attention-title">${escapeHtml(post.title)}</div><div class="dashboard-attention-detail">${escapeHtml(post.page_name || '')} · ${escapeHtml(postBucketLabels[post.bucket] || post.bucket)}<br>${escapeHtml(post.diagnosis?.message || post.error || 'Cần kiểm tra trạng thái.')}${post.meta_id ? `<br>Meta ID: ${escapeHtml(String(post.meta_id))} · ${Number(post.attempts)} lần kiểm tra` : ''}</div></div>${post.meta_id ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(post.id)}" onclick="openMetaDiagnosis(this.dataset.postId)">Kiểm tra Meta</button>` : ''}</div>`).join('') || '<div class="dashboard-empty"><i class="bi bi-check-circle" style="color:#34d399;"></i> Không có bài cần kiểm tra.</div>';
       const scheduler=data.scheduler || {},render=data.render || {},jobs=data.job_counts || {};
