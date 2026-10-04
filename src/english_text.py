@@ -99,14 +99,23 @@ def assert_english(value, label="Content"):
         raise ValueError(f"{label} {error}")
 
 
-def package_summary_is_english(package):
+@lru_cache(maxsize=4096)
+def _package_summary_is_english(values, hashtags):
     """Queue listings inspect social text and article script without reclassifying
     every paragraph. Full validation still runs before reuse and publication.
     """
-    article = public_text((package or {}).get("article_html", ""))
+    package = dict(zip(PUBLIC_FIELDS, values))
+    package["hashtags"] = list(hashtags)
+    article = public_text(package.get("article_html", ""))
     if any(char.isalpha() and ord(char) > 127 and "LATIN" not in unicodedata.name(char, "") for char in article):
         return False
-    return package_is_english({key: value for key, value in (package or {}).items() if key != "article_html"})
+    return package_is_english({key: value for key, value in package.items() if key != "article_html"})
+
+
+def package_summary_is_english(package):
+    package = package or {}
+    return _package_summary_is_english(tuple(str(package.get(key) or "") for key in PUBLIC_FIELDS),
+                                      tuple(str(tag) for tag in package.get("hashtags") or []))
 
 
 def assert_english_package(package):
