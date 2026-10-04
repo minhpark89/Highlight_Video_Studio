@@ -13,3 +13,5 @@ Verification: Python compilation, the complete regression suite, and an isolated
 Deployment uses the actual installer extraction/preservation code, only when Meta publishing/processing and render active/running are zero. Preserve queue, Vault, Pages/groups, content packages, comments, profiles, config and render pause state. Do not resume paused render jobs or convert existing app schedules.
 
 Release/deployment identities and final verification are appended after packaging and installation. The previous release and private backups remain available.
+
+Slow Meta processing continues to be checked read-only after six attempts, with a five-minute interval. A confirmed upload is never replayed. This addresses the observed `upload_complete` / `processing not_started` object that the previous runtime stopped checking after attempt six.

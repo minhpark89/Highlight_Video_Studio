@@ -236,8 +236,6 @@ def _process_scheduled_posts_once(
             if now_ts < float(post.get("meta_next_check_at") or 0):
                 continue
         attempts = int(post.get("meta_reconcile_attempts") or 0)
-        if not meta_scheduled and attempts >= 6 and post.get("meta_reconcile_version") == 2:
-            continue
         if now_ts < float(post.get("meta_next_check_at") or 0) and post.get("meta_reconcile_version") == 2:
             continue
         # New records require the same exact Page/token mapping as publishing.
@@ -273,7 +271,7 @@ def _process_scheduled_posts_once(
                     break
         post["meta_reconcile_attempts"] = (attempts + 1) if post.get("meta_reconcile_version") == 2 else 1
         post["meta_reconcile_version"] = 2
-        post["meta_next_check_at"] = now_ts + (300 if meta_scheduled else 60)
+        post["meta_next_check_at"] = now_ts + (300 if meta_scheduled or attempts >= 5 else 60)
         reconciled += 1
         if check.get("verified"):
             post["post_fb_id"] = check["video_id"]

@@ -215,3 +215,26 @@ def test_requested_meta_schedule_never_silently_becomes_app_publish(tmp_path):
     assert result["posts"][0]["status"] == "failed"
     assert result["posts"][0]["retry_stage"] == "meta_schedule_not_ready"
     publish.assert_not_called()
+
+
+def test_processing_reel_is_still_verified_after_six_attempts_without_reupload(tmp_path):
+    from web import scheduled_publisher as worker
+    from src.publisher.meta_reel_poster import MetaReelPoster
+    path = tmp_path / "posts.json"
+    save_posts_file(path, [{"id": "slow-meta", "status": "processing", "page_id": "page-a", "token_id": "token-a",
+                          "meta_upload_video_id": "123456", "meta_reconcile_version": 2, "meta_reconcile_attempts": 6}])
+    with mock.patch.object(worker, "POSTS_FILE", path), \
+         mock.patch("src.publisher.first_comment_queue.process_due_first_comments", return_value={}), \
+         mock.patch("src.publisher.token_vault.TokenVault"), \
+         mock.patch("src.publisher.page_manager.PageManager") as pages, \
+         mock.patch("src.publisher.meta_preflight.preflight_pages", return_value={"ok": True, "ready": [{"token": "fixture", "token_id": "token-a"}]}), \
+         mock.patch.object(MetaReelPoster, "check_processing_reel", return_value={"verified": True, "video_id": "123456"}) as check, \
+         mock.patch.object(worker, "_record_posted_clip"), \
+         mock.patch.object(worker, "remove_posted_clip_file", return_value=False):
+        pages.return_value.list_pages.return_value = [{"page_id": "page-a"}]
+        poster = mock.Mock()
+        result = worker.process_scheduled_posts_once(poster=poster, now=datetime(2026, 10, 1, 11))
+    check.assert_called_once()
+    assert result["posts"][0]["status"] == "published"
+    assert result["posts"][0]["post_fb_id"] == "123456"
+    poster.publish_reel.assert_not_called()
