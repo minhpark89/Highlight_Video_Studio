@@ -404,6 +404,14 @@
       font-size: 12px;
       border-radius: 6px;
     }
+    #pane-posts .btn-outline { background: transparent; color: #cbd5e1; border-color: #334155; }
+    #pane-posts .btn:disabled { opacity: .45; cursor: default; }
+    #pane-posts .btn { white-space: nowrap; }
+    #pane-posts input[type="checkbox"], #pub-schedule-box input[type="radio"] {
+      width: 16px; height: 16px; padding: 0; margin: 0; flex: 0 0 16px; accent-color: #38bdf8;
+    }
+    #pane-posts table { min-width: 1180px; }
+    #pane-posts td:nth-child(6) span { display: inline-block; line-height: 1.5; }
 
     /* Content Studio actions must remain readable on narrow cards/table cells. */
     .content-studio-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -898,7 +906,7 @@
                 Theo dõi lịch đăng và First Comment. Clip được xóa tự động sau khi Meta xác nhận đăng thành công.
               </div>
             </div>
-            <div style="display: flex; gap: 10px; align-items: center;">
+            <div style="display: flex; gap: 10px; align-items: center; flex-wrap:wrap;">
               <div id="scheduler-status-chip" style="background: rgba(15, 23, 42, 0.6); border: 1px solid #334155; padding: 6px 14px; border-radius: 8px; font-size: 12px; display: flex; align-items: center; gap: 8px;">
                 <span style="color: #94a3b8;">Worker:</span>
                 <span id="scheduler-status-text" style="color: #94a3b8; font-weight: 700;">Đang kiểm tra...</span>
@@ -927,7 +935,7 @@
             <div style="font-size:12px;color:#94a3b8;line-height:1.7;">First Comment được app gửi sau khi xác minh video đã đăng: cần app chạy sau giờ đăng. Giao Meta khi còn hơn 10 phút và trong 29 ngày; Website, comment và video phải sẵn sàng.</div>
             <div id="posts-schedule-summary" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;"></div>
             <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px;">
-              <label style="color:#cbd5e1;font-size:12px;display:flex;align-items:center;gap:6px;"><input id="posts-select-all" type="checkbox" onchange="selectVisibleMetaPosts(this.checked)"> Chọn các bài đủ điều kiện đang hiển thị</label>
+              <label style="color:#cbd5e1;font-size:12px;display:flex;align-items:center;gap:8px;white-space:nowrap;"><input id="posts-select-all" type="checkbox" onchange="selectVisibleMetaPosts(this.checked)"> Chọn bài đủ điều kiện đang hiển thị</label>
               <button id="posts-handoff-selected" class="btn btn-primary btn-sm" onclick="handoffMetaPosts(false)" disabled><i class="bi bi-cloud-arrow-up"></i> Đưa bài đã chọn lên Meta chờ</button>
               <button id="posts-handoff-all" class="btn btn-outline btn-sm" onclick="handoffMetaPosts(true)" disabled>Đưa tất cả bài đủ điều kiện lên Meta</button>
             </div>
