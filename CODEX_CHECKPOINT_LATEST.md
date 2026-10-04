@@ -68,7 +68,7 @@ Previous checkpoint: `checkpoints/2026-10-04-dashboard-insights1.md`. Use a new 
 - Payload: **4431 entries**. The verifier checked 18 packaged source files against the checkout, including both identical HTML mirrors, Content Studio, article formatting, Website publishing, token audit and server entrypoint. Post seed is empty; runtime state and credential values are absent.
 - Full test suite and all release gate groups completed before the final clean-commit packaging. The final packaging used `-SkipTests` to avoid repeating these completed checks; it retained the packaging guards and all payload verification.
 - A standalone copy of this checkpoint is saved as `release/CODEX_CHECKPOINT_v1.1.9-content-studio1.md`.
-- Installer is ready locally. The running user installation has not been replaced, and this revision has not been published to GitHub.
+- Installer verification completed locally before GitHub publication. The running user installation has not been replaced; final public release status is recorded below.
 
 Recheck payload with `support/content-studio1/tools/verify_release.ps1 -ExpectedCommit 08727b4d8d1b93f7177b04c277e8010a32f4c7d8` from the workspace root. After this documentation-only commit, the release identity intentionally remains the packaged code commit above.
 
@@ -85,7 +85,7 @@ A fresh read-only provider probe then returned a valid normalized image-model th
 
 ## GitHub release and next-session entrypoint
 
-The user has authorized publication of revision `v1.1.9-content-studio1` so they can download and test it. Publication is in progress; the final verification section will record the release ID, uploaded asset digests and public download results. The installer already passed payload verification and retains packaged commit `08727b4d8d1b93f7177b04c277e8010a32f4c7d8`. The release tag will identify that exact commit; later branch commits contain documentation and verification evidence only.
+Revision `v1.1.9-content-studio1` is published and publicly downloadable. The final verification section records the release ID, uploaded asset digests and public download results. The installer passed payload verification and retains packaged commit `08727b4d8d1b93f7177b04c277e8010a32f4c7d8`. The release tag identifies that exact commit; later branch commits contain documentation and verification evidence only.
 
 - Release: https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.1.9-content-studio1
 - Installer: https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.1.9-content-studio1/Highlight_Desktop_Test_Setup_v1.1.9-content-studio1.exe
@@ -99,3 +99,15 @@ Do not overwrite this release or move its tag for a future fix. Preserve configu
 Useful targeted checks: `python -m pytest tests/test_content_studio_pipeline.py tests/test_website_ui_regression.py tests/test_text_auth_package_reuse.py tests/test_youtube_embed_publish.py -q --no-header`; full suite: `python -m pytest -q --no-header`. Always keep the two HTML mirrors byte-identical. A Content Studio item that says `website_status=failed` needs its source video/configuration/CMS failure inspected before retrying; preserve the existing stable slug and any article URL rather than inventing a new one.
 
 For token-count reports, compare the original Token ID in `posts.json` with current `pages.json` and group-specific `page_token_bindings`. Keep Pages-with-posts and configured Pages separate, and do not reassign credentials as a display fix. Provider/image failures are independently diagnosed: verify the configured text model and image model, inspect sanitized HTTP status/fallback metadata, then test an isolated package before changing production state.
+
+## GitHub publication verified — 2026-10-04 18:55 (Asia/Saigon)
+
+- Release ID: **402990868**, tag `v1.1.9-content-studio1`, `draft=false`, `prerelease=true`. Publication used `make_latest=false`; this tester release preserves the existing stable latest release.
+- The public release tag and installer build identity both identify **08727b4d8d1b93f7177b04c277e8010a32f4c7d8**. The source branch matched clean HEAD **2e2a6174cd990e178c7cf7125c53b3cba6902271** during publication verification. The subsequent documentation-only checkpoint commit records these results without changing packaged code or moving the release tag.
+- All three assets have `state=uploaded`, exact local byte counts, and matching GitHub/local SHA-256 digests. Unauthenticated HEAD requests followed redirects and returned **HTTP 200** for all three public download URLs.
+- Installer: `Highlight_Desktop_Test_Setup_v1.1.9-content-studio1.exe`, **680743936 bytes**, SHA-256 `77e9e57aab3548ea451df1f47fcd02b019303fb6d7b4168b161921a3ee178bbd`.
+- Checksum: `Highlight_Desktop_Test_Setup_v1.1.9-content-studio1.sha256`, **123 bytes**, SHA-256 `c0e4ffbe946f7234783af7e1ab40ee3c4837eefadec3e699bc242ef348193c69`.
+- Standalone checkpoint: `CODEX_CHECKPOINT_v1.1.9-content-studio1.md`, **13110 bytes**, SHA-256 `09a6d428105ad4794a620f492261ed1f8fb90d93d7356850b60a8e0d5ceee830`. This immutable asset contains the prepared implementation/testing handoff; this repository checkpoint adds the final publication results.
+- Local publication metadata: `source-worktree/release/content_studio1_release.json`; payload proof: `support/content-studio1/evidence/payload_verify.json`; release tooling: `support/content-studio1/tools/github_release.py`.
+
+Release publication and the continuation handoff are complete. Next work begins with the user's installation/test results for this revision. Apply the installer to the existing installation and confirm `build_identity.json` before investigating the old UI or CMS-upload message. Keep the public installer, checkpoint asset, and release tag immutable; use a new revision for code fixes.
