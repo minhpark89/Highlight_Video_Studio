@@ -1,12 +1,27 @@
-﻿
-## 7. Bổ sung 04/10/2026 — Meta handoff cho lịch app
+﻿# Highlight 1.1.8-meta-handoff4 — 04/10/2026
 
-- Commit source mới: 217f37a (eat: hand off app schedules to Meta).
-- Đã thêm API POST /api/posts/handoff-meta và worker handoff an toàn. Chọn từng bài hoặc hàng loạt trong Quản lý Bài Đăng; giữ nguyên post ID/Page/token/video/giờ lịch/First Comment. Handoff chỉ nhận bài scheduled còn hơn 10 phút, trong 29 ngày, Website + First Comment + video đã sẵn sàng và credential gốc còn xác minh được.
-- Trạng thái UI mới: App giữ lịch · chưa gửi Meta (cần app chạy khi đến giờ), Chờ gửi lên Meta, Đang gửi video lên Meta, Meta giữ lịch · chờ đăng (video tự đăng dù tắt app), Meta đã đăng, và First Comment luôn ghi rõ cần app chạy sau giờ đăng.
-- Handoff idempotent: lưu ID upload trước transfer/finish; kết quả mơ hồ giữ processing để đối soát, không upload lại. Meta từ chối trước upload trả bài về App giữ lịch.
-- Xóa lịch local bị khóa khi bài đã giao/đang xử lý/Meta đã nhận; không giả vờ hủy lịch Meta.
-- Bản cài desktop-test: [Highlight_Desktop_Test_Setup_v1.1.8-meta-handoff4.exe](release/Highlight_Desktop_Test_Setup_v1.1.8-meta-handoff4.exe), SHA-256 $hash, kích thước $size bytes. Build từ source sạch commit 217f37a.
-- QA: full suite 335 passed, 3 skipped, 29 subtests; release build gates passed; browser fixture QA support/meta-handoff4/evidence/ui_results.json không có page error, kiểm tra desktop 1600px và 1280px, không gọi Meta thật.
-- Runtime hiện tại vẫn giữ nguyên **100 scheduled + 100 published**; chưa tự động chuyển 100 bài mới lên Meta. Operator chọn các bài đủ điều kiện rồi bấm Đưa bài đã chọn lên Meta chờ hoặc Đưa tất cả ....
-- Ghi checkpoint lúc $now.
+## Behavior
+
+- Existing app-held schedules can be handed to Meta from Quản lý Bài Đăng, individually, by selection, or with the all-eligible button. Summary counts and state filters distinguish app schedules, sending/verification, Meta schedules, published posts, and failures.
+- App schedules explicitly say the video has not reached Meta and the app must run at publish time. Only verified native schedules say Meta holds the schedule and can publish video while the app is closed.
+- First Comment still requires the app after independently verified publication. Native schedule selection explains this separately.
+- `POST /api/posts/handoff-meta` queues existing rows without uploading in the request or creating new post IDs. The existing scheduler sends one handoff per cycle and runs faster while more handoffs are queued; due app posts and comments retain priority.
+- Eligibility requires an app-held untouched schedule, more than 10 minutes and at most 29 days away, a ready Website and frozen comment with exactly one URL, a local video, and the original verified Page credential. Recheck immediately before upload.
+- Original post ID, Page, token ID, video, caption, time and comment provenance/snapshot stay intact. Persist the upload ID before transfer/finish. Uncertain outcomes remain processing and use existing read-only reconciliation, never another upload.
+- A definitive failure before upload or an expired handoff window leaves the original app schedule intact. Local deletion/clear cannot erase a handoff, processing post or Meta-held schedule and pretend to cancel its external schedule.
+
+## Validation and artifact
+
+- Full safe suite: 335 passed, 3 skipped, 29 subtests. New queue handoff suite: 16 passed. Existing build release gates also pass, including the new suite.
+- Browser fixtures cover 200 rows, selection and quiet row preservation, single/bulk transfer, summary counts, native schedule + comment labels, state/empty filters, and 1600/1280 px layouts. No page errors. Fixture write requests are intercepted; no public Meta schedule is created for QA.
+- Revision: 1.1.8-meta-handoff4. The installer build identity records the exact clean source commit; inspect the final payload report and SHA-256 file for artifact identity.
+- Local installer: `release/Highlight_Desktop_Test_Setup_v1.1.8-meta-handoff4.exe`.
+- Supporting browser evidence: `E:/OPENCLAW/BOB/support/meta-handoff4/evidence/`.
+
+## Live state and continuation
+
+- Installed app was still meta-firstcomment3 at the time of this change. The new installer has not been applied while publishing/rendering is active; do not interrupt a real upload or render to install it.
+- At task start, live ledger held 100 published and 100 new app schedules, all Website/comment/video ready. Their original times were 11:30–12:15 on 04/10/2026. The existing scheduler continues publishing naturally while this work runs; counts must be read again, never inferred from the initial snapshot.
+- No operator schedules have been automatically handed to Meta by this task. The operator can select eligible schedules in the updated UI. Expired/near-due schedules remain with the app.
+- No old CMS content, credentials, bindings, comment snapshots, Meta IDs or render pause choice were edited. Private backups remain private.
+- Refer to root `CODEX_CHECKPOINT_LATEST.md` for current runtime observations and verified installer metadata. Read process/port, publishing/processing and render activity again before applying the new installer.
