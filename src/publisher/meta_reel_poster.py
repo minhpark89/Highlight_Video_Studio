@@ -126,7 +126,14 @@ class MetaReelPoster:
                 return result
             publish_state = seen["publishing_status"]
             try:
-                publish_time = int(seen["publish_time"] or 0)
+                raw_time = seen["publish_time"]
+                try:
+                    publish_time = int(raw_time or 0)
+                except (TypeError, ValueError):
+                    parsed = datetime.fromisoformat(str(raw_time).replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        raise ValueError("Meta schedule lacks a timezone")
+                    publish_time = int(parsed.timestamp())
             except (TypeError, ValueError):
                 publish_time = 0
             if publish_state == "scheduled" and publish_time:

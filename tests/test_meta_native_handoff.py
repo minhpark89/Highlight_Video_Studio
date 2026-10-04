@@ -121,6 +121,16 @@ def test_unverified_native_object_keeps_observed_upload_phases():
     assert result["meta_observation"]["publishing_status"] == "not_started"
 
 
+@pytest.mark.parametrize("value", ["2026-10-04T21:15:00+0000", "2026-10-04T21:15:00Z", "2026-10-05T04:15:00+07:00"])
+def test_real_meta_iso_schedule_is_verified_against_saved_timestamp(value):
+    expected = int(datetime.fromisoformat("2026-10-04T21:15:00+00:00").timestamp())
+    payload = {"id": "9001", "status": {"publishing_phase": {"publish_status": "scheduled", "publish_time": value}}}
+    with mock.patch("src.publisher.meta_reel_poster.requests.get", return_value=meta_response(payload)):
+        result = MetaReelPoster().check_scheduled_reel("9001", "fixture", expected)
+    assert result["verified"] and result["status"] == "scheduled"
+    assert result["publish_time"] == expected
+
+
 @pytest.fixture
 def isolated_api(tmp_path, monkeypatch):
     from web import app as web_app
