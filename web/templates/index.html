@@ -6338,6 +6338,11 @@
         const safePageName = escapeHtml(p.page_name || p.page_id || '');
         const safePageId = escapeHtml(String(p.page_id || ''));
         const safeTokenName = escapeHtml(p.token_display_name || p.token_name || 'Chưa lưu Token ID');
+        const tokenRecoveryNote = p.effective_token_is_recovery
+          ? `<div style="color:#38bdf8;font-size:10px;margin-top:3px;">Đang dùng Token phục hồi: ${escapeHtml(p.effective_token_id || '')}</div>` : '';
+        const tokenIdLabel = p.effective_token_id || p.token_id || '';
+        const tokenOriginalNote = p.effective_token_is_recovery && p.token_id
+          ? `<div style="font-size:10px;color:#64748b;">Token gốc: ${escapeHtml(p.token_id)}</div>` : '';
         const safeComment = escapeHtml(p.first_comment || '');
         const safeArticleUrl = /^https?:\/\//i.test(p.article_url || '') ? escapeHtml(p.article_url) : '';
         const embedLabel = p.website_embed_status === 'ready'
@@ -6376,7 +6381,7 @@
           const uploading = p.publish_mode === 'meta_scheduled' && ['upload_started','upload_initialized'].includes(p.meta_schedule_status);
           statusBadge = `<span style="background:rgba(245,158,11,0.15);color:#fbbf24;border:1px solid #b45309;padding:3px 8px;border-radius:6px;font-size:11px;" title="${escapeHtml(p.error || '')}">${uploading ? 'Đang gửi video lên Meta' : 'Chờ xác minh bài trên Meta'}</span><div style="color:#fbbf24;font-size:11px;white-space:normal;max-width:220px;">${uploading ? 'Để app chạy đến khi Meta nhận lịch' : escapeHtml(p.meta_reconcile_error || p.error || '')}</div>`;
           if (p.meta_diagnosis?.message) statusBadge += `<div style="color:#cbd5e1;font-size:11px;margin-top:5px;max-width:230px;white-space:normal;">${escapeHtml(p.meta_diagnosis.message)}</div>`;
-          if (p.meta_upload_video_id) statusBadge += `<div style="color:#94a3b8;font-size:10px;margin-top:4px;">Meta ID: ${escapeHtml(String(p.meta_upload_video_id))} · ${Number(p.meta_reconcile_attempts || 0)} lần kiểm tra</div>`;
+          if (p.meta_upload_video_id) statusBadge += `<div style="color:#94a3b8;font-size:10px;margin-top:4px;">Meta ID: ${escapeHtml(String(p.meta_upload_video_id))}<br>${Number(p.meta_reconcile_attempts || 0)} lần đọc trạng thái · ${Number(p.auto_finish_attempts || p.meta_finish_recovery_attempts || 0)} lần thử đăng</div>`;
         } else if (p.status === 'failed') {
           statusBadge = `<span style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-x-circle"></i> ${p.meta_schedule_status === 'rejected' ? 'Meta từ chối' : (p.retryable ? 'Lỗi · có thể thử lại' : 'Lỗi · cần kiểm tra')}</span><div style="color:#fca5a5;font-size:11px;white-space:normal;max-width:280px;">${escapeHtml(p.error || p.website_error || 'Không rõ lỗi')}</div>`;
         } else if (p.status === 'publishing') {
@@ -6461,7 +6466,9 @@
               <span style="background: rgba(245, 158, 11, 0.12); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3); padding: 2px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 700;">
                 <i class="bi bi-key-fill"></i> ${safeTokenName}
               </span>
-              <div style="font-size:10px;color:#94a3b8;overflow-wrap:anywhere;margin-top:4px;">${escapeHtml(p.token_id || 'Token ID không được lưu ở bài cũ')}</div>
+              ${tokenRecoveryNote}
+              <div style="font-size:10px;color:#94a3b8;overflow-wrap:anywhere;margin-top:4px;">${escapeHtml(tokenIdLabel || 'Token ID không được lưu ở bài cũ')}</div>
+              ${tokenOriginalNote}
               ${p.token_owner_name && p.token_owner_name !== p.token_display_name ? `<div style="font-size:11px;color:#94a3b8;">Meta: ${escapeHtml(p.token_owner_name)}</div>` : ''}
               <div style="font-size:11px;color:#cbd5e1;margin-top:5px;white-space:normal;">Cấu hình: ${p.token_stats?.configured_pages || 0} Page · Nhóm: ${p.token_stats?.group_assigned_pages || 0} Page<br>Có bài: ${p.token_stats?.posting_pages || 0} Page · ${p.token_stats?.posts || 0} bài</div>
               ${p.token_assignment_match === false ? '<div style="font-size:11px;color:#fbbf24;white-space:normal;">Token gốc khác gán hiện tại</div>' : ''}
@@ -7729,6 +7736,7 @@
       <div class="app-modal-body" id="meta-diagnosis-body" style="font-size:13px;line-height:1.7;"></div>
       <div class="app-modal-footer" style="gap:8px;flex-wrap:wrap;">
         <button class="btn btn-secondary" id="meta-diagnosis-refresh" onclick="openMetaDiagnosis(currentMetaDiagnosisPost)">Kiểm tra lại</button>
+        <button class="btn btn-secondary" onclick="copyMetaDiagnostic()">Sao chép báo cáo lỗi</button>
         <button class="btn btn-primary" id="meta-recover-existing" style="display:none;" onclick="recoverExistingPost()">Đồng bộ quyền và thử đăng lại</button>
         <button class="btn btn-primary" id="meta-finish-existing" style="display:none;" onclick="finishExistingUpload()">Hoàn tất video đã upload</button>
       </div>
@@ -7857,6 +7865,11 @@
       if(!response.ok || !data.success) throw new Error(data.error || 'Không đọc được Meta');
       currentMetaDiagnosis=data; const seen=data.observation || {}, diag=data.diagnosis || {};
       body.innerHTML=`<h4 style="font-size:14px;margin-bottom:4px;">${escapeHtml(data.title || '')}</h4><div style="color:#94a3b8;margin-bottom:14px;">${escapeHtml(data.page_name || '')}</div><div style="border:1px solid #b45309;background:rgba(245,158,11,.08);padding:14px;border-radius:10px;margin-bottom:14px;"><b>${escapeHtml(diag.message || '')}</b><div style="color:#cbd5e1;margin-top:5px;">${escapeHtml(diag.detail || '')}</div></div><dl style="display:grid;grid-template-columns:120px minmax(0,1fr);gap:7px;font-size:12px;"><dt>Meta ID</dt><dd>${escapeHtml(diag.video_id || 'Chưa có')}</dd><dt>Video</dt><dd>${escapeHtml(seen.video_status || 'Chưa đọc được')}</dd><dt>Upload</dt><dd>${escapeHtml(seen.uploading_status || '—')}${seen.bytes_transferred!=null ? ' · '+Number(seen.bytes_transferred).toLocaleString('vi-VN')+' bytes' : ''}</dd><dt>Xử lý</dt><dd>${escapeHtml(seen.processing_status || '—')}</dd><dt>Đăng bài</dt><dd>${escapeHtml(seen.publishing_status || '—')}</dd><dt>Lần đọc</dt><dd>${escapeHtml(seen.checked_at ? new Date(seen.checked_at).toLocaleString('vi-VN') : '—')}</dd></dl>`;
+      const credential=data.credential_check || {}, attempt=data.last_publish_attempt || {};
+      const extra=document.createElement('div');extra.style='margin-top:14px;color:#cbd5e1;font-size:12px;overflow-wrap:anywhere;';
+      extra.innerHTML=`<b>Quyền đang dùng:</b> ${escapeHtml(credential.owner_name || credential.token_id || '')} · ${escapeHtml(credential.status || 'Chưa xác minh')}<br>Mapping Page: ${credential.mapping_verified ? 'đã xác minh' : 'chưa xác minh'} · Quyền tạo nội dung: ${credential.can_create_content ? 'có' : 'chưa xác minh'}<br>${Number(data.read_checks || 0)} lần đọc trạng thái · ${Number(data.publish_attempts || 0)} lần thử đăng`;
+      if(attempt.checked_at) extra.innerHTML+=`<br><b>Phản hồi đăng gần nhất:</b> ${escapeHtml(new Date(attempt.checked_at).toLocaleString('vi-VN'))} · HTTP ${Number(attempt.http_status || 0) || 'chưa nhận'}<br>${escapeHtml(attempt.method || '')} ${escapeHtml(attempt.endpoint || '')}<br>Token: ${escapeHtml(attempt.token_id || '')} · ${escapeHtml(attempt.state || '')}<br>Meta: ${escapeHtml(String(attempt.error_code ?? '—'))} / ${escapeHtml(String(attempt.error_subcode ?? '—'))} · Trace: ${escapeHtml(attempt.trace_id || '—')}`;
+      body.appendChild(extra);
       if(diag.can_reschedule_existing){ const input=document.createElement('input'); input.type='datetime-local'; input.id='meta-replacement-time'; input.style='margin-top:16px;padding:8px;background:#0f172a;color:white;border:1px solid #475569;border-radius:6px;'; const label=document.createElement('label'); label.textContent='Giờ đăng mới (nên chọn ít nhất 30 phút từ bây giờ để có thời gian xử lý): '; label.appendChild(input); body.appendChild(label); }
       if(diag.can_retry_existing){
         const options=data.recovery_credentials || [];
@@ -7870,6 +7883,11 @@
       document.getElementById('meta-finish-existing').textContent=diag.can_reschedule_existing ? 'Đặt giờ mới cho video đã upload' : 'Hoàn tất video đã upload';
     }catch(error){body.textContent=error.message;}
   }
+  async function copyMetaDiagnostic(){
+    if(!currentMetaDiagnosis){showToast('Kiểm tra Meta trước khi sao chép.');return;}
+    try{await navigator.clipboard.writeText(JSON.stringify(currentMetaDiagnosis,null,2));showToast('Đã sao chép báo cáo; không chứa giá trị token.');}
+    catch(error){showToast('Chưa sao chép được báo cáo: '+error.message);}
+  }
   async function recoverExistingPost(){
     if(metaFinishBusy || !currentMetaDiagnosis?.diagnosis?.can_retry_existing) return;
     const tokenId=document.getElementById('meta-recovery-token')?.value;
@@ -7882,6 +7900,7 @@
       const response=await fetch('/api/posts/'+encodeURIComponent(currentMetaDiagnosisPost)+'/recover-existing',{
         method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_existing_upload:true,video_id:videoId,token_id:tokenId})});
       const data=await response.json(); if(!response.ok || !data.success) throw new Error(data.error || 'Chưa phục hồi được bài.');
+      currentMetaDiagnosis.last_publish_attempt=data.last_publish_attempt || currentMetaDiagnosis.last_publish_attempt;
       feedback.style.color=data.accepted ? '#4ade80' : '#fbbf24';feedback.textContent=data.message;
       if(data.state!=='rejected'){button.style.display='none';currentMetaDiagnosis.diagnosis.can_retry_existing=false;}
       loadDashboard();loadPostsTable({quiet:true});

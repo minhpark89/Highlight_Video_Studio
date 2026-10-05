@@ -20,6 +20,22 @@ class MetaReelPoster:
                 details.append(f"{label}: {error[key]}")
         return " | ".join(details)
 
+    def _publish_receipt(self, operation, target_id, video_id, token_id, page_token, response=None, data=None):
+        """Keep the publication response separate from later successful read calls."""
+        from web.meta_diagnostics import safe_error
+        error = data.get("error") if isinstance(data, dict) else {}
+        error = error if isinstance(error, dict) else {}
+        clean = lambda value: safe_error(value).replace(page_token, "[redacted]") if page_token else safe_error(value)
+        return {"checked_at": datetime.now().astimezone().isoformat(), "operation": operation,
+                "method": "POST", "endpoint": f"/{self.api_version}/{target_id}" + ("/video_reels" if operation == "finish_existing" else ""),
+                "video_id": str(video_id), "token_id": str(token_id or ""),
+                "http_status": response.status_code if response is not None else None,
+                "error_code": error.get("code"), "error_subcode": error.get("error_subcode"),
+                "error_type": clean(error.get("type")), "error_message": clean(error.get("message")),
+                "error_user_title": clean(error.get("error_user_title")),
+                "error_user_message": clean(error.get("error_user_msg")),
+                "trace_id": clean(error.get("fbtrace_id")), "is_transient": error.get("is_transient")}
+
     def __init__(self, api_version="v22.0", token_vault=None):
         self.api_version = api_version
         self.base_url = f"https://graph.facebook.com/{self.api_version}"
@@ -94,19 +110,22 @@ class MetaReelPoster:
         if schedule_time is not None:
             from multi_pc.meta_scheduling import parse_meta_schedule_time
             payload.update(video_state="SCHEDULED", scheduled_publish_time=parse_meta_schedule_time(schedule_time))
+        receipt = self._publish_receipt("finish_existing", page_id, video_id, token_id, page_token)
         try:
             response = requests.post(f"{self.base_url}/{page_id}/video_reels", data=payload, timeout=35)
             self._track_headers(token_id or page_token, response)
+            receipt = self._publish_receipt("finish_existing", page_id, video_id, token_id, page_token, response)
             data = response.json()
+            receipt = self._publish_receipt("finish_existing", page_id, video_id, token_id, page_token, response, data)
             if response.status_code >= 500 or not isinstance(data, dict):
-                return {"accepted": False, "state": "unknown", "error": "Chưa xác nhận phản hồi Finish; tiếp tục đối soát đúng Meta ID."}
+                return {"accepted": False, "state": "unknown", "attempt": receipt, "error": "Chưa xác nhận phản hồi Finish; tiếp tục đối soát đúng Meta ID."}
             if not response.ok or data.get("error") or data.get("success") is False:
-                return {"accepted": False, "state": "rejected", "error": safe_error(self._meta_error(data)).replace(page_token, "[redacted]")}
+                return {"accepted": False, "state": "rejected", "attempt": receipt, "error": safe_error(self._meta_error(data)).replace(page_token, "[redacted]")}
             if data.get("success") is not True and not any(data.get(key) for key in ("video_id", "reel_id", "post_id")):
-                return {"accepted": False, "state": "unknown", "error": "Meta chưa xác nhận Finish; tiếp tục đối soát đúng Meta ID."}
-            return {"accepted": True, "state": "accepted", "error": ""}
+                return {"accepted": False, "state": "unknown", "attempt": receipt, "error": "Meta chưa xác nhận Finish; tiếp tục đối soát đúng Meta ID."}
+            return {"accepted": True, "state": "accepted", "attempt": receipt, "error": ""}
         except (requests.RequestException, ValueError, TypeError):
-            return {"accepted": False, "state": "unknown", "error": "Phản hồi Finish chưa rõ; không gửi lại tự động."}
+            return {"accepted": False, "state": "unknown", "attempt": receipt, "error": "Phản hồi Finish chưa rõ; không gửi lại tự động."}
 
     def check_scheduled_reel(self, candidate_id, page_token, expected_publish_time=None, token_id=None):
         """Read the Reel object and retain phase evidence even before acceptance."""
@@ -156,20 +175,23 @@ class MetaReelPoster:
         from web.meta_diagnostics import safe_error
         if not re.fullmatch(r"[0-9]+", str(video_id or "")) or not page_token:
             return {"accepted": False, "state": "rejected", "error": "Missing existing Meta video or credential"}
+        receipt = self._publish_receipt("publish_existing", video_id, video_id, token_id, page_token)
         try:
             response = requests.post(f"{self.base_url}/{video_id}",
                                      data={"access_token": page_token, "published": "true"}, timeout=35)
             self._track_headers(token_id or page_token, response)
+            receipt = self._publish_receipt("publish_existing", video_id, video_id, token_id, page_token, response)
             data = response.json()
+            receipt = self._publish_receipt("publish_existing", video_id, video_id, token_id, page_token, response, data)
             if response.status_code >= 500 or not isinstance(data, dict):
-                return {"accepted": False, "state": "unknown", "error": "Publish-existing outcome unknown; reconcile the same video"}
+                return {"accepted": False, "state": "unknown", "attempt": receipt, "error": "Publish-existing outcome unknown; reconcile the same video"}
             if not response.ok or data.get("error") or data.get("success") is False:
-                return {"accepted": False, "state": "rejected", "error": safe_error(self._meta_error(data)).replace(page_token, "[redacted]")}
+                return {"accepted": False, "state": "rejected", "attempt": receipt, "error": safe_error(self._meta_error(data)).replace(page_token, "[redacted]")}
             if data.get("success") is True:
-                return {"accepted": True, "state": "accepted", "error": ""}
+                return {"accepted": True, "state": "accepted", "attempt": receipt, "error": ""}
         except (requests.RequestException, ValueError, TypeError):
             pass
-        return {"accepted": False, "state": "unknown", "error": "Publish-existing outcome unknown; reconcile the same video"}
+        return {"accepted": False, "state": "unknown", "attempt": receipt, "error": "Publish-existing outcome unknown; reconcile the same video"}
 
     def publish_reel(self, page_id, page_token, video_path, description="", first_comment="", schedule_time=None, token_id=None, reconcile_seconds=0, post_id=None, on_upload_initialized=None):
         try:

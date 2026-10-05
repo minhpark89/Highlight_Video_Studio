@@ -49,9 +49,12 @@ def diagnose(post, seen=None):
     publishing = seen.get("publishing_status")
     processing = seen.get("processing_status")
     recovery_error = post.get("auto_finish_error") or post.get("meta_finish_recovery_error") or ""
-    if publishing != "published" and "4854002" in str(recovery_error):
+    attempt = post.get("meta_last_publish_attempt") or {}
+    identity_rejected = (attempt.get("state") == "rejected" and attempt.get("error_subcode") == 4854002
+                         if attempt else "4854002" in str(recovery_error))
+    if publishing != "published" and identity_rejected:
         result.update(state="identity_required", message="Facebook yêu cầu xác minh danh tính",
-                      detail="Token có thể vẫn hoạt động trong khi quyền đăng của Page cần đồng bộ lại. Chọn Đồng bộ quyền và thử đăng lại; app sẽ lấy Page token mới và giữ nguyên video. Nếu Meta vẫn yêu cầu xác minh, kiểm tra tài khoản quản lý Page trên Facebook.")
+                      detail="Meta từ chối yêu cầu đăng cho Page này ở bước Finish/xuất bản (368/4854002). Token và quyền CREATE_CONTENT có thể vẫn hợp lệ. Đồng bộ quyền và thử lại giữ nguyên video; nếu vẫn lỗi, kiểm tra quyền xuất bản của đúng Page trong Facebook/Meta Business Suite và tài khoản quản trị Page, không chỉ trạng thái token hoặc app.")
         return result
     if publishing != "published" and post.get("auto_finish_state") in ("sending", "accepted", "unknown"):
         result.update(state="auto_recovery", message="App đang tự hoàn tất upload cũ",

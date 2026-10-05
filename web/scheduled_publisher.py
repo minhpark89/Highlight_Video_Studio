@@ -311,6 +311,8 @@ def _resume_complete_upload(post, seen, poster, credential, posts, current_dt, *
     except Exception:
         result = {"state": "unknown", "error": "Finish outcome unknown; reconciling the existing upload."}
     state = result.get("state") or "unknown"
+    if isinstance(result.get("attempt"), dict):
+        post["meta_last_publish_attempt"] = {**result["attempt"], "state": state}
     post.update({"status": "processing", "publish_mode": "app_queue", "auto_finish_state": state,
                  "auto_finish_error": sanitize_error(result.get("error")),
                  "outcome_unknown": state != "rejected", "meta_next_check_at": now_ts + 60,

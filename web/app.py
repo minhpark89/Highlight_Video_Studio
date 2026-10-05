@@ -3138,9 +3138,18 @@ def api_post_meta_diagnosis(post_id):
     diagnostic = diagnose(post, seen)
     diagnostic["can_retry_existing"] = can_refresh_existing(post) and (
         can_retry_existing(post, seen) or seen.get("http_status") != 200 or bool(seen.get("error")))
+    selected_entry = token_vault.get_token_by_id(publishing_token_id(post)) or {}
+    tasks = [str(value).upper() for value in (mapping or {}).get("tasks") or []]
+    from src.publisher.meta_preflight import PUBLISH_TASKS
     return jsonify({"success": True, "post_id": post_id, "title": post.get("title"),
                     "page_name": post.get("page_name"), "page_id": post.get("page_id"),
                     "observation": seen, "diagnosis": diagnostic,
+                    "last_publish_attempt": post.get("meta_last_publish_attempt"),
+                    "publish_attempts": int(post.get("auto_finish_attempts") or post.get("meta_finish_recovery_attempts") or 0),
+                    "read_checks": int(post.get("meta_reconcile_attempts") or 0),
+                    "credential_check": {"token_id": publishing_token_id(post), "status": selected_entry.get("status"),
+                        "owner_name": selected_entry.get("owner_name") or selected_entry.get("name") or "",
+                        "mapping_verified": bool(mapping), "can_create_content": bool(set(tasks).intersection(PUBLISH_TASKS))},
                     "recovery_credentials": recovery_credentials(post, token_vault, page_manager),
                     "recovery_token_id": publishing_token_id(post)})
 
@@ -3199,7 +3208,8 @@ def api_recover_existing_post(post_id):
                    "Meta chưa xác nhận; app giữ nguyên video và đang đối soát." if state == "unknown" else
                    "Đã đồng bộ quyền Page nhưng Meta vẫn từ chối: " + sanitize_error(post.get("auto_finish_error")))
         return jsonify({"success": True, "accepted": state == "accepted", "state": state, "message": message,
-                        "video_id": post["meta_upload_video_id"], "credential_check": summary})
+                        "video_id": post["meta_upload_video_id"], "credential_check": summary,
+                        "last_publish_attempt": post.get("meta_last_publish_attempt")})
     except Exception as exc:
         return jsonify({"success": False, "error": sanitize_error(exc)}), 500
     finally:
@@ -3295,7 +3305,20 @@ def api_get_posts():
     posts = load_posts()
     from web.token_audit import token_audit
     token_audit(posts, page_manager.list_pages(), token_vault.list_tokens(mask=True), load_token_groups())
+    token_catalog = {str(item.get("id")): item for item in token_vault.list_tokens(mask=True) if item.get("id")}
     for post in posts:
+        recovery_id = str(post.get("meta_recovery_token_id") or "")
+        if recovery_id:
+            recovery_token = token_catalog.get(recovery_id) or {}
+            recovery_name = recovery_token.get("owner_name") or recovery_token.get("name") or recovery_id
+            post["effective_token_id"] = recovery_id
+            post["effective_token_name"] = recovery_name
+            post["effective_token_is_recovery"] = True
+            post["token_display_name"] = recovery_name + " · phục hồi"
+        else:
+            post["effective_token_id"] = str(post.get("token_id") or "")
+            post["effective_token_name"] = post.get("token_display_name") or post.get("token_name") or ""
+            post["effective_token_is_recovery"] = False
         post["post_bucket"] = post_bucket(post)
         if post.get("status") == "processing":
             post["meta_diagnosis"] = diagnose(post)
