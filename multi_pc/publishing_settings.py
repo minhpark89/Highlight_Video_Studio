@@ -6,7 +6,7 @@ from pathlib import Path
 
 from multi_pc.json_io import replace_with_retry
 
-MAX_POSTING_THREADS = 8
+MAX_POSTING_THREADS = 32
 DEFAULT_POSTING_THREADS = 4
 _LOCK = threading.RLock()
 
@@ -18,13 +18,13 @@ def load_publishing_settings(root):
     value = json.loads(path.read_text(encoding="utf-8-sig"))
     threads = value.get("posting_threads")
     if isinstance(threads, bool) or not isinstance(threads, int) or not 1 <= threads <= MAX_POSTING_THREADS:
-        raise ValueError("Số luồng đăng phải từ 1 đến 8.")
+        raise ValueError(f"Số luồng đăng phải là số nguyên từ 1 đến {MAX_POSTING_THREADS}.")
     return {"posting_threads": threads}
 
 
 def save_publishing_settings(root, threads):
     if isinstance(threads, bool) or not isinstance(threads, int) or not 1 <= threads <= MAX_POSTING_THREADS:
-        raise ValueError("Số luồng đăng phải từ 1 đến 8.")
+        raise ValueError(f"Số luồng đăng phải là số nguyên từ 1 đến {MAX_POSTING_THREADS}.")
     path = Path(root) / "data" / "publishing_settings.json"
     with _LOCK:
         path.parent.mkdir(parents=True, exist_ok=True)

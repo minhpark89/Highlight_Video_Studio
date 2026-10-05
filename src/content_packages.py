@@ -32,6 +32,7 @@ _WORKER_LOCK = threading.Lock()
 _POST_SYNC_LOCK = threading.RLock()
 _SECRET_RE = re.compile(r"(access_token|page_token|token|api_key|secret|password|authorization)\s*[=:]\s*[^\s&\"',]+", re.I)
 QUOTA_CODES = {402, 429}
+MAX_CONTENT_WORKERS = 32
 COMMENT_METADATA = ("first_comment_source", "first_comment_profile_id", "first_comment_profile_name",
                     "first_comment_model", "first_comment_fallback_reason")
 
@@ -833,11 +834,14 @@ def content_worker_settings(workers=None):
     with _LOCK:
         settings = _read(path, {"workers": 2})
         if workers is not None:
-            if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 4:
-                raise ValueError("Số video xử lý song song phải từ 1 đến 4.")
+            if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= MAX_CONTENT_WORKERS:
+                raise ValueError(f"Số luồng Content/LLM phải là số nguyên từ 1 đến {MAX_CONTENT_WORKERS}.")
             settings = {"workers": workers}
             _write(path, settings)
-        return {"workers": max(1, min(4, int(settings.get("workers") or 2))), "max_workers": 4}
+        saved = settings.get("workers", 2)
+        if isinstance(saved, bool) or not isinstance(saved, int) or not 1 <= saved <= MAX_CONTENT_WORKERS:
+            raise ValueError(f"Số luồng Content/LLM đã lưu phải là số nguyên từ 1 đến {MAX_CONTENT_WORKERS}.")
+        return {"workers": saved, "max_workers": MAX_CONTENT_WORKERS}
 
 
 def content_worker_status():
@@ -880,7 +884,7 @@ def _worker_loop():
         return
     try:
         recover_abandoned_packages()
-        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="content-video") as pool:
+        with ThreadPoolExecutor(max_workers=MAX_CONTENT_WORKERS, thread_name_prefix="content-video") as pool:
             active = set()
             while True:
                 lease.touch()

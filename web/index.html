@@ -1067,7 +1067,7 @@
             <div style="font-size:12px;color:#cbd5e1;line-height:1.7;"><b style="color:#fbbf24;">App giữ lịch:</b> chưa gửi video lên Meta; cần để app chạy và máy có mạng khi đến giờ. <b style="color:#38bdf8;">Meta giữ lịch:</b> video tự đăng dù tắt app.</div>
             <div style="font-size:12px;color:#94a3b8;line-height:1.7;">First Comment được app gửi sau khi xác minh video đã đăng: cần app chạy sau giờ đăng. Giao Meta khi còn hơn 10 phút và trong 29 ngày; Website, comment và video phải sẵn sàng.</div>
             <div id="posts-schedule-summary" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;"></div>
-            <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:12px;">Số luồng đăng theo lịch <select data-posting-threads onchange="savePostingThreads(this)" class="form-select form-select-sm" style="width:90px;"><option value="1">1</option><option value="2">2</option><option value="4" selected>4</option><option value="8">8</option></select> Mỗi Token/Page chỉ chạy một bài; giữ giãn cách và cooldown.</label>
+            <label style="display:flex;gap:8px;align-items:center;margin-top:10px;font-size:12px;">Số luồng đăng theo lịch (1–32) <input data-posting-threads type="number" min="1" max="32" step="1" value="4" onchange="savePostingThreads(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" class="form-control form-control-sm" style="width:90px;" aria-label="Số luồng đăng theo lịch"> Mỗi Token/Page chỉ chạy một bài; giữ giãn cách và cooldown.</label>
             <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px;">
               <label style="color:#cbd5e1;font-size:12px;display:flex;align-items:center;gap:8px;white-space:nowrap;"><input id="posts-select-all" type="checkbox" onchange="selectVisibleMetaPosts(this.checked)"> Chọn bài đủ điều kiện đang hiển thị</label>
               <button id="posts-handoff-selected" class="btn btn-primary btn-sm" onclick="handoffMetaPosts(false)" disabled><i class="bi bi-cloud-arrow-up"></i> Đưa bài đã chọn lên Meta chờ</button>
@@ -1542,7 +1542,7 @@
                 </div>
               </div>
               <div style="display: flex; align-items: center; gap: 6px;">
-                <select id="loha-token-threads" data-posting-threads onchange="savePostingThreads(this)" style="background:#0f172a;border:1px solid #334155;color:#f8fafc;padding:5px;border-radius:6px;"><option value="1">1</option><option value="2">2</option><option value="4" selected>4</option><option value="8">8</option></select>
+                <input id="loha-token-threads" data-posting-threads type="number" min="1" max="32" step="1" value="4" onchange="savePostingThreads(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" aria-label="Số luồng đăng" style="width:85px;background:#0f172a;border:1px solid #334155;color:#f8fafc;padding:5px;border-radius:6px;">
                 <span style="font-size: 11px; color: #94a3b8;">luồng</span>
               </div>
             </div>
@@ -2005,8 +2005,9 @@
               <div style="font-weight: 800; margin-bottom: 12px;"><i class="bi bi-clock-history"></i> Trạng thái hàng đợi</div>
               <div id="cs-queue-stats" style="font-size: 13px; color: #cbd5e1; line-height: 1.7;">Chưa tải.</div>
               <div id="cs-circuit" style="font-size: 12px; color: #94a3b8; margin-top: 10px;"></div>
-              <label class="form-label" for="cs-workers" style="margin-top:12px;">Số video xử lý song song</label>
-              <select id="cs-workers" class="form-control" onchange="csSaveWorkers()"><option value="1">1 video</option><option value="2" selected>2 video (khuyên dùng)</option><option value="3">3 video</option><option value="4">4 video</option></select>
+              <label class="form-label" for="cs-workers" style="margin-top:12px;">Số luồng Content/LLM (1–32)</label>
+              <input id="cs-workers" type="number" min="1" max="32" step="1" value="2" class="form-control" onchange="csSaveWorkers()" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">
+              <small style="color:#94a3b8;">Nhập số luồng rồi Enter hoặc rời ô để lưu. Mỗi luồng xử lý một video; nên bắt đầu với 2–4.</small>
               <div id="cs-active-videos" role="status" aria-live="polite" style="margin-top:12px;line-height:1.7;"></div>
               <div style="font-size:12px;color:#94a3b8;margin-top:10px;">Hàng đợi tự chạy khi thêm clip. Bài viết và thumbnail được tạo cùng lúc; mỗi bài có ít nhất 3 ảnh và video đầy đủ ở cuối.</div>
               <button class="btn btn-secondary" style="margin-top: 12px;" onclick="processContentStudioQueue(this)"><i class="bi bi-play-fill"></i> Khởi động hàng đợi</button>
@@ -4251,12 +4252,20 @@
     try {
       const response = await fetch('/api/publishing/settings');
       const data = await response.json();
-      if (response.ok && data.success) selects.forEach(select => { select.value = String(data.posting_threads); });
+      if (response.ok && data.success) selects.forEach(select => {
+        select.max = String(data.max_posting_threads || 32); select.dataset.savedValue = String(data.posting_threads);
+        if (document.activeElement !== select && !select.disabled) select.value = String(data.posting_threads);
+      });
     } catch (error) { console.warn('Không tải được số luồng đăng:', error); }
   }
 
   async function savePostingThreads(select) {
-    const value = Number(select?.value || 4);
+    const value = Number(select?.value);
+    if (!select?.value.trim() || !Number.isInteger(value) || value < 1 || value > Number(select.max || 32)) {
+      showToast('Nhập số nguyên từ 1 đến '+(select.max || 32)+' cho số luồng đăng.');
+      select?.reportValidity(); return;
+    }
+    select.disabled = true;
     try {
       const response = await fetch('/api/publishing/settings', {
         method: 'PUT', headers: {'Content-Type':'application/json'},
@@ -4264,12 +4273,16 @@
       });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || 'Không lưu được số luồng');
-      document.querySelectorAll('[data-posting-threads]').forEach(element => { element.value = String(data.posting_threads); });
+      document.querySelectorAll('[data-posting-threads]').forEach(element => {
+        element.dataset.savedValue = String(data.posting_threads);
+        if (element === select || document.activeElement !== element) element.value = String(data.posting_threads);
+      });
       showToast(`Đã lưu ${data.posting_threads} luồng đăng. Mỗi Token/Page chỉ chạy một bài.`);
     } catch (error) {
       alert(error.message);
       await loadPostingThreads();
-    }
+      select.value = select.dataset.savedValue || '4';
+    } finally { select.disabled = false; }
   }
 
 
@@ -6664,7 +6677,11 @@
       if (!data.success) throw new Error(data.error || 'Kh\u00f4ng t\u1ea3i \u0111\u01b0\u1ee3c h\u00e0ng \u0111\u1ee3i');
       const allItems = data.items || [];
       const workerSelect = document.getElementById('cs-workers');
-      if (workerSelect && data.worker) workerSelect.value = String(data.worker.workers || 2);
+      if (workerSelect && data.worker) {
+        workerSelect.max = String(data.worker.max_workers || 32);
+        workerSelect.dataset.savedValue = String(data.worker.workers);
+        if (document.activeElement !== workerSelect && !workerSelect.disabled) workerSelect.value = String(data.worker.workers);
+      }
       const stages = {preparing:'Chuẩn bị', checking_source:'Kiểm tra video gốc', checking_existing_article:'Kiểm tra bài đã có', generating_text_and_images:'Tạo nội dung + ảnh', publishing_article:'Đăng bài Website', verifying_article:'Xác minh bài và video', complete:'Hoàn tất'};
       const active = allItems.filter(item => item.status === 'running');
       document.getElementById('cs-active-videos').innerHTML = active.length ? '<strong style="color:#fbbf24">Đang xử lý:</strong><br>' + active.map(item => `• ${csEscape(item.title || item.clip_filename)}<br><small style="color:#94a3b8">${csEscape(stages[item.stage] || item.stage || 'Đang chạy')} · ${csEscape(item.clip_filename || '')}</small>`).join('<br>') : '<span style="color:#94a3b8">' + (data.worker?.alive ? 'Worker đang chờ clip mới.' : 'Worker chưa chạy; bấm Khởi động hàng đợi.') + '</span>';
@@ -6818,11 +6835,20 @@
   };
   window.csSaveWorkers = async function() {
     const feedback = document.getElementById('cs-action-msg');
+    const input = document.getElementById('cs-workers');
+    const value = Number(input.value);
+    if (!input.value.trim() || !Number.isInteger(value) || value < 1 || value > Number(input.max || 32)) {
+      feedback.style.color = '#f87171'; feedback.textContent = 'Nhập số nguyên từ 1 đến '+(input.max || 32)+'.';
+      input.reportValidity(); return;
+    }
+    input.disabled = true;
     try {
-      const res = await fetch('/api/content-studio/workers', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({workers:Number(document.getElementById('cs-workers').value)})});
+      const res = await fetch('/api/content-studio/workers', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({workers:value})});
       const data = await res.json(); if (!res.ok || !data.success) throw new Error(data.error || 'Không lưu được số worker');
+      input.value = String(data.worker.workers); input.dataset.savedValue = input.value;
       feedback.style.color = '#4ade80'; feedback.textContent = `Đã đặt ${data.worker.workers} video xử lý song song. Tác vụ đang chạy sẽ hoàn tất trước khi giảm số worker.`;
-    } catch (e) { feedback.style.color = '#f87171'; feedback.textContent = e.message; }
+    } catch (e) { feedback.style.color = '#f87171'; feedback.textContent = e.message; if(input.dataset.savedValue) input.value = input.dataset.savedValue; }
+    finally { input.disabled = false; }
   };
   window.processContentStudioQueue = async function(button) {
     csSetBusy(button, true, 'Đang khởi động...');
@@ -7306,7 +7332,7 @@
           <select id="modal-dist-group" class="form-select form-select-sm" style="background: #0b1329; border-color: #23304d;"></select>
           <label style="font-size: 12px; color: #94a3b8;">Nhóm Token đăng (tuỳ chọn):</label>
           <select id="modal-dist-token-group" class="form-select form-select-sm" style="background: #0b1329; border-color: #23304d;"><option value="">Dùng mapping hiện tại</option></select>
-          <label style="font-size:12px;color:#94a3b8;">Số luồng đăng:</label><select data-posting-threads onchange="savePostingThreads(this)" class="form-select form-select-sm"><option value="1">1</option><option value="2">2</option><option value="4" selected>4</option><option value="8">8</option></select>
+          <label style="font-size:12px;color:#94a3b8;">Số luồng đăng (1–32):</label><input data-posting-threads type="number" min="1" max="32" step="1" value="4" onchange="savePostingThreads(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" aria-label="Số luồng đăng" class="form-control form-control-sm">
         </div>
         <div style="margin-bottom: 16px;">
           <label style="font-size: 12px; font-weight: 700; color: #94a3b8;">2. Thời gian bắt đầu lên lịch:</label>
@@ -7658,7 +7684,7 @@
         <label>Nhóm token</label><select id="pub-select-token-group" class="form-control"><option value="">-- Tất cả mapping hiện tại --</option></select>
         <div id="pub-token-group-pages" style="display:none;"><button type="button" onclick="setPubTokenGroupPages(true)">Chọn tất cả trong nhóm</button><button type="button" onclick="setPubTokenGroupPages(false)">Bỏ tất cả</button><div id="pub-token-group-page-list"></div></div>
         <div id="pub-pages-target-summary"></div>
-        <label>Số luồng đăng theo lịch</label><select data-posting-threads onchange="savePostingThreads(this)" class="form-control"><option value="1">1 luồng</option><option value="2">2 luồng</option><option value="4" selected>4 luồng</option><option value="8">8 luồng</option></select>
+        <label>Số luồng đăng theo lịch (1–32)</label><input data-posting-threads type="number" min="1" max="32" step="1" value="4" onchange="savePostingThreads(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" aria-label="Số luồng đăng theo lịch" class="form-control">
         <small>Mỗi Token/Page chỉ chạy một bài. Giãn cách và cooldown Token vẫn được giữ.</small>
         <label>Caption</label><textarea id="pub-caption" class="form-control" rows="4"></textarea>
         <label>First comment</label><textarea id="pub-first-comment" class="form-control" rows="3"></textarea>
@@ -7701,7 +7727,11 @@
     <div class="app-modal-box" style="max-width:680px;">
       <div class="app-modal-header"><h4>Kiểm tra bài trên Meta</h4><button class="btn btn-secondary btn-sm" onclick="document.getElementById('modal-meta-diagnosis').style.display='none'">Đóng</button></div>
       <div class="app-modal-body" id="meta-diagnosis-body" style="font-size:13px;line-height:1.7;"></div>
-      <div class="app-modal-footer" style="gap:8px;flex-wrap:wrap;"><button class="btn btn-secondary" id="meta-diagnosis-refresh" onclick="openMetaDiagnosis(currentMetaDiagnosisPost)">Kiểm tra lại</button><button class="btn btn-primary" id="meta-finish-existing" style="display:none;" onclick="finishExistingUpload()">Hoàn tất video đã upload</button></div>
+      <div class="app-modal-footer" style="gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-secondary" id="meta-diagnosis-refresh" onclick="openMetaDiagnosis(currentMetaDiagnosisPost)">Kiểm tra lại</button>
+        <button class="btn btn-primary" id="meta-recover-existing" style="display:none;" onclick="recoverExistingPost()">Đồng bộ quyền và thử đăng lại</button>
+        <button class="btn btn-primary" id="meta-finish-existing" style="display:none;" onclick="finishExistingUpload()">Hoàn tất video đã upload</button>
+      </div>
     </div>
   </div>
 <script>
@@ -7820,16 +7850,43 @@
   let currentMetaDiagnosisPost=null,currentMetaDiagnosis=null,metaFinishBusy=false;
   async function openMetaDiagnosis(postId){
     if(metaFinishBusy) return; currentMetaDiagnosisPost=postId;currentMetaDiagnosis=null;
-    document.getElementById('modal-meta-diagnosis').style.display='flex';const body=document.getElementById('meta-diagnosis-body');body.textContent='Đang đọc trạng thái hiện tại trên Meta...';document.getElementById('meta-finish-existing').style.display='none';
+    document.getElementById('modal-meta-diagnosis').style.display='flex';const body=document.getElementById('meta-diagnosis-body');body.textContent='Đang đọc trạng thái hiện tại trên Meta...';document.getElementById('meta-finish-existing').style.display='none';document.getElementById('meta-recover-existing').style.display='none';
     try{
       const response=await fetch('/api/posts/'+encodeURIComponent(postId)+'/meta-diagnosis'); const data=await response.json();
+      if(postId!==currentMetaDiagnosisPost) return;
       if(!response.ok || !data.success) throw new Error(data.error || 'Không đọc được Meta');
       currentMetaDiagnosis=data; const seen=data.observation || {}, diag=data.diagnosis || {};
       body.innerHTML=`<h4 style="font-size:14px;margin-bottom:4px;">${escapeHtml(data.title || '')}</h4><div style="color:#94a3b8;margin-bottom:14px;">${escapeHtml(data.page_name || '')}</div><div style="border:1px solid #b45309;background:rgba(245,158,11,.08);padding:14px;border-radius:10px;margin-bottom:14px;"><b>${escapeHtml(diag.message || '')}</b><div style="color:#cbd5e1;margin-top:5px;">${escapeHtml(diag.detail || '')}</div></div><dl style="display:grid;grid-template-columns:120px minmax(0,1fr);gap:7px;font-size:12px;"><dt>Meta ID</dt><dd>${escapeHtml(diag.video_id || 'Chưa có')}</dd><dt>Video</dt><dd>${escapeHtml(seen.video_status || 'Chưa đọc được')}</dd><dt>Upload</dt><dd>${escapeHtml(seen.uploading_status || '—')}${seen.bytes_transferred!=null ? ' · '+Number(seen.bytes_transferred).toLocaleString('vi-VN')+' bytes' : ''}</dd><dt>Xử lý</dt><dd>${escapeHtml(seen.processing_status || '—')}</dd><dt>Đăng bài</dt><dd>${escapeHtml(seen.publishing_status || '—')}</dd><dt>Lần đọc</dt><dd>${escapeHtml(seen.checked_at ? new Date(seen.checked_at).toLocaleString('vi-VN') : '—')}</dd></dl>`;
       if(diag.can_reschedule_existing){ const input=document.createElement('input'); input.type='datetime-local'; input.id='meta-replacement-time'; input.style='margin-top:16px;padding:8px;background:#0f172a;color:white;border:1px solid #475569;border-radius:6px;'; const label=document.createElement('label'); label.textContent='Giờ đăng mới (nên chọn ít nhất 30 phút từ bây giờ để có thời gian xử lý): '; label.appendChild(input); body.appendChild(label); }
+      if(diag.can_retry_existing){
+        const options=data.recovery_credentials || [];
+        const container=document.createElement('div'); container.style='margin-top:12px;';
+        container.innerHTML=`<label for="meta-recovery-token">Token để phục hồi bài</label><select id="meta-recovery-token" class="form-control">${options.map(item=>`<option value="${escapeHtml(item.token_id)}">${escapeHtml(item.name)}${item.original ? ' · Token gốc' : ''}${item.owner_name ? ' · '+escapeHtml(item.owner_name) : ''} · ${escapeHtml(item.token_id)}</option>`).join('')}</select><small style="color:#94a3b8;">App đồng bộ quyền của Token đã chọn cho đúng Page rồi thử đăng video hiện có. Có thể chọn Token quản lý Page khác đã đồng bộ.</small>`;
+        body.appendChild(container); document.getElementById('meta-recovery-token').value=data.recovery_token_id || '';
+        document.getElementById('meta-recover-existing').style.display='';
+      }
+      const result=document.createElement('div'); result.id='meta-recovery-result'; result.setAttribute('role','status'); result.style='margin-top:12px;color:#cbd5e1;white-space:pre-line;'; body.appendChild(result);
       document.getElementById('meta-finish-existing').style.display=(diag.can_finish_existing || diag.can_reschedule_existing) ? '' : 'none';
       document.getElementById('meta-finish-existing').textContent=diag.can_reschedule_existing ? 'Đặt giờ mới cho video đã upload' : 'Hoàn tất video đã upload';
     }catch(error){body.textContent=error.message;}
+  }
+  async function recoverExistingPost(){
+    if(metaFinishBusy || !currentMetaDiagnosis?.diagnosis?.can_retry_existing) return;
+    const tokenId=document.getElementById('meta-recovery-token')?.value;
+    if(!tokenId){showToast('Chọn Token quản lý Page để phục hồi.');return;}
+    const videoId=currentMetaDiagnosis.diagnosis.video_id;
+    if(!confirm(`Đồng bộ quyền Page và thử đăng ngay video ${videoId} bằng Token đã chọn?\nApp giữ nguyên video và tiếp tục xác minh kết quả.`)) return;
+    metaFinishBusy=true; const button=document.getElementById('meta-recover-existing');button.disabled=true;
+    const feedback=document.getElementById('meta-recovery-result');feedback.textContent='Đang đồng bộ quyền Page và kiểm tra video...';
+    try{
+      const response=await fetch('/api/posts/'+encodeURIComponent(currentMetaDiagnosisPost)+'/recover-existing',{
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_existing_upload:true,video_id:videoId,token_id:tokenId})});
+      const data=await response.json(); if(!response.ok || !data.success) throw new Error(data.error || 'Chưa phục hồi được bài.');
+      feedback.style.color=data.accepted ? '#4ade80' : '#fbbf24';feedback.textContent=data.message;
+      if(data.state!=='rejected'){button.style.display='none';currentMetaDiagnosis.diagnosis.can_retry_existing=false;}
+      loadDashboard();loadPostsTable({quiet:true});
+    }catch(error){feedback.style.color='#fbbf24';feedback.textContent=error.message;}
+    finally{metaFinishBusy=false;button.disabled=false;}
   }
   async function finishExistingUpload(){
     if(metaFinishBusy || !(currentMetaDiagnosis?.diagnosis?.can_finish_existing || currentMetaDiagnosis?.diagnosis?.can_reschedule_existing)) return;

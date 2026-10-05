@@ -3118,7 +3118,8 @@ def api_scheduler_run_due():
 def _inspect_post_meta(post):
     """Resolve the original saved credential rather than a Page's later default."""
     from web.meta_diagnostics import observation
-    entry = token_vault.get_token_by_id(str(post.get("token_id") or ""))
+    from web.meta_recovery import publishing_token_id
+    entry = token_vault.get_token_by_id(publishing_token_id(post))
     mapping, error = page_manager.resolve_verified_mapping(post.get("page_id"), entry)
     if error or not mapping:
         return observation({"error": {"message": "Token gốc hoặc binding Page chưa được xác minh; hãy Sync Page đúng Token."}}, 409), None
@@ -3133,8 +3134,76 @@ def api_post_meta_diagnosis(post_id):
     if not post:
         return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
     seen, mapping = _inspect_post_meta(post)
+    from web.meta_recovery import can_retry_existing, can_refresh_existing, recovery_credentials, publishing_token_id
+    diagnostic = diagnose(post, seen)
+    diagnostic["can_retry_existing"] = can_refresh_existing(post) and (
+        can_retry_existing(post, seen) or seen.get("http_status") != 200 or bool(seen.get("error")))
     return jsonify({"success": True, "post_id": post_id, "title": post.get("title"),
-                    "page_name": post.get("page_name"), "observation": seen, "diagnosis": diagnose(post, seen)})
+                    "page_name": post.get("page_name"), "page_id": post.get("page_id"),
+                    "observation": seen, "diagnosis": diagnostic,
+                    "recovery_credentials": recovery_credentials(post, token_vault, page_manager),
+                    "recovery_token_id": publishing_token_id(post)})
+
+
+@app.route("/api/posts/<post_id>/recover-existing", methods=["POST"])
+def api_recover_existing_post(post_id):
+    from web.meta_recovery import (can_retry_existing, can_refresh_existing, refresh_page_credential,
+                                  publishing_token_id, recovery_credentials)
+    from web.scheduled_publisher import _cycle_lock, _resume_complete_upload, sanitize_error, _parse_scheduled_time
+    from multi_pc.publishing_settings import credential_ready
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm_existing_upload") is not True or not body.get("video_id"):
+        return jsonify({"success": False, "error": "Cần xác nhận đúng video hiện có trước khi thử đăng lại."}), 400
+    if not _cycle_lock.acquire(blocking=False):
+        return jsonify({"success": False, "busy": True, "error": "App đang xử lý bài; chờ chu kỳ này hoàn tất rồi thử lại."}), 409
+    try:
+        posts = load_posts()
+        post = next((p for p in posts if p.get("id") == post_id), None)
+        if post is None:
+            return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
+        if str(post.get("meta_upload_video_id")) != str(body["video_id"]):
+            return jsonify({"success": False, "error": "Meta ID đã thay đổi; hãy kiểm tra lại bài."}), 409
+        if not can_refresh_existing(post):
+            return jsonify({"success": False, "error": "Bài đã đăng hoặc Meta còn xử lý/chưa rõ kết quả; app tiếp tục đối soát ID cũ."}), 409
+        current = datetime.now()
+        started = _parse_scheduled_time(post.get("auto_finish_started_at"))
+        if started is not None and current.timestamp() - started.timestamp() < 30:
+            return jsonify({"success": False, "error": "Vừa thử đăng; chờ ít nhất 30 giây trước khi thử tiếp."}), 409
+        selected = str(body.get("token_id") or publishing_token_id(post))
+        allowed = {item["token_id"] for item in recovery_credentials(post, token_vault, page_manager)}
+        if selected not in allowed:
+            return jsonify({"success": False, "error": "Chọn Token gốc hoặc mapping đã xác minh cho đúng Page này."}), 409
+        if not credential_ready(token_vault.get_token_by_id(selected)):
+            return jsonify({"success": False, "error": "Token đang cooldown hoặc chưa hoạt động; hãy kiểm tra Token trong kho."}), 409
+        credential, summary = refresh_page_credential(post, token_vault, page_manager, selected)
+        if credential is None:
+            return jsonify({"success": False, "error": summary["error"], "credential_check": summary}), 409
+        # Re-read with the refreshed, same-Page credential before a remote write.
+        seen = reel_poster.inspect_reel(post["meta_upload_video_id"], credential["token"], selected)
+        if not can_retry_existing(post, seen):
+            return jsonify({"success": False, "error": "Trạng thái Meta đã thay đổi; chưa gửi yêu cầu đăng lại."}), 409
+        previous = publishing_token_id(post)
+        if selected != str(post.get("token_id") or ""):
+            post["meta_recovery_token_id"] = selected
+        else:
+            post.pop("meta_recovery_token_id", None)
+        post["meta_credential_refresh"] = {**summary, "checked_at": current.isoformat()}
+        if selected != previous:
+            post.setdefault("meta_recovery_history", []).append({"from_token_id": previous, "to_token_id": selected,
+                "at": current.isoformat(), "video_id": post["meta_upload_video_id"]})
+        performed = _resume_complete_upload(post, seen, reel_poster, credential, posts, current, force_retry=True)
+        if not performed:
+            return jsonify({"success": False, "error": "Không đủ điều kiện phục hồi; giữ nguyên bài để tiếp tục đối soát."}), 409
+        state = post.get("auto_finish_state")
+        message = ("Đã đồng bộ quyền Page và gửi đăng video cũ; app đang xác minh kết quả." if state == "accepted" else
+                   "Meta chưa xác nhận; app giữ nguyên video và đang đối soát." if state == "unknown" else
+                   "Đã đồng bộ quyền Page nhưng Meta vẫn từ chối: " + sanitize_error(post.get("auto_finish_error")))
+        return jsonify({"success": True, "accepted": state == "accepted", "state": state, "message": message,
+                        "video_id": post["meta_upload_video_id"], "credential_check": summary})
+    except Exception as exc:
+        return jsonify({"success": False, "error": sanitize_error(exc)}), 500
+    finally:
+        _cycle_lock.release()
 
 
 @app.route("/api/posts/<post_id>/finish-existing-upload", methods=["POST"])
@@ -4500,6 +4569,8 @@ def api_content_studio_queue():
 @app.route("/api/content-studio/workers", methods=["GET", "PUT"])
 def api_content_studio_workers():
     try:
+        if request.method == "PUT" and (request.get_json(silent=True) or {}).get("workers") is None:
+            return jsonify({"success": False, "error": "Nhập số luồng Content/LLM trước khi lưu."}), 400
         settings = content_worker_settings((request.json or {}).get("workers") if request.method == "PUT" else None)
         if request.method == "PUT":
             start_content_package_worker()

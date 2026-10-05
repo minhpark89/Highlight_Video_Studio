@@ -224,7 +224,8 @@ def _requeue_safe_failures(posts, now_ts, current_dt):
     return changed
 
 
-def _resume_complete_upload(post, seen, poster, credential, posts, current_dt):
+def _resume_complete_upload(post, seen, poster, credential, posts, current_dt, *, force_retry=False,
+                            vault=None, manager=None):
     """Finish a remotely confirmed idle upload after its app due time.
 
     The same ID is used throughout. Persist a write-ahead marker before Finish;
@@ -234,14 +235,14 @@ def _resume_complete_upload(post, seen, poster, credential, posts, current_dt):
     upload_id = str(post.get("meta_upload_video_id") or "")
     now_ts = current_dt.timestamp()
     due = _parse_scheduled_time(post.get("scheduled_time"))
-    if not upload_id or due is None or due > current_dt:
+    if not upload_id or due is None or (due > current_dt and not force_retry):
         return False
     idle_upload = (seen.get("video_status") == "upload_complete"
                    and seen.get("processing_status") == "not_started"
                    and seen.get("publishing_status") == "not_started")
     overdue_native = (seen.get("video_status") == "ready" and seen.get("processing_status") == "complete"
                       and seen.get("publishing_status") == "scheduled"
-                      and now_ts - due.timestamp() >= 300)
+                      and (force_retry or now_ts - due.timestamp() >= 300))
     if (seen.get("http_status") != 200 or seen.get("id") != upload_id or seen.get("error")
             or seen.get("copyright_matches") or seen.get("uploading_status") != "complete"
             or not (idle_upload or overdue_native)):
@@ -267,8 +268,29 @@ def _resume_complete_upload(post, seen, poster, credential, posts, current_dt):
         started = _parse_scheduled_time(post.get("auto_finish_started_at"))
         if started is None or now_ts - started.timestamp() < 900 or post["auto_finish_idle_checks"] < 2:
             return False
-    if now_ts < float(post.get("auto_finish_retry_at") or 0):
+    if not force_retry and now_ts < float(post.get("auto_finish_retry_at") or 0):
         return False
+    if not force_retry and vault is not None and manager is not None and state == "rejected":
+        from web.meta_recovery import refresh_page_credential
+        from multi_pc.publishing_settings import credential_ready
+        if not credential_ready(vault.get_token_by_id(credential["token_id"])):
+            return False
+        verified = _parse_scheduled_time(credential.get("verified_at"))
+        if "4854002" in str(post.get("auto_finish_error") or "") and (
+                verified is None or now_ts - verified.timestamp() >= 900):
+            refreshed, summary = refresh_page_credential(post, vault, manager)
+            post["meta_credential_refresh"] = {**summary, "checked_at": current_dt.isoformat()}
+            if not refreshed:
+                post["meta_next_check_at"] = now_ts + 300
+                return False
+            credential = refreshed
+            fresh_seen = poster.inspect_reel(upload_id, credential["token"], credential["token_id"])
+            from web.meta_recovery import can_retry_existing
+            if not can_retry_existing(post, fresh_seen):
+                post["meta_next_check_at"] = now_ts + 60
+                return False
+            seen = fresh_seen
+            overdue_native = seen.get("publishing_status") == "scheduled"
     _repair_non_english_post(post, posts)
     attempts = int(post.get("auto_finish_attempts") or 0) + 1
     post.update({"auto_finish_state": "sending", "auto_finish_attempts": attempts,
@@ -391,7 +413,8 @@ def _process_scheduled_posts_once(
     posts_by_id = {post.get("id"): post for post in posts}
     def prepare_first_comment(item):
         linked_post = posts_by_id.get(item.get("post_id"))
-        exact_token_id = str(item.get("token_id") or (linked_post or {}).get("token_id") or "")
+        exact_token_id = str((linked_post or {}).get("meta_recovery_token_id") or item.get("token_id") or
+                             (linked_post or {}).get("token_id") or "")
         page_token = item.get("page_token")
         if exact_token_id:
             page = next((page for page in page_manager.list_pages()
@@ -425,7 +448,9 @@ def _process_scheduled_posts_once(
             continue
         # New records require the same exact Page/token mapping as publishing.
         page = next((p for p in page_manager.list_pages() if str(p.get("page_id")) == str(post.get("page_id"))), None)
-        exact_page = {**page, "token_id": post["token_id"]} if page and post.get("token_id") else None
+        from web.meta_recovery import publishing_token_id
+        recovery_token_id = publishing_token_id(post)
+        exact_page = {**page, "token_id": recovery_token_id} if page and recovery_token_id else None
         verdict = preflight_pages([exact_page], token_vault, page_manager) if exact_page else {"ok": False}
         if not verdict.get("ok"):
             post["meta_reconcile_error"] = "Exact Page credential unavailable; read-only verification paused."
@@ -462,7 +487,8 @@ def _process_scheduled_posts_once(
             post["meta_observation"] = check["meta_observation"]
             post["meta_diagnosis"] = diagnose(post)
             if _resume_complete_upload(
-                    post, check["meta_observation"], poster_for_check, credential, posts, current_dt):
+                    post, check["meta_observation"], poster_for_check, credential, posts, current_dt,
+                    vault=token_vault, manager=page_manager):
                 reconciled += 1
                 continue
         reconciled += 1

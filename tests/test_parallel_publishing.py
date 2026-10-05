@@ -83,7 +83,7 @@ def test_workers_share_neither_page_nor_token_and_honor_cooldown(tmp_path):
     assert next(row for row in result["posts"] if row["id"] == "cooldown")["status"] == "scheduled"
 
 
-@pytest.mark.parametrize("value", [0, 9, True, "4", None])
+@pytest.mark.parametrize("value", [0, 33, True, "4", None])
 def test_invalid_thread_counts_do_not_replace_saved_settings(tmp_path, value):
     save_publishing_settings(tmp_path, 2)
     with pytest.raises(ValueError):
