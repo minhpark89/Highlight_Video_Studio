@@ -1,7 +1,10 @@
 import json
+import sys
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from playwright.sync_api import sync_playwright
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from web.post_queries import select_posts, group_summary
 
 repo = Path(__file__).resolve().parents[3]
@@ -94,6 +97,7 @@ with sync_playwright() as pw:
     report['checks'].append('493 posts, 50 rows per page, global counts, no full queue or eager audit')
     page.evaluate("switchTab('pane-groups')")
     page.wait_for_function("document.querySelectorAll('#group-review-body tr[data-review-post-id]').length === 30")
+    page.wait_for_function("document.getElementById('group-review-stock').textContent.includes('800')")
     assert page.locator('#pane-groups #group-review-panel').count() == 1
     assert '800' in page.inner_text('#group-review-stock')
     assert 'Group Token' in page.inner_text('#group-review-body')
@@ -120,6 +124,8 @@ with sync_playwright() as pw:
     report['checks'].append('single detail fetch and draft editor saves publishing mode')
     page.evaluate('runLoHaBatchSchedule("g","Bodycam Group")')
     page.wait_for_selector('#modal-schedule-config',state='visible')
+    page.wait_for_function('!groupDailyModalState.schedule.loading')
+    assert page.input_value('#sched-conf-review-mode') == 'manual'
     page.check('#sched-conf-daily')
     page.select_option('#sched-conf-review-mode','manual')
     page.evaluate('executeBatchSchedule()')

@@ -97,12 +97,12 @@
       "query": ""
     },
     {
-      "path": "/api/token-groups",
+      "path": "/api/posts/health",
       "method": "GET",
       "query": ""
     },
     {
-      "path": "/api/posts/health",
+      "path": "/api/token-groups",
       "method": "GET",
       "query": ""
     },
