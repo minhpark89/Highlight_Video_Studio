@@ -1,0 +1,300 @@
+{
+  "errors": [],
+  "requests": [
+    {
+      "path": "/",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/static/group_review.js",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/jobs",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/clips",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/first-comment-profiles",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/system/info",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/system/youtube_status",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/schedule/rules",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/tokens",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/pages",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/groups",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/schedule/rules",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/posts/list",
+      "method": "GET",
+      "query": "view=posts&bucket=attention&page_size=100"
+    },
+    {
+      "path": "/api/dashboard/summary",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/llm/detect",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/output-pipeline/plans",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/pages",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/groups",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/output-pipeline/status",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/token-groups",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/posts/health",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/posts/list",
+      "method": "GET",
+      "query": "view=posts&bucket=all&token_id=&page=1&page_size=50"
+    },
+    {
+      "path": "/api/scheduler/status",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/groups",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/publishing/settings",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/posts/list",
+      "method": "GET",
+      "query": "view=posts&bucket=published&token_id=&page=1&page_size=50"
+    },
+    {
+      "path": "/api/posts/list",
+      "method": "GET",
+      "query": "view=posts&bucket=published&token_id=&page=2&page_size=50"
+    },
+    {
+      "path": "/api/groups",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/clips",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/groups/post-summary",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/posts/list",
+      "method": "GET",
+      "query": "view=review&group_id=&page_id=&bucket=all&page=1&page_size=30"
+    },
+    {
+      "path": "/api/pages",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/pages",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/posts/list",
+      "method": "GET",
+      "query": "view=review&group_id=g&page_id=&bucket=all&page=1&page_size=30"
+    },
+    {
+      "path": "/api/posts/list",
+      "method": "GET",
+      "query": "view=review&group_id=g&page_id=&bucket=all&page=3&page_size=30"
+    },
+    {
+      "path": "/api/posts/review-batch",
+      "method": "POST",
+      "query": ""
+    },
+    {
+      "path": "/api/posts/list",
+      "method": "GET",
+      "query": "view=review&group_id=g&page_id=&bucket=all&page=3&page_size=30"
+    },
+    {
+      "path": "/api/groups/post-summary",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/posts/draft0",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/pages",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/pages",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/clips/play/clip.mp4",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/posts/draft0/draft",
+      "method": "PUT",
+      "query": ""
+    },
+    {
+      "path": "/api/posts/list",
+      "method": "GET",
+      "query": "view=posts&bucket=published&token_id=&page=2&page_size=50"
+    },
+    {
+      "path": "/api/posts/list",
+      "method": "GET",
+      "query": "view=review&group_id=g&page_id=&bucket=all&page=2&page_size=30"
+    },
+    {
+      "path": "/api/groups/post-summary",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/pages",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/output-pipeline/plans",
+      "method": "GET",
+      "query": ""
+    },
+    {
+      "path": "/api/distribute/batch",
+      "method": "POST",
+      "query": ""
+    },
+    {
+      "path": "/api/posts/list",
+      "method": "GET",
+      "query": "view=posts&bucket=published&token_id=&page=2&page_size=50"
+    }
+  ],
+  "approvals": [
+    [
+      "draft4",
+      "draft3",
+      "draft2",
+      "draft1",
+      "draft0"
+    ]
+  ],
+  "draft_actions": [
+    {
+      "method": "PUT",
+      "body": {
+        "title": "Bodycam: the full recording and its context",
+        "content": "Edited caption for the complete original recording.",
+        "first_comment": "Read https://cms.test/blog/story",
+        "page_id": "a",
+        "scheduled_time": "2026-10-07T19:30",
+        "publish_mode": "app_queue"
+      }
+    }
+  ],
+  "plans": [
+    {
+      "group_id": "g",
+      "posts_per_page": 2,
+      "post_daily": true,
+      "approval_mode": "manual",
+      "publish_mode": "meta_scheduled",
+      "daily_slots": [
+        "11:30",
+        "19:30"
+      ],
+      "token_group_id": "",
+      "auto_first_comment": true,
+      "use_llm_comment": true,
+      "english_mode": true
+    }
+  ],
+  "checks": [
+    "493 posts, 50 rows per page, global counts, no full queue or eager audit",
+    "review by group, 30 rows per page, assigned Page/Token/time, five drafts approved once",
+    "single detail fetch and draft editor saves publishing mode",
+    "Post daily persists manual review and Meta mode for selected group"
+  ]
+}

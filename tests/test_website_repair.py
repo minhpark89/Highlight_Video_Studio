@@ -67,6 +67,33 @@ def test_failed_verification_keeps_url_and_failed_state_in_package(repair):
     repair.publish_article.assert_not_called()
 
 
+def test_real_english_revalidation_does_not_rewrite_existing_article(repair):
+    article = old_article()
+    article['title'] = 'Bodycam: Unpacking the Hype, Visual Realism, and Gaming Implications'
+    article['description'] = '<p>Even ideal weapon builds depend heavily on smart movement discipline and engagement distance management.</p>' + \
+        f'<iframe src="https://www.youtube-nocookie.com/embed/{YOUTUBE_ID}" title="Original video"></iframe>'
+    repair.read_existing_article.return_value = article
+    generated = packages.generate_package('Official launch trailer', mode='no_llm', article_url=URL)
+    publisher.repair_existing_website_article(URL, 'clip.mp4', content_factory=mock.Mock(return_value=generated),
+                                              asset_metadata={'result': generated, 'repair_existing_article': True})
+    repair.update_existing_article.assert_not_called()
+    repair.publish_article.assert_not_called()
+    repair.verify_article_english.assert_called_once_with(URL)
+
+
+def test_mixed_foreign_paragraph_triggers_in_place_repair_even_if_overall_is_english(repair):
+    article = old_article()
+    article['title'] = 'Original video breakdown'
+    article['description'] = '<p>Read the original recording for the complete sequence and its context.</p>' * 20 + \
+        '<p>Cette vidéo présente les détails de la nouvelle mise à jour.</p>' + \
+        f'<iframe src="https://www.youtube-nocookie.com/embed/{YOUTUBE_ID}" title="Original video"></iframe>'
+    repair.read_existing_article.return_value = article
+    generated = packages.generate_package('Official launch trailer', mode='no_llm', article_url=URL)
+    publisher.repair_existing_website_article(URL, 'clip.mp4', content_factory=mock.Mock(return_value=generated),
+                                              asset_metadata={'result': generated, 'repair_existing_article': True})
+    repair.update_existing_article.assert_called_once()
+
+
 def test_retry_worker_repairs_same_url_then_resumes_comment_and_schedule(tmp_path, monkeypatch, repair):
     monkeypatch.setattr(packages, "DATA_ROOT", tmp_path)
     monkeypatch.setattr(packages, "QUEUE_FILE", tmp_path / "packages.json")

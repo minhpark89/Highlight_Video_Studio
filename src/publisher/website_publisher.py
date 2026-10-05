@@ -1165,7 +1165,12 @@ def repair_existing_website_article(article_url, clip_filename, *, content_facto
                   youtube_id=youtube_id, youtube_url=f"https://www.youtube.com/watch?v={youtube_id}" if youtube_id else "")
     cached = metadata.get("result") or {}
     from src.english_text import package_is_english
-    needs_repair = not is_english(str(article.get("title") or "")) or not is_english(old_body)
+    try:
+        assert_english(str(article.get("title") or ""), "CMS title")
+        assert_english(old_body, "CMS article")
+        needs_repair = False
+    except ValueError:
+        needs_repair = True
     rewrite_article = needs_repair or bool(metadata.get("regenerate_text"))
     if needs_repair or not package_is_english(cached) or not cached.get("article_html") or metadata.get("regenerate_text"):
         progress("generating_text")

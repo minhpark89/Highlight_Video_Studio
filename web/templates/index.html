@@ -1022,6 +1022,24 @@
             </table>
           </div>
         </div>
+        <style>
+          #group-review-panel { scroll-margin-top:85px; }
+          #group-review-panel .btn-outline { background:#18243c; color:#cbd5e1; border:1px solid #334155; }
+          #group-review-panel a { color:#38bdf8; text-decoration:none; }
+          #group-review-panel a:hover { text-decoration:underline; }
+          #group-review-panel th { padding:12px; background:#0f172a; color:#94a3b8; text-align:left; }
+          #group-review-panel td { border-top:1px solid #26344e; vertical-align:middle; }
+          #group-review-panel input[type=checkbox] { width:16px; height:16px; margin:0; accent-color:#a855f7; }
+        </style>
+        <div id="group-review-panel" class="panel" style="margin-top:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;"><div><h3 style="margin:0;font-size:18px;">Chuẩn bị & Draft theo nhóm Page</h3><div style="font-size:12px;color:#94a3b8;margin-top:4px;">Video trong kho được gắn Page, Token và giờ trước khi hiện ở đây. Duyệt theo nhóm, không phải cuộn qua toàn bộ lịch sử.</div></div><button class="btn btn-outline btn-sm" onclick="loadGroupReview();loadGroupReviewSummary();">Làm mới</button></div>
+          <div id="group-review-stock" style="margin-top:10px;padding:9px 12px;border:1px solid #334155;border-radius:8px;color:#fbbf24;font-size:12px;">Đang đọc kho video…</div>
+          <div id="group-review-summary" style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;"></div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;"><label>Nhóm <select id="group-review-group" class="form-control" onchange="groupReviewPage=1;loadGroupReview()"><option value="">Tất cả nhóm đã chọn</option></select></label><label>Page <select id="group-review-page-filter" class="form-control" onchange="groupReviewPage=1;loadGroupReview()"><option value="">Tất cả Page</option></select></label><label>Trạng thái <select id="group-review-status" class="form-control" onchange="groupReviewPage=1;loadGroupReview()"><option value="all">Chuẩn bị + Draft</option><option value="draft">Chỉ Draft</option><option value="preparing">Đang chuẩn bị</option></select></label><label><input id="group-review-select-all" type="checkbox" onchange="selectAllGroupDrafts(this.checked)"> Chọn Draft sẵn sàng</label><button id="group-review-approve" class="btn btn-primary" disabled onclick="approveGroupDrafts()">Duyệt & lên lịch</button></div>
+          <div id="group-review-result" style="font-size:12px;color:#cbd5e1;white-space:pre-line;margin:10px 0;"></div>
+          <div style="overflow:auto;border:1px solid #334155;border-radius:8px;margin-top:8px;"><table class="table" style="width:100%;font-size:12px;"><thead><tr><th>Chọn</th><th>Nội dung / video</th><th>Page / Token</th><th>Lịch</th><th>Trạng thái</th><th>Thao tác</th></tr></thead><tbody id="group-review-body"><tr><td colspan="6" style="padding:24px;text-align:center;color:#94a3b8;">Mở tab Nhóm Trang để tải.</td></tr></tbody></table></div>
+          <div style="display:flex;justify-content:center;gap:12px;align-items:center;margin-top:10px;"><button id="group-review-prev" class="btn btn-outline btn-sm" onclick="groupReviewPage--;loadGroupReview()">‹</button><span id="group-review-pagination" style="font-size:12px;color:#94a3b8;">Trang —</span><button id="group-review-next" class="btn btn-outline btn-sm" onclick="groupReviewPage++;loadGroupReview()">›</button></div>
+        </div>
       </section>
 
       <!-- ========================================== -->
@@ -1082,13 +1100,17 @@
             QUÁ HẠN
           </div>
 
-          <details style="margin-bottom:14px;border:1px solid #334155;border-radius:10px;padding:12px;">
+          <details ontoggle="if(this.open)loadPostsTokenAudit()" style="margin-bottom:14px;border:1px solid #334155;border-radius:10px;padding:12px;">
             <summary style="cursor:pointer;font-weight:700;">Đối chiếu Token → Page → bài đăng</summary>
             <div style="color:#94a3b8;font-size:12px;margin:8px 0;">Page cấu hình là gán mặc định hiện tại; Page trong nhóm là gán riêng của Token Group. Page có bài là số Page khác nhau trong toàn bộ lịch sử/lịch chờ của token gốc.</div>
             <div id="posts-token-audit" style="overflow-x:auto;">Đang tải thống kê token...</div>
           </details>
           <label for="posts-token-filter">Lọc bài theo token:</label>
-          <select id="posts-token-filter" class="form-control" style="max-width:440px;margin:8px 0 16px;" onchange="loadPostsTable({quiet:true})"><option value="">Tất cả Token</option></select>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin:8px 0 16px;">
+            <button class="btn btn-outline" onclick="switchTab('pane-groups')">Chuẩn bị / Draft theo nhóm</button>
+            <label>Token <select id="posts-token-filter" class="form-control" style="min-width:300px;" onchange="postsPage=1;loadPostsTable({quiet:true})"><option value="">Tất cả Token</option></select></label>
+            <button class="btn btn-outline btn-sm" onclick="postsPage=Math.max(1,postsPage-1);loadPostsTable({quiet:true})">‹</button><span id="posts-page-label" style="font-size:12px;color:#94a3b8;padding:7px 2px;">Trang 1</span><button class="btn btn-outline btn-sm" onclick="postsPage++;loadPostsTable({quiet:true})">›</button>
+          </div>
           <!-- Bảng danh sách bài đăng chuẩn LoHa -->
           <div style="overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel-bg);">
             <table class="table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;">
@@ -2088,7 +2110,7 @@
         if (paneId === 'pane-dashboard' && typeof loadDashboard === 'function') loadDashboard();
         if (paneId === 'pane-research' && typeof loadSavedResearchVideos === 'function') loadSavedResearchVideos();
         if (paneId === 'pane-gallery' && typeof loadClipsGallery === 'function') loadClipsGallery();
-        if (paneId === 'pane-groups' && typeof loadLoHaGroups === 'function') loadLoHaGroups();
+        if (paneId === 'pane-groups' && typeof loadLoHaGroups === 'function') { loadLoHaGroups(); loadGroupReviewSummary().catch(e=>showToast(e.message)); loadGroupReview(); loadGroupReviewPages(); }
         if (paneId === 'pane-pages' && typeof loadTokensAndPages === 'function') loadTokensAndPages();
         if (paneId === 'pane-tokens' && typeof loadTokensOnly === 'function') loadTokensOnly();
         if (paneId === 'pane-posts' && typeof loadPostsTable === 'function') { loadPostsTable(); if (typeof window.startPostsAutoRefresh === 'function') window.startPostsAutoRefresh(); }
@@ -4645,7 +4667,7 @@
     const check = document.getElementById(isDist ? 'modal-dist-daily' : 'sched-conf-daily');
     const mode = document.getElementById(isDist ? 'modal-dist-daily-mode' : 'sched-conf-review-mode');
     const button = isDist ? document.getElementById('btn-submit-distribute') : document.querySelector('#modal-schedule-config button[onclick="executeBatchSchedule()"]');
-    check.checked = false; check.disabled = true; mode.value = 'automatic';
+    check.checked = false; check.disabled = true; mode.value = 'manual';
     button.disabled = true;
     try {
       const response = await fetch('/api/output-pipeline/plans');
@@ -4655,7 +4677,7 @@
       const plan = (data.plans || []).find(p => String(p.id) === `group:${groupId}`) || null;
       state.plan = plan;
       check.checked = !!(plan?.enabled && plan?.daily);
-      mode.value = plan?.approval_mode || 'automatic';
+      mode.value = plan?.approval_mode || 'manual';
       if (isDist) {
         document.querySelector(`input[name="modal-dist-mode"][value="${plan?.publish_mode || 'meta_scheduled'}"]`).checked = true;
         document.getElementById('modal-dist-token-group').value = plan?.token_group_id || '';
@@ -4757,7 +4779,7 @@
           posting_threads: postingThreads,
           publish_mode: document.getElementById('modal-dist-mode-meta')?.checked ? 'meta_scheduled' : 'app_queue',
           post_daily: document.getElementById('modal-dist-daily')?.checked === true,
-          approval_mode: document.getElementById('modal-dist-daily-mode')?.value || 'automatic',
+          approval_mode: document.getElementById('modal-dist-daily-mode')?.value || 'manual',
           auto_first_comment: true,
           delete_after_schedule: false
         })
@@ -5067,7 +5089,7 @@
     currentDailyRulesPlan = (plansData.plans || []).find(p => p.id === 'rules') || null;
     const plan = currentDailyRulesPlan || {};
     document.getElementById('loha-post-daily').checked = plan.daily === true && plan.enabled !== false;
-    document.getElementById('loha-daily-mode').value = plan.approval_mode || 'automatic';
+    document.getElementById('loha-daily-mode').value = plan.approval_mode || 'manual';
     document.getElementById('loha-daily-publish-mode').value = plan.publish_mode || 'meta_scheduled';
     const checks = (rows, kind, selected) => rows.map(row => {
       const id = String(kind === 'group' ? row.id : row.page_id);
@@ -5087,7 +5109,7 @@
     const page_ids = [...document.querySelectorAll('.daily-page-check:checked')].map(c => c.value);
     if (!daily && !currentDailyRulesPlan) return;
     const plan = {id:'rules', enabled:daily, daily:daily, group_ids, page_ids, slots,
-      approval_mode:document.getElementById('loha-daily-mode')?.value || 'automatic',
+      approval_mode:document.getElementById('loha-daily-mode')?.value || 'manual',
       publish_mode:document.getElementById('loha-daily-publish-mode')?.value || 'meta_scheduled',
       posts_per_day:slots.length, stagger_minutes:stagger};
     if (!daily && !page_ids.length && !group_ids.length) Object.assign(plan, currentDailyRulesPlan, {enabled:false, daily:false});
@@ -6020,7 +6042,7 @@
           group_id: groupId,
           posts_per_page: postsPerPage,
           post_daily: document.getElementById('sched-conf-daily')?.checked === true,
-          approval_mode: document.getElementById('sched-conf-review-mode')?.value || 'automatic',
+          approval_mode: document.getElementById('sched-conf-review-mode')?.value || 'manual',
           publish_mode: document.getElementById('sched-conf-daily')?.checked ? document.getElementById('sched-conf-publish-mode').value : 'app_queue',
           daily_slots: JSON.parse(document.getElementById('sched-conf-posts-per-page').dataset.slots || 'null'),
           token_group_id: groupDailyModalState.schedule?.plan?.token_group_id || '',
@@ -6135,6 +6157,7 @@
             </td>
             <td style="padding: 12px 16px; text-align: right;">
               <div style="display: flex; gap: 6px; justify-content: flex-end; align-items: center;">
+                <button class="btn btn-outline btn-sm" data-group-id="${escapeHtml(g.id)}" onclick="openGroupReview(this.dataset.groupId)">Chuẩn bị / Draft</button>
                 <button class="btn btn-primary btn-sm" onclick="runLoHaBatchSchedule('${g.id}', '${g.name}')" style="background: linear-gradient(135deg, #8b5cf6, #ec4899); border: none; font-weight: 700; padding: 5px 12px; font-size: 12px;" title="Quét kho video và lên lịch ngay cho nhóm này">
                   <i class="bi bi-send-check-fill"></i> Lên lịch
                 </button>
@@ -6209,9 +6232,11 @@
   let postsTableLoading = false;
   let postsSnapshot = [];
   let postsScheduleFilter = 'all';
+  let postsPage = 1;
+  let postsCounts = {};
   let metaHandoffBusy = false;
   const selectedMetaPosts = new Set();
-  const postBucketLabels = {preparing:'Đang chuẩn bị', draft:'Draft chờ duyệt', app:'App giữ lịch', sending:'Đang giao Meta', publishing:'Đang đăng', processing:'Chờ xác minh Meta', meta:'Meta giữ lịch', published:'Đã đăng', failed:'Thất bại', other:'Trạng thái khác'};
+  const postBucketLabels = {app:'App giữ lịch', sending:'Đang giao Meta', publishing:'Đang đăng', processing:'Chờ xác minh Meta', meta:'Meta giữ lịch', published:'Đã đăng', failed:'Thất bại', other:'Trạng thái khác'};
   function postBucket(p) {
     if (['preparing','draft'].includes(p.status)) return p.status;
     if (p.post_bucket) return p.post_bucket;
@@ -6231,14 +6256,14 @@
     const eligible = postsSnapshot.filter(p => p.can_handoff_meta);
     const eligibleIds = new Set(eligible.map(p => p.id));
     for (const id of selectedMetaPosts) if (!eligibleIds.has(id)) selectedMetaPosts.delete(id);
-    const counts = [['all', 'Tất cả', postsSnapshot.length], ...Object.entries(postBucketLabels).map(([key,label]) => [key,label,postsSnapshot.filter(p => postBucket(p) === key).length])];
+    const counts = [['all', 'Tất cả', postsCounts.all || 0], ...Object.entries(postBucketLabels).map(([key,label]) => [key,label,postsCounts[key] || 0])];
     document.getElementById('posts-schedule-summary').innerHTML = counts.map(([key, label, count]) => `<button class="btn btn-outline btn-sm" onclick="filterPostsSchedule('${key}')" aria-pressed="${postsScheduleFilter === key}" style="${postsScheduleFilter === key ? 'border-color:#38bdf8;color:#38bdf8;background:rgba(56,189,248,.12);' : ''}">${label} <b>${count}</b></button>`).join('');
     const chosen = document.getElementById('posts-handoff-selected');
     chosen.disabled = metaHandoffBusy || !selectedMetaPosts.size;
     chosen.innerHTML = `<i class="bi bi-cloud-arrow-up"></i> Đưa ${selectedMetaPosts.size} bài đã chọn lên Meta chờ`;
     const all = document.getElementById('posts-handoff-all');
     all.disabled = metaHandoffBusy || !eligible.length;
-    all.textContent = `Đưa tất cả ${eligible.length} bài đủ điều kiện lên Meta`;
+    all.textContent = `Đưa ${eligible.length} bài đủ điều kiện trên trang này lên Meta`;
     const metaScheduled = postsSnapshot.filter(p => p.status === 'meta_scheduled' && postsMatchScheduleFilter(p));
     const cancelAll = document.getElementById('posts-cancel-meta-all');
     cancelAll.disabled = metaHandoffBusy || !metaScheduled.length;
@@ -6249,7 +6274,7 @@
     selectAll.checked = !!visible.length && visible.every(p => selectedMetaPosts.has(p.id));
     selectAll.indeterminate = !selectAll.checked && visible.some(p => selectedMetaPosts.has(p.id));
   }
-  function filterPostsSchedule(filter) { postsScheduleFilter = filter; loadPostsTable({quiet:true}); }
+  function filterPostsSchedule(filter) { postsScheduleFilter = filter; postsPage = 1; loadPostsTable({quiet:true}); }
   function selectMetaPost(id, checked) {
     if (checked) selectedMetaPosts.add(id); else selectedMetaPosts.delete(id);
     updateMetaHandoffControls();
@@ -6325,8 +6350,8 @@
   const postsOverdue = new Map();
   async function openOutputDraft(postId) {
     try {
-      const [posts, pagesData] = await Promise.all([fetch('/api/posts').then(r=>r.json()), fetch('/api/pages').then(r=>r.json())]);
-      const post = posts.find(p=>p.id === postId);
+      const [postData, pagesData] = await Promise.all([fetch(`/api/posts/${encodeURIComponent(postId)}`).then(r=>r.json()), fetch('/api/pages').then(r=>r.json())]);
+      const post = postData.post;
       if (!post) throw new Error('Draft không còn tồn tại.');
       document.getElementById('draft-review-id').value = postId;
       document.getElementById('draft-review-title').value = post.title || '';
@@ -6341,6 +6366,8 @@
       picker.innerHTML = '<option value="">Chọn Page đăng bài</option>' + (pagesData.pages || []).map(p=>`<option value="${escapeHtml(String(p.page_id))}">${escapeHtml(p.page_name || p.page_id)}</option>`).join('');
       picker.value = post.page_id || '';
       document.getElementById('draft-review-time').value = (post.scheduled_time || '').replace(' ', 'T').slice(0,16);
+      document.getElementById('draft-review-mode').value = post.requested_publish_mode || 'meta_scheduled';
+      document.getElementById('draft-review-token').textContent = 'Token: ' + (post.token_display_name || post.token_id || 'Chọn Page đã gán Token') + (post.group_name ? ' · Nhóm: ' + post.group_name : '');
       document.getElementById('draft-review-error').textContent = post.website_error || post.content_package_error || '';
       document.getElementById('draft-review-modal').style.display = 'flex';
     } catch (error) { showToast(error.message); }
@@ -6350,13 +6377,13 @@
     const postId = document.getElementById('draft-review-id').value;
     const body = {title:document.getElementById('draft-review-title').value, content:document.getElementById('draft-review-caption').value,
       first_comment:document.getElementById('draft-review-comment').value, page_id:document.getElementById('draft-review-page').value,
-      scheduled_time:immediate ? '' : document.getElementById('draft-review-time').value};
+      scheduled_time:immediate ? '' : document.getElementById('draft-review-time').value, publish_mode:document.getElementById('draft-review-mode').value};
     try {
       const response = await fetch(`/api/posts/${encodeURIComponent(postId)}/draft`, {method:approve ? 'POST' : 'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || 'Không lưu được Draft');
       showToast(approve ? (immediate ? 'Đã duyệt và đưa vào hàng đợi đăng ngay.' : 'Đã duyệt và lưu lịch đăng.') : 'Đã lưu Draft.');
-      closeOutputDraft(); loadPostsTable();
+      closeOutputDraft(); loadPostsTable(); loadGroupReview(); loadGroupReviewSummary().catch(()=>{});
     } catch(error) { document.getElementById('draft-review-error').textContent=error.message; }
   }
   const postsOverdueIds = postsOverdue;
@@ -6465,9 +6492,9 @@
   }
   async function pollMetaPostErrors() {
     try {
-      const res = await fetch('/api/posts');
+      const res = await fetch('/api/posts/list?view=posts&bucket=attention&page_size=100');
       if (!res.ok) return;
-      const posts = await res.json();
+      const posts = (await res.json()).items || [];
       if (Array.isArray(posts)) showNewMetaPostErrors(posts);
       if (!postLedgerWarningShown) {
         const health = await (await fetch('/api/posts/health')).json();
@@ -6511,11 +6538,18 @@
     `;
 
     try {
-      const res = await fetch('/api/posts');
-      const posts = await res.json();
-      if (!res.ok || !Array.isArray(posts)) throw new Error(posts.error || 'Không tải được bài đăng');
+      const token = document.getElementById('posts-token-filter')?.value || '';
+      const res = await fetch(`/api/posts/list?view=posts&bucket=${encodeURIComponent(postsScheduleFilter)}&token_id=${encodeURIComponent(token)}&page=${postsPage}&page_size=50`);
+      const payload = await res.json();
+      const posts = payload.items || [];
+      if (!res.ok || !Array.isArray(posts)) throw new Error(payload.error || 'Không tải được bài đăng');
+      postsPage = payload.page || 1;
+      postsCounts = payload.counts || {};
       postsSnapshot = posts;
-      await loadPostsTokenAudit();
+      const pageLabel = document.getElementById('posts-page-label'); if (pageLabel) pageLabel.textContent = `Trang ${payload.page || postsPage}/${payload.pages || 1} · ${payload.total || 0} bài`;
+      const picker = document.getElementById('posts-token-filter');
+      picker.innerHTML = '<option value="">Tất cả Token</option>' + (payload.tokens || []).map(t => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)} · ${escapeHtml(t.id)}</option>`).join('');
+      picker.value = token;
       updateMetaHandoffControls();
       showNewMetaPostErrors(posts);
 
@@ -6648,7 +6682,9 @@
         } else if (p.first_comment_status === 'pending_generation' || p.first_comment_status === 'generating') {
           commentSnippet = '<span style="color:#f59e0b;">Đang chờ tạo nội dung và link Website</span>';
         } else if (p.first_comment_status === 'generation_failed' || p.first_comment_status === 'pending_retry' || p.first_comment_status === 'failed') {
-          commentSnippet = `<span style="color:#ef4444;" title="${escapeHtml(p.first_comment_error || '')}">Lỗi First Comment · sẽ thử lại</span>`;
+          commentSnippet = p.website_status === 'failed'
+            ? '<span style="color:#fbbf24;">First Comment chờ Website được xác minh</span>'
+            : `<span style="color:#ef4444;" title="${escapeHtml(p.first_comment_error || '')}">Lỗi First Comment · sẽ thử lại</span>`;
         } else {
           commentSnippet = '<span style="color: #64748b;">Không cấu hình</span>';
         }
@@ -7488,6 +7524,8 @@
       <label class="form-label" style="margin-top:10px;">First Comment (giữ đúng link bài Website)</label><textarea id="draft-review-comment" class="form-control" rows="2"></textarea>
       <a id="draft-review-article" target="_blank" rel="noopener" style="display:block;margin:8px 0;font-size:12px;color:#38bdf8;overflow-wrap:anywhere;">Bài Website</a>
       <label class="form-label">Page đăng bài</label><select id="draft-review-page" class="form-select"></select>
+      <div id="draft-review-token" style="font-size:12px;color:#fbbf24;margin-top:6px;"></div>
+      <label class="form-label" style="margin-top:10px;">Cách giữ lịch</label><select id="draft-review-mode" class="form-select"><option value="meta_scheduled">Meta giữ lịch — upload video trước</option><option value="app_queue">App giữ lịch — upload khi đến giờ</option></select>
       <label class="form-label" style="margin-top:10px;">Ngày / giờ đăng</label><input id="draft-review-time" type="datetime-local" class="form-control">
       <div id="draft-review-error" style="font-size:12px;color:#fbbf24;margin:10px 0;"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;"><button class="btn btn-secondary" onclick="saveOutputDraft()">Lưu Draft</button><button class="btn btn-primary" onclick="saveOutputDraft(true,false)">Duyệt &amp; hẹn lịch</button><button class="btn btn-success" onclick="saveOutputDraft(true,true)">Duyệt &amp; đăng ngay</button></div>
@@ -7565,7 +7603,7 @@
         <div style="margin-bottom:14px;padding:12px;border:1px solid rgba(34,197,94,.35);background:rgba(34,197,94,.08);border-radius:8px;">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="loha-post-daily" style="width:16px;height:16px;accent-color:#22c55e;"><strong style="font-size:12.5px;color:#bbf7d0;">Post hàng ngày</strong></label>
           <div style="font-size:11px;color:#94a3b8;margin:4px 0 8px 24px;">Khi có video trong kho, nhóm đã tick tự nhận clip và upload trước để Facebook tự đăng theo giờ đã chọn. Hết video thì chờ video mới.</div>
-          <select id="loha-daily-mode" class="form-select form-select-sm" style="background:#0b1329;border-color:#334155;"><option value="automatic">Tự động đăng/lên lịch</option><option value="manual">Duyệt tay → Draft</option></select>
+          <select id="loha-daily-mode" class="form-select form-select-sm" style="background:#0b1329;border-color:#334155;"><option value="manual">Duyệt tay → Draft</option><option value="automatic">Tự động đăng/lên lịch</option></select>
           <select id="loha-daily-publish-mode" class="form-select form-select-sm" style="margin-top:7px;background:#0b1329;border-color:#334155;"><option value="meta_scheduled">Upload trước — Facebook giữ lịch và tự đăng</option><option value="app_queue">App giữ lịch — upload khi đến giờ</option></select>
           <div style="font-size:11px;color:#cbd5e1;margin-top:8px;">Nhóm Page đã chọn:</div><div id="loha-daily-groups" style="font-size:11px;max-height:82px;overflow:auto;color:#94a3b8;"></div>
           <div style="font-size:11px;color:#cbd5e1;margin-top:6px;">Page đã chọn thêm:</div><div id="loha-daily-pages" style="font-size:11px;max-height:82px;overflow:auto;color:#94a3b8;"></div>
@@ -7608,7 +7646,7 @@
             <div style="color:#94a3b8;margin-top:8px;">Meta: giữ app mở đến khi tạo xong Website/comment và Meta nhận lịch. Giờ đăng phải còn hơn 10 phút, trong 29 ngày. First Comment vẫn cần app chạy sau giờ đăng.</div>
           </div>
           <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:#bbf7d0;cursor:pointer;"><input id="modal-dist-daily" type="checkbox" style="width:auto;margin:0;accent-color:#22c55e;"> Post hàng ngày với nhóm Page này</label>
-          <select id="modal-dist-daily-mode" class="form-select form-select-sm" style="margin-top:7px;background:#0b1329;border-color:#334155;"><option value="automatic">Tự động đăng/lên lịch</option><option value="manual">Duyệt tay → Draft</option></select>
+          <select id="modal-dist-daily-mode" class="form-select form-select-sm" style="margin-top:7px;background:#0b1329;border-color:#334155;"><option value="manual">Duyệt tay → Draft</option><option value="automatic">Tự động đăng/lên lịch</option></select>
         </div>
         <div style="margin-bottom: 16px;">
           <label style="font-size: 12px; font-weight: 700; color: #94a3b8;">3. Giãn cách giữa các Page:</label>
@@ -7877,7 +7915,7 @@
 
       <div style="margin-bottom:16px;padding:10px 12px;border:1px solid rgba(34,197,94,.3);background:rgba(34,197,94,.07);border-radius:8px;">
         <label style="display:flex;align-items:center;gap:8px;color:#bbf7d0;cursor:pointer;"><input id="sched-conf-daily" type="checkbox" style="width:auto;margin:0;accent-color:#22c55e;"> Post hàng ngày với nhóm này</label>
-        <select id="sched-conf-review-mode" class="form-select form-select-sm" style="margin-top:7px;background:#0b1120;border-color:#334155;"><option value="automatic">Tự động đăng/lên lịch</option><option value="manual">Duyệt tay → Draft</option></select>
+        <select id="sched-conf-review-mode" class="form-select form-select-sm" style="margin-top:7px;background:#0b1120;border-color:#334155;"><option value="manual">Duyệt tay → Draft</option><option value="automatic">Tự động đăng/lên lịch</option></select>
         <select id="sched-conf-publish-mode" class="form-select form-select-sm" style="margin-top:7px;background:#0b1120;border-color:#334155;"><option value="meta_scheduled">Upload trước — Facebook giữ lịch và tự đăng</option><option value="app_queue">App giữ lịch — upload khi đến giờ</option></select>
       </div>
 
@@ -8212,5 +8250,6 @@
   }
   document.addEventListener('DOMContentLoaded',()=>{loadDashboard();setInterval(()=>{if(document.getElementById('pane-dashboard')?.classList.contains('active')) loadDashboard();},30000);});
 </script>
+<script src="/static/group_review.js"></script>
 </body>
 </html>

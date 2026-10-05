@@ -49,6 +49,60 @@ def test_partial_growing_and_invalid_mp4_never_enters_queue(intake):
     assert pipeline.process_once(root=root, probe=lambda p: True)['imported'] == 1
 
 
+def test_idle_large_intake_does_not_rewrite_package_or_posts_queues(intake, monkeypatch):
+    from unittest import mock
+    root, _clock = intake
+    posts = []
+    items = []
+    for index in range(800):
+        pid, package_id, sha, clip = f'post{index}', f'package{index}', f'sha{index}', f'clip{index}.mp4'
+        posts.append({'id': pid, 'output_pipeline': True, 'status': 'preparing', 'title': 'Ready warehouse video',
+                      'media_file': clip, 'source_sha256': sha, 'content_package_id': package_id,
+                      'content_package_status': 'queued'})
+        items.append({'id': package_id, 'clip_filename': clip, 'source_sha256': sha,
+                      'status': 'queued', 'post_ids': [pid]})
+    save_posts_file(root / 'posts.json', posts)
+    packages._write(packages.QUEUE_FILE, items)
+    with mock.patch.object(packages, 'ensure_content_package', side_effect=AssertionError('idle source was reenqueued')), \
+         mock.patch.object(packages, '_write', side_effect=AssertionError('idle queue was rewritten')), \
+         mock.patch.object(pipeline, 'save_posts_file', side_effect=AssertionError('idle posts were rewritten')):
+        result = pipeline.process_once(root=root, probe=lambda _: True)
+    assert result['imported'] == 0 and result['assigned'] == 0
+
+
+def test_default_manual_group_claims_correct_token_then_approves_meta_mode(intake, monkeypatch):
+    from unittest import mock
+    from web import app as api
+    root, _clock = intake
+    (root / 'output' / 'clip.mp4').write_bytes(b'video ready for selected group')
+    pages = [{'page_id': 'a', 'page_name': 'Selected Page', 'token_id': 'other-default'}]
+    groups = [{'id': 'chosen', 'name': 'Selected Group', 'page_ids': ['a']}]
+    token_groups = [{'id': 'tg', 'page_group_id': 'chosen', 'token_ids': ['group-token'],
+                     'page_ids': ['a'], 'page_token_bindings': {'a': 'group-token'}}]
+    now = datetime(2026, 10, 5, 8)
+    pipeline.save_plan({'daily': True, 'group_ids': ['chosen'], 'slots': ['19:30'],
+                        'publish_mode': 'meta_scheduled'}, pages, groups, root)
+    assert scan(intake, pages=pages, groups=groups, token_groups=token_groups, now=now)['assigned'] == 1
+    post = load_posts_file(root / 'posts.json')[0]
+    assert post['status'] == 'preparing' and post['group_id'] == 'chosen'
+    assert post['token_id'] == 'group-token' and post['token_group_id'] == 'tg'
+    packages._apply_to_posts(ready_item(post))
+    assert load_posts_file(root / 'posts.json')[0]['status'] == 'draft'
+    # Saving a Meta selection does not dispatch a remote write.
+    saved = pipeline.review_draft(post['id'], {'publish_mode': 'meta_scheduled'}, pages, root=root, now=now)
+    assert saved['requested_publish_mode'] == 'meta_scheduled' and saved['status'] == 'draft'
+    monkeypatch.setattr(api.page_manager, 'list_pages', lambda: pages)
+    monkeypatch.setattr(pipeline, 'datetime', mock.Mock(wraps=datetime))
+    pipeline.datetime.now.return_value = now
+    with mock.patch.object(api.reel_poster, 'publish_reel') as publish:
+        response = api.app.test_client().post('/api/posts/review-batch', json={'post_ids': [post['id']]})
+    assert response.status_code == 200 and response.get_json()['approved'] == 1
+    approved = load_posts_file(root / 'posts.json')[0]
+    assert approved['status'] == 'scheduled' and approved['token_id'] == 'group-token'
+    assert approved['requested_publish_mode'] == 'meta_scheduled' and approved['first_comment_snapshot']
+    publish.assert_not_called()
+
+
 def test_hash_dedupe_survives_restart_rename_deletion_reimport(intake):
     root, clock = intake
     path = root / 'output' / 'original.mp4'

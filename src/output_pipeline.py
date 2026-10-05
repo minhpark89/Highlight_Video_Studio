@@ -265,6 +265,17 @@ def _assignment_candidates(plans, pages, groups, now, token_groups):
                     page["token_id"] = str(binding)
                 if str(page.get("token_id")) not in {str(t) for t in token_group.get("token_ids", [])}:
                     page["token_id"] = ""
+        if not token_group:
+            # Groups linked from Token Management own a separate Page binding.
+            # A default Page token must not override the chosen group's token.
+            for page in scoped:
+                linked = next((g for gid in plan["group_ids"] for g in token_groups
+                               if str(g.get("page_group_id")) == gid
+                               and str(page["page_id"]) in {str(pid) for pid in group_map.get(gid, {}).get("page_ids", [])}), None)
+                if linked:
+                    binding = str((linked.get("page_token_bindings") or {}).get(str(page["page_id"])) or page.get("token_id") or "")
+                    page["token_id"] = binding if binding in {str(t) for t in linked.get("token_ids", [])} else ""
+                    page["daily_token_group_id"] = str(linked["id"])
         scoped = [p for p in scoped if p.get("token_id")]
         offsets = paced_offsets_by_token([p["token_id"] for p in scoped], global_seconds=0,
                                         token_seconds=plan["stagger_minutes"] * 60)
@@ -285,7 +296,7 @@ def _assignment_candidates(plans, pages, groups, now, token_groups):
                                   and str(page["page_id"]) in {str(pid) for pid in group_map[gid].get("page_ids", [])}), {})
                     yield {"page_id": str(page["page_id"]), "page_name": page.get("page_name", ""),
                            "token_id": str(page["token_id"]), "group_id": group.get("id", ""),
-                           "group_name": group.get("name", ""), "token_group_id": plan.get("token_group_id", ""),
+                           "group_name": group.get("name", ""), "token_group_id": page.get("daily_token_group_id") or plan.get("token_group_id", ""),
                            "daily_plan_id": plan["id"], "post_daily": True, "use_llm": plan["use_llm"],
                            "approval_mode": plan["approval_mode"], "requested_publish_mode": plan["publish_mode"],
                            "token_gap_seconds": plan["stagger_minutes"] * 60,
@@ -306,6 +317,7 @@ def process_once(*, root=None, pages=None, groups=None, token_groups=None, now=N
     imported = assigned = 0
     with _LOCK, POSTS_LOCK, _connect(root) as db:
         posts = load_posts_file(root / "posts.json")
+        before_posts = json.dumps(posts, sort_keys=True)
         for pending in db.execute("SELECT * FROM sources WHERE interface_written=0 AND intake!=''"):
             existing = next((p for p in posts if p.get("id") == pending["post_id"]), None)
             if not existing:
@@ -423,27 +435,47 @@ def process_once(*, root=None, pages=None, groups=None, token_groups=None, now=N
             post = next((p for p in posts if p.get("id") == slot["post_id"]), None)
             if post and not post.get("daily_plan_id"):
                 post.update(json.loads(slot["assignment"]))
-        save_posts_file(root / "posts.json", posts)
+        if json.dumps(posts, sort_keys=True) != before_posts:
+            save_posts_file(root / "posts.json", posts)
         db.execute("UPDATE sources SET interface_written=1 WHERE interface_written=0")
     # Never hold the posts lock while acquiring the content lock: the content
     # worker applies results to posts after releasing its queue lock.
-    for post in list(posts):
+    package_rows = {p["id"]: p for p in packages.list_packages()}
+    updates = {}
+    ready = []
+    for post in sorted(posts, key=lambda p: not bool(p.get("page_id"))):
         if not post.get("output_pipeline") or post.get("content_frozen_at") or post.get("status") not in ("preparing", "draft"):
             continue
-        package = packages.ensure_content_package(
+        package = package_rows.get(post.get("content_package_id"))
+        needs_attach = (not package or post["id"] not in package.get("post_ids", [])
+                        or package.get("source_sha256") != post["source_sha256"]
+                        or (post.get("page_id") and package.get("status") == "queued" and not package.get("schedule_priority"))
+                        or (package.get("status") in ("queued", "failed", "retryable") and
+                            package.get("clip_filename") != post["media_file"])
+                        or (package.get("status") == "ready" and not package.get("website_video_status")))
+        if needs_attach:
+            package = packages.ensure_content_package(
             clip_filename=post["media_file"], source_sha256=post["source_sha256"], title=post["title"],
             summary=post.get("summary", ""), mode="auto" if post.get("use_llm", True) else "no_llm",
             post_ids=[post["id"]], create_website_article=True,
             schedule_priority=bool(post.get("page_id")), video_url=post.get("video_url", ""),
-            source_job_id=post.get("source_job_id", ""), source_clip_id=post.get("source_clip_id", ""))
+                source_job_id=post.get("source_job_id", ""), source_clip_id=post.get("source_clip_id", ""))
+        values = {"content_package_id": package["id"], "content_package_status": package["status"]}
+        if any(post.get(k) != v for k, v in values.items()):
+            updates[post["id"]] = values
+        if package["status"] == "ready" and ((post["status"] == "preparing" and
+                (needs_attach or post.get("content_package_status") != "ready")) or
+                (post.get("approval_mode") == "automatic" and post.get("page_id"))):
+            ready.append(package)
+    if updates:
         with POSTS_LOCK:
             current = load_posts_file(root / "posts.json")
-            row = next((p for p in current if p.get("id") == post["id"]), None)
-            if row:
-                row.update({"content_package_id": package["id"], "content_package_status": package["status"]})
-                save_posts_file(root / "posts.json", current)
-        if package["status"] == "ready":
-            packages._apply_to_posts(package)
+            for row in current:
+                if row["id"] in updates and row.get("status") in ("preparing", "draft") and not row.get("content_frozen_at"):
+                    row.update(updates[row["id"]])
+            save_posts_file(root / "posts.json", current)
+    for package in ready:
+        packages._apply_to_posts(package)
     return {"imported": imported, "assigned": assigned, **pressure(root)}
 
 
@@ -483,7 +515,8 @@ def review_draft(post_id, changes, pages, *, approve=False, root=None, now=None)
             raise ValueError("Chờ package, video gốc trong bài Website và First Comment hoàn tất trước khi duyệt")
         page_id = str(changes.get("page_id", post.get("page_id")) or "")
         page = next((p for p in pages if str(p.get("page_id")) == page_id), None)
-        if (approve or page_id) and (not page or not page.get("token_id")):
+        retained_token = (post.get("token_id") if page_id == str(post.get("page_id") or "") and post.get("token_group_id") else "")
+        if (approve or page_id) and (not page or not (retained_token or page.get("token_id"))):
             raise ValueError("Chọn Page đã gán Token trước khi duyệt")
         scheduled = str(changes.get("scheduled_time", post.get("scheduled_time")) or "").strip()
         if scheduled:
@@ -494,7 +527,9 @@ def review_draft(post_id, changes, pages, *, approve=False, root=None, now=None)
                 raise ValueError("Thời gian hẹn lịch phải ở tương lai")
         else:
             due = now if approve else None
-        requested_mode = post.get("requested_publish_mode", "app_queue") if scheduled else "app_queue"
+        requested_mode = str(changes.get("publish_mode") or post.get("requested_publish_mode") or "app_queue") if scheduled else "app_queue"
+        if requested_mode not in ("app_queue", "meta_scheduled"):
+            raise ValueError("Chọn App giữ lịch hoặc Meta giữ lịch")
         if approve and requested_mode == "meta_scheduled":
             from multi_pc.meta_scheduling import parse_meta_schedule_time
             parse_meta_schedule_time(due.strftime("%Y-%m-%d %H:%M:%S"), now_ts=now.timestamp())

@@ -105,7 +105,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 @app.after_request
 def add_header(response):
@@ -3380,13 +3380,18 @@ def api_finish_existing_upload(post_id):
 
 @app.route("/api/posts", methods=["GET"])
 def api_get_posts():
+    return jsonify(_enrich_post_rows(load_posts()))
+
+
+def _enrich_post_rows(posts, *, audit_posts=None):
     from web.meta_handoff import handoff_eligibility
     from web.dashboard import post_bucket
     from web.meta_diagnostics import diagnose
-    posts = load_posts()
     from web.token_audit import token_audit
-    token_audit(posts, page_manager.list_pages(), token_vault.list_tokens(mask=True), load_token_groups())
-    token_catalog = {str(item.get("id")): item for item in token_vault.list_tokens(mask=True) if item.get("id")}
+    catalog = token_vault.list_tokens(mask=True)
+    audited = audit_posts if audit_posts is not None else posts
+    token_audit(audited, page_manager.list_pages(), catalog, load_token_groups())
+    token_catalog = {str(item.get("id")): item for item in catalog if item.get("id")}
     for post in posts:
         recovery_id = str(post.get("meta_recovery_token_id") or "")
         if recovery_id:
@@ -3431,7 +3436,60 @@ def api_get_posts():
         return (c_at, s_at, p_id)
     posts = sorted(posts, key=_sort_key, reverse=True)
     # Raw publishing credentials are server-side data, never UI payloads.
-    return jsonify([{key: value for key, value in post.items() if key not in ("token", "page_token", "access_token")} for post in posts])
+    return [{key: value for key, value in post.items() if key not in
+             ("token", "page_token", "access_token", "content_package")} for post in posts]
+
+
+@app.route("/api/posts/list", methods=["GET"])
+def api_list_posts():
+    from web.post_queries import select_posts
+    posts = load_posts()
+    try:
+        result = select_posts(posts, view=request.args.get("view", "posts"), bucket=request.args.get("bucket", "all"),
+                              group_id=request.args.get("group_id", ""), page_id=request.args.get("page_id", ""),
+                              token_id=request.args.get("token_id", ""), page=int(request.args.get("page", 1)),
+                              page_size=int(request.args.get("page_size", 50)))
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    result["items"] = _enrich_post_rows(result["items"], audit_posts=posts)
+    # Picker data has no secrets and does not require a second queue read.
+    result["tokens"] = [{"id": t["id"], "name": t.get("name") or t["id"]}
+                        for t in token_vault.list_tokens(mask=True)]
+    return jsonify({"success": True, **result})
+
+
+@app.route("/api/posts/<post_id>", methods=["GET"])
+def api_get_post(post_id):
+    posts = load_posts()
+    post = next((p for p in posts if str(p.get("id")) == post_id), None)
+    if post is None:
+        return jsonify({"success": False, "error": "Không tìm thấy bài"}), 404
+    return jsonify({"success": True, "post": _enrich_post_rows([post], audit_posts=posts)[0]})
+
+
+@app.route("/api/groups/post-summary", methods=["GET"])
+def api_group_post_summary():
+    from web.post_queries import group_summary
+    from src.output_pipeline import settings
+    return jsonify({"success": True, **group_summary(load_posts(), page_manager.list_groups(), settings().get("plans", []))})
+
+
+@app.route("/api/posts/review-batch", methods=["POST"])
+def api_review_batch():
+    from src.output_pipeline import review_draft
+    body = request.get_json(silent=True) or {}
+    ids = body.get("post_ids") if isinstance(body, dict) else None
+    if not isinstance(ids, list) or not 1 <= len(ids) <= 50 or any(not isinstance(i, str) or not i for i in ids):
+        return jsonify({"success": False, "error": "Chọn từ 1 đến 50 Draft để duyệt"}), 400
+    pages = page_manager.list_pages()
+    results = []
+    for post_id in dict.fromkeys(ids):
+        try:
+            row = review_draft(post_id, {}, pages, approve=True)
+            results.append({"post_id": post_id, "approved": True, "status": row["status"]})
+        except (ValueError, sqlite3.IntegrityError) as exc:
+            results.append({"post_id": post_id, "approved": False, "error": str(exc)})
+    return jsonify({"success": True, "results": results, "approved": sum(r["approved"] for r in results)})
 
 
 @app.route("/api/posts/token-audit", methods=["GET"])

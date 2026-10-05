@@ -18,6 +18,34 @@ ENGLISH_INSTRUCTION = (
 )
 PUBLIC_FIELDS = ("hero_title", "article_html", "caption", "first_comment", "source_summary")
 
+# N-gram detection confidently mislabels short English technical sentences as
+# Dutch/Catalan/Romanian. Use grammatical evidence only for short Latin text;
+# foreign sentences and longer paragraphs still go through the detector.
+_ENGLISH_MARKERS = frozenset("""
+the this that these those with without from into through which whose when where
+why how has have had does did isn't aren't wasn't weren't will would should could
+their your our its you they them we he she his her and of for on up alongside
+even while before after between during because although however therefore
+outlook overview footage watch read full highlights breakdown understanding
+""".split())
+_FOREIGN_MARKERS = frozenset("""
+el los las una unos unas del para por que como este esta esto estos estas todos
+les des une pour dans avec cette ces est sont pas sur du aux mais aussi
+der die das ein eine und ist sind mit nicht den dem im zum zur auch
+het een van voor niet zijn bij wordt deze dit naar op aan door
+il gli della delle che con per questo questa sono nella
+os uma dos das nao não não é com para pelo pela
+của và là những này không trong với được về đang một chi tiết trò chơi
+""".split())
+
+
+def _short_english_evidence(words):
+    lowered = [word.casefold() for word in words]
+    markers = set(lowered) & _ENGLISH_MARKERS
+    return (3 <= len(words) <= 24 and len(markers) >= 2
+            and len(markers) / len(words) >= 0.12
+            and not set(lowered) & _FOREIGN_MARKERS)
+
 
 class _TextParser(HTMLParser):
     def __init__(self):
@@ -53,7 +81,7 @@ def _is_english(value):
     if any(char.isalpha() and "LATIN" not in unicodedata.name(char, "") for char in text):
         return False
     # Short names and hashtag compounds have no reliable language signal.
-    words = re.findall(r"[A-Za-z]+", text)
+    words = re.findall(r"[^\W\d_]+(?:'[^\W\d_]+)?", text, re.UNICODE)
     if len(words) < 3 or len("".join(words)) < 15:
         return True
     # Language models for detection are unreliable on noun-only English labels
@@ -61,6 +89,8 @@ def _is_english(value):
     # an unambiguous English word while still classifying short foreign titles.
     short_english = {"specific", "detail", "details", "caption", "summary", "footage", "watch", "read", "full", "story", "highlights"}
     if len(words) <= 5 and {word.casefold() for word in words} & short_english:
+        return True
+    if _short_english_evidence(words):
         return True
     try:
         detector = _factory().create()
