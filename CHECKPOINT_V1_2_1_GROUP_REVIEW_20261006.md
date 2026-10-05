@@ -2,6 +2,8 @@
 
 Ngày: 2026-10-06 (Asia/Saigon)
 
+Nhánh: `fix/v1.2.1-group-review`. Source code đóng gói: `edfdd75`; identity `source_dirty=false`, version `1.2.1`. Các commit tiếp theo chỉ lưu tools/evidence/checkpoint, không đổi code runtime trong bộ cài. Không sửa tag/release `v1.2.0`.
+
 ## Đã sửa
 
 - Sửa bộ nhận diện ngôn ngữ Website: các câu tiếng Anh ngắn bị `langdetect` nhận nhầm thành Dutch/Catalan/Romanian không còn làm package lỗi. Nội dung tiếng Việt, Tây Ban Nha, Pháp, Nhật, Trung, Hàn, Nga, Ả Rập và đoạn trộn vẫn bị chặn.
@@ -19,6 +21,9 @@ Ngày: 2026-10-06 (Asia/Saigon)
 - Xác minh ba bài Website lỗi trên máy hiện tại: HTTP 200, không còn đoạn bị nhận nhầm, package cached là English, YouTube embed gốc tồn tại trên public article. Báo cáo: `support/group-review1/evidence/public_articles_verify.json`.
 - Bộ cài: `release/Highlight_Desktop_Test_Setup_v1.2.1.exe`
 - SHA-256 và source identity được xác minh ở `checkpoints/evidence/v1.2.1/installer_verify.json` và file `.sha256` cùng bộ cài.
+- Bộ cài cuối: **705,059,328 bytes**; SHA-256 `d9b4378cd5ee8e0fe695d13a4a5e72fd16c847999769db40cb0d5f39a9c03fce`.
+- Verifier đã đọc payload và đối chiếu **17 file runtime**, bao gồm `web/static/group_review.js`, `web/post_queries.py` và cả hai HTML; không có state, queue, token hoặc credential thật trong installer.
+- Sau hai kiểm thử bổ sung, suite cuối: `581 passed, 3 skipped, 29 subtests passed`; fixture 800 bài chờ chứng minh vòng idle không viết lại Content queue hoặc posts queue. Kiểm thử luồng manual nhóm → claim Token group → Draft → duyệt batch → hàng chờ Meta cũng qua.
 
 ## Cách dùng
 

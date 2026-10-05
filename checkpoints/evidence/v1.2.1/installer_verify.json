@@ -1,0 +1,111 @@
+﻿{
+    "size":  705059328,
+    "source_identity":  {
+                            "build_channel":  "desktop-test",
+                            "product_name":  "Highlight Desktop Test",
+                            "built_at_utc":  "2026-10-05T17:25:00.6946843Z",
+                            "source_dirty":  false,
+                            "source_commit":  "edfdd753800c0171e5758b25b9da8a3b96766df3",
+                            "port":  "ephemeral-loopback-never-5080",
+                            "prerelease_build":  "1.2.1",
+                            "bind_host":  "127.0.0.1",
+                            "app_version":  "1.2.1"
+                        },
+    "runtime_state_absent":  true,
+    "live_meta_test":  false,
+    "packaged_files":  [
+                           {
+                               "sha256":  "f58418a10f002a60b84c5863b53c939cbcf4e6401bc53a377e3af3f098610872",
+                               "file":  "src/output_pipeline.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "5c118ae4b4716d319c64ac8a91edd4b3175f7b1072a326e3aec2cf1b14f68ddd",
+                               "file":  "src/pipeline.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "6b8d920a355e411576172ac564851c55971d5435b5fe624393099f05fb2bcdb0",
+                               "file":  "src/content_packages.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "f3485a0dffd2d1319afd50ea03747c8a73f4e4b014be80fe7c71b6a54d65ee90",
+                               "file":  "src/english_text.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "d3c25bd1c74a49a5a468f852c4801d9b110db7fd0c866c8a83e5be0aad0ceaab",
+                               "file":  "src/publisher/website_publisher.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "f9c9f546e354e572e6401fef9d3af9364846a5152d9a1bfb3609e789c894a95e",
+                               "file":  "web/app.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "d14d9fa990841adf2b48f46b8518324804208c44bb0783b77d8cfe9c6df1d69e",
+                               "file":  "web/index.html",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "d14d9fa990841adf2b48f46b8518324804208c44bb0783b77d8cfe9c6df1d69e",
+                               "file":  "web/templates/index.html",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "edc9bbbde8ccd33f9ea1970825a827bbdced7d67b2c2bf34c027863e6dfb44a7",
+                               "file":  "web/static/group_review.js",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "c3e4686ef11690159704ec8436c4cdbc8b168f3817e1851636a4572fd5942656",
+                               "file":  "web/post_queries.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "e7a509f1aff06ebf9d7e366adba305a407e78569e36b1cf31df4e8979af08f19",
+                               "file":  "web/posts_store.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "a78b1db2e3600fdb6fa452cf2e5777e056e8b04a178ff16457722a3dfe31d7c4",
+                               "file":  "web/meta_handoff.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "84f63d5662ba7085c11ad2823162e3e32cf4c1e6631cdb276e2f46a204823a44",
+                               "file":  "web/scheduled_publisher.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "cd2915e962f2703a4c16b3921483748337adc26dd0c997fbcdfa71a25b09eef1",
+                               "file":  "src/media_validation.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "924bcfc9bd7df2527767576beb568bb74074b2619cd770146f06ee7a63126cc0",
+                               "file":  "src/publisher/meta_reel_poster.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "1ae63e11d3e244bff113b08115ec99c47d19d59a843e595c235f331185c66cdf",
+                               "file":  "web/video_recovery.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "937f182f54a6436a9748faa386f73dc90b3591041b3158db460003eb1c8f4e5a",
+                               "file":  "core/website_article_service.py",
+                               "matches_source":  true
+                           }
+                       ],
+    "test_result":  "581 passed, 3 skipped, 29 subtests passed",
+    "installed_in_active_runtime":  false,
+    "build":  "1.2.1",
+    "setup":  "E:\\OPENCLAW\\BOB\\source-worktree\\release\\Highlight_Desktop_Test_Setup_v1.2.1.exe",
+    "browser_checks":  "group preparation and review, 50/30 rows per page, batch approval, draft editor, daily manual/Meta mode; no JavaScript errors",
+    "success":  true,
+    "credential_seeds_empty":  true,
+    "sha256":  "d9b4378cd5ee8e0fe695d13a4a5e72fd16c847999769db40cb0d5f39a9c03fce"
+}
