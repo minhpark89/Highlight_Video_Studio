@@ -1,10 +1,12 @@
 # Checkpoint mới nhất — Highlight Desktop Test v1.2.1
 
-Ngày: 2026-10-06 (Asia/Saigon). Nhánh: `fix/v1.2.1-group-review`.
+Ngày: 2026-10-06 (Asia/Saigon). Nhánh phát hành: `release/v1.2.1`. Tag source: `v1.2.1` tại `edfdd753800c0171e5758b25b9da8a3b96766df3`.
 
 Đọc [CHECKPOINT_V1_2_1_GROUP_REVIEW_20261006.md](CHECKPOINT_V1_2_1_GROUP_REVIEW_20261006.md): sửa nhận diện sai câu tiếng Anh làm Website/First Comment bị chặn; chuẩn bị và Draft theo nhóm có Page/Token/giờ; mặc định duyệt tay; giữ lịch Meta upload trước; phân trang 50/30 dòng; worker kho không ghi lại 800 bài khi không có thay đổi.
 
-Kiểm thử: **581 passed, 3 skipped, 29 subtests passed**. Browser không có JavaScript error. Ba bài Website thực tế đã đọc lại HTTP 200 và xác minh English/YouTube gốc. Bộ cài local: `release/Highlight_Desktop_Test_Setup_v1.2.1.exe`; evidence mới ở `checkpoints/evidence/v1.2.1/`. Chưa cài đè runtime người dùng, chưa publish GitHub và chưa đăng/xóa bài Meta thật.
+Kiểm thử: **581 passed, 3 skipped, 29 subtests passed**. Browser không có JavaScript error. Ba bài Website thực tế đã đọc lại HTTP 200 và xác minh English/YouTube gốc. Bộ cài local: `release/Highlight_Desktop_Test_Setup_v1.2.1.exe`; evidence mới ở `checkpoints/evidence/v1.2.1/`. Đang hoàn tất phát hành GitHub; chưa cài đè runtime người dùng hoặc đăng/xóa bài Meta thật.
+
+Release: https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.2.1. Checkpoint đính kèm: `CODEX_CHECKPOINT_v1.2.1.md`. Session sau đọc checkpoint trên nhánh phát hành, xác định identity/PID/port, sao lưu dữ liệu rồi retry đúng post/Website URL; giữ Meta IDs, comment receipt và ledger để tránh đăng trùng.
 
 ## Bản phát hành trước — v1.2.0
 
