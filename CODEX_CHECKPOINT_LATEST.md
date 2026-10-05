@@ -77,3 +77,9 @@ App được quan sát ở `http://127.0.0.1:54541`, Python PID `14640`. Schedul
 - The two IDs remain `1373334701223226` and `1722433486142952`; no re-upload was made. After Facebook identity confirmation, use the app recovery button or leave scheduler running until both IDs and comments verify.
 
 Evidence: `support/autopublish5/evidence/public_download_verify.json`, `diagnostic_ui_verify.json`, `final_live_audit.json`, `install_preservation.json`.
+
+## Next-session checkpoint — Draft review pipeline
+
+- Yêu cầu và phạm vi đã chốt: [CHECKPOINT_DRAFT_REVIEW_PIPELINE_20261005.md](CHECKPOINT_DRAFT_REVIEW_PIPELINE_20261005.md).
+- Bằng chứng LoHaPage xác nhận import vào draft khi duyệt tay, sau đó có Duyệt & Đăng/Đăng ngay/Hẹn lịch; bằng chứng không xác nhận LLM hoặc website-first upload.
+- Chưa sửa pipeline và chưa phát hành installer cho phần draft review này.
