@@ -77,3 +77,13 @@ python checkpoints\tools\v1.2.1\offline_ui.py
 .\build_release.ps1 -Version 1.2.1 -SkipTests -ToolSource 'E:\OPENCLAW\BOB\Highlight destop test\bin' -RuntimeSource 'E:\OPENCLAW\BOB\Highlight destop test\runtime' -IconSource 'E:\OPENCLAW\BOB\Highlight destop test\app.ico' -WhisperModelSource 'E:\OPENCLAW\BOB\Highlight destop test\models\faster-whisper-small'
 powershell -NoProfile -File checkpoints\tools\v1.2.1\verify_payload.ps1
 ```
+
+## Kết quả phát hành GitHub
+
+GitHub Release ID **404026464** đã công khai (`draft=false`, `prerelease=true`). Quan sát xác minh: `2026-10-06T02:06:56.407546+07:00`.
+
+- Tag trên remote trỏ đúng source đóng gói `edfdd753800c0171e5758b25b9da8a3b96766df3`; nhánh checkpoint đã đẩy lên GitHub.
+- Cả ba asset có trạng thái `uploaded`, đúng kích thước và SHA-256 với file local. Installer: 705,059,328 bytes.
+- Link tải không đăng nhập đã kiểm tra: checksum và checkpoint khớp toàn bộ nội dung; 65,536 bytes đầu bộ cài khớp local, digest toàn bộ do GitHub báo khớp SHA-256 bộ cài. Chưa tải lại toàn bộ 705 MB để tính hash độc lập.
+- Metadata công khai đã lọc: `checkpoints/evidence/v1.2.1/release.json`; báo cáo kiểm tra: `public_download_verify.json`. Checkpoint asset bất biến có bản sao tại `release_checkpoint_asset.md`; checkpoint trên nhánh này bổ sung kết quả sau phát hành.
+- Lượt phát hành chưa cài vào runtime người dùng và chưa tạo/xóa Reel hoặc comment Meta thật. Session sau kiểm tra phiên bản app trước khi retry.
