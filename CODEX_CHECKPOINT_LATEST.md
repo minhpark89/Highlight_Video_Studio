@@ -78,8 +78,9 @@ App được quan sát ở `http://127.0.0.1:54541`, Python PID `14640`. Schedul
 
 Evidence: `support/autopublish5/evidence/public_download_verify.json`, `diagnostic_ui_verify.json`, `final_live_audit.json`, `install_preservation.json`.
 
-## Next-session checkpoint — Draft review pipeline
+## Next-session checkpoint — Output, LLM/fallback, draft/tự đăng, cleanup
 
 - Yêu cầu và phạm vi đã chốt: [CHECKPOINT_DRAFT_REVIEW_PIPELINE_20261005.md](CHECKPOINT_DRAFT_REVIEW_PIPELINE_20261005.md).
-- Bằng chứng LoHaPage xác nhận import vào draft khi duyệt tay, sau đó có Duyệt & Đăng/Đăng ngay/Hẹn lịch; bằng chứng không xác nhận LLM hoặc website-first upload.
-- Chưa sửa pipeline và chưa phát hành installer cho phần draft review này.
+- LLM là phần riêng của app theo xác nhận người dùng. Video hoàn chỉnh trong output tự vào hàng đợi, phân bổ vào nhóm Page sẵn có, hỗ trợ duyệt tay hoặc tự đăng. Có thể phân bổ trước khi LLM xong; ưu tiên tiếp tục/retry có giới hạn rồi dùng no-LLM fallback hiện có nếu cần.
+- Sau xác minh đăng thành công và hết consumer cần file, xóa video local để giải phóng output; giữ website/package/ledger và chống đăng trùng qua restart/delete/reimport.
+- Checkpoint này thay yêu cầu mọi bài phải duyệt tay trước đó. Chưa sửa pipeline, chưa xóa video thật và chưa phát hành installer mới.
