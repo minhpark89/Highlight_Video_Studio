@@ -64,3 +64,16 @@ App được quan sát ở `http://127.0.0.1:54541`, Python PID `14640`. Schedul
 2. Trong app mở Kiểm tra Meta cho từng bài, chọn đúng Token quản lý Page, bấm Đồng bộ quyền và thử đăng lại; hoặc để scheduler retry theo backoff.
 3. Đọc lại đúng `1373334701223226` và `1722433486142952`; chỉ đạt khi Meta báo published, app xác minh permalink và First Comment posted.
 4. Mục tiêu cuối là 400/400 bài và 400/400 comment. Hiện chưa đạt do Meta vẫn từ chối hai POST; không ghi nhận thành công giả và không upload lại.
+
+## Final public deployment — 2026-10-05 12:02 Asia/Saigon
+
+- GitHub release ID `403373771`, tag `v1.1.9-autopublish5`, `draft=false`, `prerelease=true`.
+- Public release: https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.1.9-autopublish5
+- Public installer: https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.1.9-autopublish5/Highlight_Desktop_Test_Setup_v1.1.9-autopublish5.exe
+- Installer SHA-256: `40ffe07f9f08cda10b2b8763b97eb9802319c4b1ebed07ae7041e107a60c6ed8`; bytes `704501760`.
+- Public download check passed without authentication: checkpoint and checksum HTTP 200 with exact content; installer HTTP 206 prefix matched and GitHub full asset digest matched.
+- Packaged source commit: `b40e27d3f1b94c8447ff29438db1500fa2a1d9e8`; initial documentation commit: `9adff4910375744226cba4209b76139e7f85eb13`. Later checkpoint-only commits retain the same packaged code and tag.
+- Latest live read-only audit at 12:02:55: 400 records preserved; `398/400` published and `398/400` First Comments posted; both unresolved IDs still read HTTP 200 but Meta POST still returns `368/4854002`.
+- The two IDs remain `1373334701223226` and `1722433486142952`; no re-upload was made. After Facebook identity confirmation, use the app recovery button or leave scheduler running until both IDs and comments verify.
+
+Evidence: `support/autopublish5/evidence/public_download_verify.json`, `diagnostic_ui_verify.json`, `final_live_audit.json`, `install_preservation.json`.
