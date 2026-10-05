@@ -1,0 +1,30 @@
+{
+  "observed_at": "2026-10-05T21:56:23.595383+07:00",
+  "tag": "v1.2.0",
+  "release_id": 403796965,
+  "authenticated": false,
+  "assets": [
+    {
+      "name": "CODEX_CHECKPOINT_v1.2.0.md",
+      "http": 200,
+      "public_bytes_checked": 9296,
+      "full_content_matches": true,
+      "sha256": "18256c6dff7ae73db45ed8323271efc604828484c5d4cda53461dd172f5d9f1b"
+    },
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.2.0.exe",
+      "http": 206,
+      "public_bytes_checked": 65536,
+      "prefix_matches": true,
+      "github_full_digest_matches": true
+    },
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.2.0.sha256",
+      "http": 200,
+      "public_bytes_checked": 107,
+      "full_content_matches": true,
+      "sha256": "c6903692d0372069a611d3606ab9772409a99358350307b385a976bb1c945510"
+    }
+  ],
+  "success": true
+}

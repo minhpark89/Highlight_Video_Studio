@@ -1,0 +1,109 @@
+{
+  "errors": [],
+  "saved_plans": [
+    {
+      "id": "rules",
+      "enabled": true,
+      "daily": true,
+      "group_ids": [
+        "g"
+      ],
+      "page_ids": [
+        "b"
+      ],
+      "slots": [
+        "11:30",
+        "19:30"
+      ],
+      "approval_mode": "automatic",
+      "publish_mode": "meta_scheduled",
+      "posts_per_day": 2,
+      "stagger_minutes": 15
+    },
+    {
+      "id": "group:g",
+      "enabled": false,
+      "daily": false,
+      "group_ids": [
+        "g"
+      ],
+      "page_ids": [
+        "a"
+      ],
+      "explicit_page_ids": [],
+      "slots": [
+        "11:30",
+        "19:30"
+      ],
+      "posts_per_day": 2,
+      "approval_mode": "manual",
+      "publish_mode": "app_queue",
+      "stagger_minutes": 15,
+      "use_llm": true,
+      "start_date": "2026-10-05",
+      "token_group_id": ""
+    }
+  ],
+  "draft_actions": [
+    {
+      "method": "PUT",
+      "body": {
+        "title": "Cycling finish",
+        "content": "Edited caption for the complete recording.",
+        "first_comment": "See the full video https://cms.test/blog/finish",
+        "page_id": "b",
+        "scheduled_time": "2026-10-07T20:30"
+      }
+    },
+    {
+      "method": "POST",
+      "body": {
+        "title": "Cycling finish",
+        "content": "Watch the complete recording.",
+        "first_comment": "See the full video https://cms.test/blog/finish",
+        "page_id": "a",
+        "scheduled_time": "2026-10-06T19:30"
+      }
+    }
+  ],
+  "batch_requests": [
+    {
+      "group_id": "g",
+      "posts_per_page": 2,
+      "post_daily": true,
+      "approval_mode": "automatic",
+      "publish_mode": "meta_scheduled",
+      "daily_slots": [
+        "11:30",
+        "19:30"
+      ],
+      "token_group_id": "",
+      "auto_first_comment": true,
+      "use_llm_comment": true,
+      "english_mode": true
+    },
+    {
+      "group_id": "g",
+      "posts_per_page": 2,
+      "post_daily": true,
+      "approval_mode": "manual",
+      "publish_mode": "app_queue",
+      "daily_slots": [
+        "11:30",
+        "19:30"
+      ],
+      "token_group_id": "",
+      "stagger_minutes": 15,
+      "auto_first_comment": true,
+      "use_llm_comment": true,
+      "english_mode": true
+    }
+  ],
+  "group_modal_checks": [
+    "default_native",
+    "saved_checkbox",
+    "saved_manual_app_mode",
+    "switch_group_resets_state",
+    "unchecked_disables_plan"
+  ]
+}

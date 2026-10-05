@@ -1,0 +1,17 @@
+{
+  "recorded_at_utc": "2026-10-05T14:13:43.528218+00:00",
+  "version": "1.2.0",
+  "source_commit": "a199630d39d636e0c1b9173f12691cf2da1436a8",
+  "command": "python -m pytest -q --no-header",
+  "exit_code": 0,
+  "passed": 567,
+  "skipped": 3,
+  "subtests_passed": 29,
+  "elapsed_seconds": 18.72,
+  "bundled_ffmpeg_on_path": true,
+  "python_compileall_passed": true,
+  "git_diff_check_passed": true,
+  "html_mirrors_identical": true,
+  "live_meta_test": false,
+  "live_cms_mutation": false
+}

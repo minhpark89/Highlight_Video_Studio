@@ -5,11 +5,11 @@ Ngày: 2026-10-05, Asia/Saigon. Repo: `minhpark89/Highlight_Video_Studio`.
 ## Mốc source và phát hành
 
 - Nhánh mới: `release/v1.2.0`; nhánh `release/v1.1.9` và các release cũ được giữ nguyên.
-- Tag cố định: `v1.2.0`, source commit đóng gói `a199630d39d636e0c1b9173f12691cf2da1436a8`. Lấy lại bằng `git rev-parse 'v1.2.0^{commit}'`.
+- Tag cố định: `v1.2.0`. Lấy commit đóng gói bằng `git rev-parse 'v1.2.0^{commit}'`.
 - App, launcher, installer và build identity đều dùng phiên bản `1.2.0`.
 - Release: https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.2.0
 - Installer: `Highlight_Desktop_Test_Setup_v1.2.0.exe`, kèm `.sha256` và checkpoint riêng trong release.
-- Báo cáo đóng gói, hash và xác minh tải công khai đã lưu trong `checkpoints/evidence/v1.2.0/` trên nhánh này.
+- Báo cáo đóng gói, hash và xác minh tải công khai sẽ được lưu trong `checkpoints/evidence/v1.2.0/` trên nhánh này sau khi xuất bản.
 - Desktop test tiếp tục bind loopback và dùng port tự chọn. Đây là release thử nghiệm theo workflow hiện tại của repo.
 
 ## Yêu cầu sản phẩm đã chốt
@@ -58,9 +58,8 @@ Hai lỗi Meta identity của release cũ cũng cần phân biệt: Video IDs `1
 
 - Full pytest sau bump version: **567 passed, 3 skipped, 29 subtests passed**.
 - `git diff --check` và Python compileall qua.
-- Browser offline đã xác minh lại daily/group/Draft và recovery controls, không có JavaScript pageerror. Evidence riêng v1.2.0 đã lưu trong `checkpoints/evidence/v1.2.0/`.
-- Payload đã đối chiếu source commit sạch (`source_dirty=false`), 14 file runtime, posts seed rỗng, credential seeds trống và không có runtime state.
-- Installer: **705,049,088 bytes**. SHA-256: `89981cbdf7f65dee548e5f0bc3c0c9c16d3f00721fdaf13adc8e219f9a05a533`.
+- Browser offline đã xác minh daily/group/Draft và recovery controls không có JavaScript pageerror; xác minh lại và lưu evidence cho v1.2.0 trước publish.
+- Payload sẽ được đối chiếu source commit sạch, 14 file runtime, posts seed rỗng, credential seeds trống và không có runtime state.
 - Build dùng Python embedded locked cùng FFmpeg/ffprobe/node/yt-dlp và Whisper model small. Full tests đã chạy riêng, nên build dùng `-SkipTests` để tránh chạy lặp cùng bộ kiểm tra.
 
 Lệnh kiểm tra lại trên máy này:
@@ -77,19 +76,15 @@ python -m pytest -q --no-header
 
 Rebuild chỉ để debug ở thư mục local riêng; không ghi đè asset đã phát hành. Quay lại code cũ bằng branch/worktree từ tag cũ. Nếu quay lại app cũ, sao lưu toàn bộ config, posts, data/ledger, token/Page bindings, downloads/output trước; không reset/xóa dữ liệu người dùng.
 
-Tool kiểm chứng đã lưu trong repo ở `checkpoints/tools/v1.2.0/`: `verify_payload.ps1`, `offline_daily_ui.py`, `offline_recovery_ui.py`, `verify_public_download.py`. Chạy từ root repo; hai script UI dùng Playwright/Chrome và chỉ gọi fixtures offline. Script kiểm tra tải công khai cần các asset tải về thư mục `release/` và metadata trong `checkpoints/evidence/v1.2.0/release.json`. Script payload đối chiếu commit của tag `v1.2.0`, nên các commit checkpoint sau build không làm sai mốc đóng gói.
-
 ## Giới hạn kiểm chứng live
 
 Trong lượt phát hành này chưa cài v1.2.0 vào runtime người dùng, chưa tạo/xóa bài Meta thật, chưa PUT CMS thật. Các test đăng/phục hồi dùng fixtures; đây là xác minh source và bộ cài, chưa phải xác nhận các bài lỗi thực tế đã đăng lại thành công.
 
-## Phát hành GitHub đã xác minh — 2026-10-05 21:41 Asia/Saigon
+## Verified release artifacts before publication
 
-- Release ID **403796965**, tag `v1.2.0`, `draft=false`, `prerelease=true`. Giữ nguyên các release cũ.
-- Nhánh source `release/v1.2.0` và annotated tag đã push; tag resolve đúng commit đóng gói `a199630d39d636e0c1b9173f12691cf2da1436a8`. Commit sau tag chỉ bổ sung checkpoint, tools và evidence, không đổi code trong bộ cài.
-- Ba asset đã upload và GitHub SHA-256 digest/size khớp local: installer, `.sha256`, `CODEX_CHECKPOINT_v1.2.0.md`.
-- Tải công khai không đăng nhập: checkpoint và checksum HTTP 200, toàn bộ nội dung khớp local; installer HTTP 206, kiểm tra prefix 65,536 bytes khớp local cùng full digest GitHub. Không tải lại toàn bộ 705 MB để kiểm tra.
-- Metadata: `checkpoints/evidence/v1.2.0/release.json`; kết quả tải: `public_download_verify.json`; source identity/payload: `installer_verify.json`; kết quả test: `test_summary.json`; UI: `daily_ui_verify.json`, `recovery_ui_verify.json`.
-- Bản checkpoint asset đã upload được giữ nguyên ở `checkpoints/evidence/v1.2.0/release_checkpoint_asset.md`; đây là snapshot trước publish. Dùng tài liệu hiện tại và `CODEX_CHECKPOINT_LATEST.md` để đọc trạng thái cuối.
-
-Link tải trực tiếp: https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.0/Highlight_Desktop_Test_Setup_v1.2.0.exe
+- Packaged source commit: `a199630d39d636e0c1b9173f12691cf2da1436a8`; `source_dirty=false`.
+- Installer: `Highlight_Desktop_Test_Setup_v1.2.0.exe`, 705,049,088 bytes.
+- SHA-256: `89981cbdf7f65dee548e5f0bc3c0c9c16d3f00721fdaf13adc8e219f9a05a533`.
+- Payload verification passed: 14 runtime source files match; credential seeds empty; runtime state absent.
+- Browser daily/Draft and recovery verification passed with zero JavaScript page errors.
+- Publication and public download evidence is committed separately on `release/v1.2.0` after this checkpoint asset is uploaded. The tag remains on the packaged source commit.

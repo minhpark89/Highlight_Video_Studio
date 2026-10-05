@@ -7,7 +7,9 @@ Ngày: 2026-10-05, Asia/Saigon. Nhánh: `release/v1.2.0`. Tag cố định: `v1.
 - Release: https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.2.0
 - Installer: https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.0/Highlight_Desktop_Test_Setup_v1.2.0.exe
 - Full pytest: **567 passed, 3 skipped, 29 subtests passed**.
-- Evidence phát hành cuối: `checkpoints/evidence/v1.2.0/` sau publish.
+- Source đóng gói: `a199630d39d636e0c1b9173f12691cf2da1436a8`; tag `v1.2.0` cố định ở commit này.
+- Release ID `403796965` đã công khai (`prerelease=true`); ba asset và link tải không đăng nhập đã xác minh.
+- Evidence phát hành cuối: `checkpoints/evidence/v1.2.0/`.
 
 Website giữ embed video YouTube gốc dài; kho/output được phân bổ cho nhóm/Page tick **Post hằng ngày**, upload trước để Facebook giữ lịch. Lỗi terminal Meta được phục hồi qua UI với MP4 đã sửa và giờ mới, giữ bài/ID cũ. Website retry sửa đúng URL cũ.
 

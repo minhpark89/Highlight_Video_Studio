@@ -1,0 +1,29 @@
+{
+  "errors": [],
+  "requests": [
+    {
+      "path": "/api/posts/website/retry-website",
+      "method": "POST"
+    },
+    {
+      "path": "/api/posts/local/retry-media",
+      "method": "POST"
+    },
+    {
+      "path": "/api/posts/video/replace-failed-video",
+      "body": {
+        "confirm_replace_failed_video": true,
+        "video_id": "9001",
+        "filename": "repaired.mp4",
+        "schedule_time": "2026-10-07T19:30"
+      }
+    }
+  ],
+  "checks": [
+    "retry button visible for failed website with existing URL",
+    "MP4 retry button",
+    "terminal rejection replacement control",
+    "exact video ID, file and schedule submitted",
+    "button hidden after successful queue"
+  ]
+}
