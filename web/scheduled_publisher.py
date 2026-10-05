@@ -247,6 +247,19 @@ def _resume_complete_upload(post, seen, poster, credential, posts, current_dt):
             or not (idle_upload or overdue_native)):
         return False
     state = post.get("auto_finish_state")
+    if post.get("meta_finish_recovery_attempts") and state is None:
+        # Older manual recovery wrote a separate fence. Preserve that history,
+        # but let a definitive rejection retry and reconcile uncertain outcomes
+        # through the same grace period as automatic Finish requests.
+        legacy_state = post.get("meta_finish_recovery_state")
+        state = legacy_state if legacy_state in ("accepted", "rejected") else "unknown"
+        post.update({"auto_finish_state": state,
+                     "auto_finish_attempts": int(post["meta_finish_recovery_attempts"]),
+                     "auto_finish_started_at": post.get("meta_finish_recovery_started_at") or
+                         current_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                     "auto_finish_error": sanitize_error(post.get("meta_finish_recovery_error")),
+                     "auto_finish_idle_checks": 0})
+        save_posts(posts)
     if state in ("sending", "accepted", "unknown"):
         # A later GET proving the same object is still idle is needed twice,
         # after a long grace period, before another same-ID attempt is safe.
@@ -254,8 +267,6 @@ def _resume_complete_upload(post, seen, poster, credential, posts, current_dt):
         started = _parse_scheduled_time(post.get("auto_finish_started_at"))
         if started is None or now_ts - started.timestamp() < 900 or post["auto_finish_idle_checks"] < 2:
             return False
-    if post.get("meta_finish_recovery_attempts") and state is None:
-        return False
     if now_ts < float(post.get("auto_finish_retry_at") or 0):
         return False
     _repair_non_english_post(post, posts)

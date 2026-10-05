@@ -48,6 +48,11 @@ def diagnose(post, seen=None):
         return result
     publishing = seen.get("publishing_status")
     processing = seen.get("processing_status")
+    recovery_error = post.get("auto_finish_error") or post.get("meta_finish_recovery_error") or ""
+    if publishing != "published" and "4854002" in str(recovery_error):
+        result.update(state="identity_required", message="Facebook yêu cầu xác minh danh tính",
+                      detail="Mở Facebook trên điện thoại và xác minh tài khoản quản lý Trang. App giữ nguyên Meta ID và sẽ tự thử lại sau khi được cấp quyền đăng.")
+        return result
     if publishing != "published" and post.get("auto_finish_state") in ("sending", "accepted", "unknown"):
         result.update(state="auto_recovery", message="App đang tự hoàn tất upload cũ",
                       detail="Giữ nguyên Meta ID và đối soát kết quả; app sẽ tiếp tục phục hồi khi Meta xác nhận video còn chờ.")

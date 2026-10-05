@@ -100,6 +100,49 @@ def test_definitive_rejection_uses_backoff_and_preserves_upload(tmp_path, monkey
     assert row["meta_upload_video_id"] == "9001"
 
 
+def test_legacy_rejected_finish_recovers_automatically_on_the_existing_id(tmp_path, monkeypatch):
+    row = queued()
+    row.update(meta_finish_recovery_attempts=1, meta_finish_recovery_state="rejected",
+               meta_finish_recovery_started_at="2026-10-05T06:30:00+07:00",
+               meta_finish_recovery_error="Identity verification required")
+    monkeypatch.setattr(worker, "POSTS_FILE", tmp_path / "posts.json")
+    poster = mock.Mock()
+    poster.finish_existing_reel.return_value = {"accepted": True, "state": "accepted"}
+    assert recover(row, poster=poster)
+    assert row["auto_finish_attempts"] == 2
+    assert row["meta_finish_recovery_state"] == "rejected"
+    assert poster.finish_existing_reel.call_args.args[:3] == ("9901", "fixture", "9001")
+    poster.publish_reel.assert_not_called()
+
+
+@pytest.mark.parametrize("error_field", ["auto_finish_error", "meta_finish_recovery_error"])
+def test_identity_requirement_is_visible_until_meta_confirms_publication(error_field):
+    from web.meta_diagnostics import diagnose
+    row = {**queued(), error_field: "Identity verification required | code: 368 | subcode: 4854002"}
+    assert diagnose(row, idle())["state"] == "identity_required"
+    assert not diagnose(row, idle())["can_finish_existing"]
+    assert diagnose(row, {**idle(), "publishing_status": "published"})["state"] == "published"
+
+
+@pytest.mark.parametrize("legacy_state", ["requesting", "unknown", "accepted", None])
+def test_legacy_uncertain_finish_requires_grace_and_two_idle_checks(tmp_path, monkeypatch, legacy_state):
+    row = queued()
+    row.update(meta_finish_recovery_attempts=1, meta_finish_recovery_state=legacy_state,
+               meta_finish_recovery_started_at="2026-10-05T06:59:00+07:00")
+    monkeypatch.setattr(worker, "POSTS_FILE", tmp_path / "posts.json")
+    poster = mock.Mock()
+    poster.finish_existing_reel.return_value = {"accepted": True, "state": "accepted"}
+    assert not recover(row, poster=poster)
+    poster.finish_existing_reel.assert_not_called()
+    row = json.loads((tmp_path / "posts.json").read_text())[0]
+    row["auto_finish_started_at"] = "2026-10-05T06:30:00+07:00"
+    assert not recover(row, poster=poster)
+    assert recover(row, poster=poster)
+    assert poster.finish_existing_reel.call_count == 1
+    assert row["auto_finish_attempts"] == 2
+    poster.publish_reel.assert_not_called()
+
+
 def test_only_local_safe_failures_are_requeued():
     safe = {"id": "safe", "status": "failed", "retryable": True, "retry_stage": "facebook_publish"}
     rows = [safe, {**safe, "id": "upload", "meta_upload_video_id": "9001"},
