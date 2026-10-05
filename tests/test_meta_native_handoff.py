@@ -19,7 +19,7 @@ def meta_response(payload, status=200):
 @pytest.mark.parametrize("finish", [requests.Timeout("fixture"), ValueError("fixture"), [], None])
 def test_ambiguous_finish_preserves_upload_id_and_prevents_retry(tmp_path, finish):
     video = tmp_path / "clip.mp4"
-    video.write_bytes(b"video")
+    video.write_bytes((Path(__file__).parent / "fixtures" / "tiny-video.mp4").read_bytes())
     responses = [meta_response({"video_id": "9001"}), meta_response({"success": True})]
     if isinstance(finish, requests.Timeout):
         responses.append(finish)
@@ -45,7 +45,7 @@ def test_ambiguous_finish_preserves_upload_id_and_prevents_retry(tmp_path, finis
 @pytest.mark.parametrize("offset", [600, -1, 29 * 86400 + 60])
 def test_invalid_schedule_is_rejected_before_any_graph_call(tmp_path, offset):
     video = tmp_path / "clip.mp4"
-    video.write_bytes(b"video")
+    video.write_bytes((Path(__file__).parent / "fixtures" / "tiny-video.mp4").read_bytes())
     with mock.patch("src.publisher.meta_reel_poster.requests.post") as write:
         result = MetaReelPoster().publish_reel(
             "9901", "fixture-token", video, schedule_time=int(time.time()) + offset,
@@ -56,7 +56,7 @@ def test_invalid_schedule_is_rejected_before_any_graph_call(tmp_path, offset):
 
 def test_persistence_failure_stops_before_transfer_and_finish(tmp_path):
     video = tmp_path / "clip.mp4"
-    video.write_bytes(b"video")
+    video.write_bytes((Path(__file__).parent / "fixtures" / "tiny-video.mp4").read_bytes())
     with mock.patch("src.publisher.meta_reel_poster.requests.post", return_value=meta_response({"video_id": "9001"})) as write:
         result = MetaReelPoster().publish_reel(
             "9901", "fixture-token", video, schedule_time=int(time.time()) + 900,
@@ -70,7 +70,7 @@ def test_verified_schedule_queues_comment_with_exact_post_and_token(tmp_path):
     from src.publisher import first_comment_queue
 
     video = tmp_path / "clip.mp4"
-    video.write_bytes(b"video")
+    video.write_bytes((Path(__file__).parent / "fixtures" / "tiny-video.mp4").read_bytes())
     publish_at = int(time.time()) + 900
     responses = [meta_response({"video_id": "9001"}), meta_response({"success": True}), meta_response({"success": True})]
     status = {"id": "9001", "status": {"publishing_phase": {"publish_status": "scheduled", "publish_time": publish_at}}}
@@ -98,7 +98,7 @@ def test_schedule_mismatch_is_not_accepted_as_handoff():
 def test_schedule_expiring_during_transfer_keeps_id_without_finish_or_retry(tmp_path):
     from multi_pc.meta_scheduling import MetaScheduleTimeError
     video = tmp_path / "clip.mp4"
-    video.write_bytes(b"video")
+    video.write_bytes((Path(__file__).parent / "fixtures" / "tiny-video.mp4").read_bytes())
     publish_at = int(time.time()) + 900
     responses = [meta_response({"video_id": "9001"}), meta_response({"success": True})]
     with mock.patch("multi_pc.meta_scheduling.parse_meta_schedule_time", side_effect=[publish_at, MetaScheduleTimeError("schedule_expired", "expired")]), \

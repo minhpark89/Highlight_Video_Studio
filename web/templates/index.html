@@ -4613,6 +4613,8 @@
         folder_binding_mode: "1_video_1_page"
       };
 
+      await saveDailyRulesPlan(slots, stagger);
+
       const res = await fetch('/api/schedule/rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4631,13 +4633,72 @@
     }
   }
 
-  function openDistributeModal() {
+  const groupDailyModalState = {};
+  function nextLocalScheduleTime() {
+    const date = new Date(Date.now() + 25 * 60 * 1000);
+    return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0,16);
+  }
+  async function loadGroupDailyModalPlan(groupId, kind) {
+    const state = {groupId:String(groupId), plan:null, loading:true};
+    groupDailyModalState[kind] = state;
+    const isDist = kind === 'dist';
+    const check = document.getElementById(isDist ? 'modal-dist-daily' : 'sched-conf-daily');
+    const mode = document.getElementById(isDist ? 'modal-dist-daily-mode' : 'sched-conf-review-mode');
+    const button = isDist ? document.getElementById('btn-submit-distribute') : document.querySelector('#modal-schedule-config button[onclick="executeBatchSchedule()"]');
+    check.checked = false; check.disabled = true; mode.value = 'automatic';
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/output-pipeline/plans');
+      const data = await response.json();
+      if (!response.ok || data.success === false) throw new Error(data.error || 'Không đọc được lịch hàng ngày');
+      if (groupDailyModalState[kind] !== state) return;
+      const plan = (data.plans || []).find(p => String(p.id) === `group:${groupId}`) || null;
+      state.plan = plan;
+      check.checked = !!(plan?.enabled && plan?.daily);
+      mode.value = plan?.approval_mode || 'automatic';
+      if (isDist) {
+        document.querySelector(`input[name="modal-dist-mode"][value="${plan?.publish_mode || 'meta_scheduled'}"]`).checked = true;
+        document.getElementById('modal-dist-token-group').value = plan?.token_group_id || '';
+        const stagger = document.getElementById('modal-dist-stagger');
+        const gap = String(plan?.stagger_minutes || 15);
+        if (![...stagger.options].some(o => o.value === gap)) stagger.add(new Option(`Giãn cách ${gap} phút`, gap));
+        stagger.value = gap;
+        document.getElementById('modal-dist-starttime').value = plan ? `${[plan.start_date, new Date().toLocaleDateString('sv-SE')].sort().pop()}T${plan.slots[0]}` : nextLocalScheduleTime();
+      } else {
+        document.getElementById('sched-conf-publish-mode').value = plan?.publish_mode || 'meta_scheduled';
+        document.getElementById('sched-conf-use-llm').checked = plan?.use_llm !== false;
+        const group = (window.allGroupsCached || []).find(g => String(g.id) === String(groupId));
+        const times = plan?.slots || group?.schedule_config?.times || ['11:30','19:30'];
+        const picker = document.getElementById('sched-conf-posts-per-page');
+        picker.dataset.slots = JSON.stringify(times);
+        picker.innerHTML = times.slice(0,6).map((_,i)=>`<option value="${i+1}">${i+1} bài / ngày / page (Khung giờ: ${escapeHtml(times.slice(0,i+1).join(', '))})</option>`).join('');
+        picker.value = String(plan?.posts_per_day || Math.min(times.length,2));
+        document.getElementById('sched-conf-times-preview').textContent = `Khung giờ: ${times.join(' | ')} · Giãn cách: ${plan?.stagger_minutes || group?.schedule_config?.stagger_minutes || 15} phút/page`;
+      }
+      state.loading = false; check.disabled = false; button.disabled = false;
+    } catch(error) { showToast(error.message); }
+  }
+  async function stopUncheckedGroupDailyPlan(kind, checked) {
+    const state = groupDailyModalState[kind];
+    if (state?.loading) throw new Error('Đang tải lịch hàng ngày; thử lại sau vài giây');
+    if (checked || !state?.plan?.enabled || !state?.plan?.daily) return false;
+    const response = await fetch('/api/output-pipeline/plans', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...state.plan, enabled:false, daily:false})});
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || 'Không lưu được trạng thái Post hàng ngày');
+    state.plan = data.plan;
+    showToast('Đã tắt Post hàng ngày cho nhóm. Các bài đã có lịch tiếp tục theo lịch đã lưu.');
+    return true;
+  }
+
+  async function openDistributeModal() {
     const m = document.getElementById('modal-distribute-loha');
     if (!m) return;
     m.style.display = 'flex';
 
-    // Populate nhóm page
-    fetch('/api/groups').then(r => r.json()).then(d => {
+    document.getElementById('btn-submit-distribute').disabled = true;
+    // Populate both pickers before restoring the saved group's choices.
+    try {
+      const [d, td] = await Promise.all([fetch('/api/groups').then(r=>r.json()), fetch('/api/token-groups').then(r=>r.json())]);
       const sel = document.getElementById('modal-dist-group');
       const grps = d.groups || [];
       if (sel) {
@@ -4649,20 +4710,12 @@
       }
       const tokenSel = document.getElementById('modal-dist-token-group');
       if (tokenSel) {
-        fetch('/api/token-groups').then(r => r.json()).then(td => {
           tokenSel.innerHTML = '<option value="">Dùng mapping hiện tại</option>' + (td.groups || []).map(g =>
             `<option value="${g.id}">${escapeHtml(g.name)} (${(g.page_ids || []).length} Page)</option>`
           ).join('');
-        });
       }
-    });
-
-    // Default start time: 20 phút tới
-    const now = new Date(Date.now() + 20 * 60 * 1000);
-    const tzOffset = now.getTimezoneOffset() * 60000;
-    const localISOTime = (new Date(now - tzOffset)).toISOString().slice(0, 16);
-    const timeInput = document.getElementById('modal-dist-starttime');
-    if (timeInput) timeInput.value = localISOTime;
+      await loadGroupDailyModalPlan(sel?.value || '', 'dist');
+    } catch(error) { showToast(error.message); }
   }
 
   function closeDistributeModal() {
@@ -4688,6 +4741,9 @@
     }
 
     try {
+      if (await stopUncheckedGroupDailyPlan('dist', document.getElementById('modal-dist-daily').checked)) {
+        closeDistributeModal(); return;
+      }
       const res = await fetch('/api/distribute/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4695,9 +4751,13 @@
           group_id: groupId,
           token_group_id: document.getElementById('modal-dist-token-group')?.value || '',
           start_time: startTime,
+          daily_slots: startTime.slice(11,16) === groupDailyModalState.dist?.plan?.slots?.[0] ? groupDailyModalState.dist.plan.slots : undefined,
+          posts_per_page: startTime.slice(11,16) === groupDailyModalState.dist?.plan?.slots?.[0] ? groupDailyModalState.dist.plan.posts_per_day : undefined,
           stagger_minutes: stagger,
           posting_threads: postingThreads,
           publish_mode: document.getElementById('modal-dist-mode-meta')?.checked ? 'meta_scheduled' : 'app_queue',
+          post_daily: document.getElementById('modal-dist-daily')?.checked === true,
+          approval_mode: document.getElementById('modal-dist-daily-mode')?.value || 'automatic',
           auto_first_comment: true,
           delete_after_schedule: false
         })
@@ -4896,6 +4956,9 @@
       const data = await resp.json();
       if (data.status === 'ok' && data.rules) {
         const r = data.rules;
+        document.getElementById('loha-slot-input').value = (r.slots || ['08:00', '11:30', '20:30']).join(', ');
+        document.getElementById('loha-stagger-select').value = String(r.stagger_min || r.stagger_minutes || 15);
+        document.getElementById('loha-auto-first-comment').checked = r.auto_comment !== false;
         const slotsArr = (r.slots && r.slots.length > 0) ? r.slots : ['08:00', '11:30', '20:30'];
         if (document.getElementById('sched-slots')) document.getElementById('sched-slots').value = slotsArr.join(', ');
         if (document.getElementById('sched-stagger-min')) document.getElementById('sched-stagger-min').value = r.stagger_min || 5;
@@ -4922,15 +4985,17 @@
         }
       }
 
-      // Populate group select in distribution card
-      const grpResp = await fetch('/api/groups');
-      const grpData = await grpResp.json();
+      await loadDailyRulesPlan();
+
+      // Keep the quick-distribute picker populated when the rules dialog is
+      // opened from a fresh page load.  Its change handler restores the saved
+      // per-group daily checkbox once options are present.
+      const grpData = await (await fetch('/api/groups')).json();
       const selectGrp = document.getElementById('modal-dist-group');
-      if (selectGrp) {
-        selectGrp.innerHTML = '<option value="">-- Chọn Nhóm Fanpage --</option>';
-        (grpData.groups || []).forEach(g => {
-          selectGrp.innerHTML += `<option value="${g.id}">${g.name} (${(g.page_ids || []).length} Pages)</option>`;
-        });
+      if (selectGrp && document.getElementById('modal-distribute-loha').style.display !== 'flex') {
+        selectGrp.innerHTML = '<option value="">-- Chọn Nhóm Fanpage --</option>' +
+          (grpData.groups || []).map(g => `<option value="${g.id}">${escapeHtml(g.name)} (${(g.page_ids || []).length} Pages)</option>`).join('');
+        selectGrp.onchange = () => loadGroupDailyModalPlan(selectGrp.value, 'dist');
       }
 
       // Set default start time
@@ -4965,6 +5030,7 @@
     }
 
     try {
+      await saveDailyRulesPlan(body.slots, body.stagger_min);
       const resp = await fetch('/api/schedule/rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4993,6 +5059,54 @@
   // [FIX] Stale duplicate executeBatchDistribute removed: it referenced DOM ids that no longer
   // exist (dist-select-group/dist-start-time/dist-stagger/dist-result-banner/btn-batch-distribute)
   // and shadowed the working implementation above, breaking the "Bắt đầu Lên Lịch" button.
+
+  let currentDailyRulesPlan = null;
+  async function loadDailyRulesPlan() {
+    const responses = await Promise.all([fetch('/api/output-pipeline/plans'), fetch('/api/pages'), fetch('/api/groups'), fetch('/api/output-pipeline/status')]);
+    const [plansData, pagesData, groupsData, statusData] = await Promise.all(responses.map(r => r.json()));
+    currentDailyRulesPlan = (plansData.plans || []).find(p => p.id === 'rules') || null;
+    const plan = currentDailyRulesPlan || {};
+    document.getElementById('loha-post-daily').checked = plan.daily === true && plan.enabled !== false;
+    document.getElementById('loha-daily-mode').value = plan.approval_mode || 'automatic';
+    document.getElementById('loha-daily-publish-mode').value = plan.publish_mode || 'meta_scheduled';
+    const checks = (rows, kind, selected) => rows.map(row => {
+      const id = String(kind === 'group' ? row.id : row.page_id);
+      return `<label style="display:flex;gap:8px;align-items:center;margin:5px 0;"><input style="width:auto;margin:0;" type="checkbox" class="daily-${kind}-check" value="${escapeHtml(id)}" ${selected.includes(id) ? 'checked' : ''}> ${escapeHtml(kind === 'group' ? row.name : row.page_name || id)}</label>`;
+    }).join('');
+    document.getElementById('loha-daily-groups').innerHTML = checks(groupsData.groups || [], 'group', plan.group_ids || []) || 'Chưa có nhóm Page.';
+    document.getElementById('loha-daily-pages').innerHTML = checks(pagesData.pages || [], 'page', plan.explicit_page_ids || plan.page_ids || []) || 'Chưa có Page.';
+    document.getElementById('loha-daily-plans').innerHTML = (plansData.plans || []).filter(p => p.id !== 'rules').map(p => `<label style="display:flex;gap:8px;align-items:center;margin:5px 0;"><input style="width:auto;margin:0;" type="checkbox" ${p.enabled && p.daily ? 'checked' : ''} data-plan-id="${escapeHtml(p.id)}" onchange="toggleDailyPlan(this)"> ${escapeHtml((groupsData.groups || []).find(g => p.group_ids.includes(String(g.id)))?.name || p.id)} · ${p.page_ids.length} Page · ${escapeHtml(p.slots.join(', '))}</label>`).join('');
+    const pipeline = statusData.pipeline || {};
+    document.getElementById('loha-pipeline-status').textContent = `${pipeline.alive ? 'Đang theo dõi output' : 'Worker output đang dừng'} · ${pipeline.backlog || 0} video · còn ${pipeline.free_gb || 0} GB${pipeline.paused ? ' · Render tạm chờ: ' + pipeline.reason : ''}${pipeline.error ? ' · ' + pipeline.error : ''}`;
+    if (document.getElementById('loha-folder-source')) document.getElementById('loha-folder-source').value = 'Kho output của app đang chạy';
+  }
+
+  async function saveDailyRulesPlan(slots, stagger) {
+    const daily = document.getElementById('loha-post-daily')?.checked === true;
+    const group_ids = [...document.querySelectorAll('.daily-group-check:checked')].map(c => c.value);
+    const page_ids = [...document.querySelectorAll('.daily-page-check:checked')].map(c => c.value);
+    if (!daily && !currentDailyRulesPlan) return;
+    const plan = {id:'rules', enabled:daily, daily:daily, group_ids, page_ids, slots,
+      approval_mode:document.getElementById('loha-daily-mode')?.value || 'automatic',
+      publish_mode:document.getElementById('loha-daily-publish-mode')?.value || 'meta_scheduled',
+      posts_per_day:slots.length, stagger_minutes:stagger};
+    if (!daily && !page_ids.length && !group_ids.length) Object.assign(plan, currentDailyRulesPlan, {enabled:false, daily:false});
+    const response = await fetch('/api/output-pipeline/plans', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(plan)});
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || 'Không lưu được Post hàng ngày');
+    currentDailyRulesPlan = data.plan;
+  }
+
+  async function toggleDailyPlan(checkbox) {
+    try {
+      const {plans} = await (await fetch('/api/output-pipeline/plans')).json();
+      const plan = (plans || []).find(p => p.id === checkbox.dataset.planId);
+      const response = await fetch('/api/output-pipeline/plans', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...plan, enabled:checkbox.checked, daily:checkbox.checked})});
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Không lưu được lịch hàng ngày');
+      showToast(checkbox.checked ? 'Đã bật Post hàng ngày.' : 'Đã tắt lượt phân bổ tiếp theo. Các bài đã có lịch vẫn giữ lịch.');
+    } catch (error) { checkbox.checked = !checkbox.checked; showToast(error.message); }
+  }
 
   async function loadWebsiteConfig() {
     try {
@@ -5843,7 +5957,7 @@
   }
 
   // ==================== LÊN LỊCH THEO NHÓM (CHỌN SỐ BÀI / KHUNG GIỜ) ====================
-  function runLoHaBatchSchedule(groupId, groupName) {
+  async function runLoHaBatchSchedule(groupId, groupName) {
     document.getElementById('sched-conf-group-id').value = groupId;
     document.getElementById('sched-conf-group-name').innerText = groupName;
 
@@ -5873,6 +5987,7 @@
     }
 
     document.getElementById('modal-schedule-config').style.display = 'flex';
+    await loadGroupDailyModalPlan(groupId, 'schedule');
   }
 
   function closeScheduleConfigModal() {
@@ -5889,16 +6004,27 @@
     const useLlm = document.getElementById('sched-conf-use-llm') ? document.getElementById('sched-conf-use-llm').checked : true;
 
     try {
-      const healthResp = await fetch('/api/tokens/health-sync', {method:'POST'});
-      const health = await healthResp.json();
-      if (!healthResp.ok || !health.success) throw new Error(health.error || 'Meta token preflight failed');
-      if (health.blocked_tokens) alert(`Meta từ chối ${health.blocked_tokens} token. Đã chuyển ${health.reassigned_pages} Page sang token còn hoạt động.`);
+      if (await stopUncheckedGroupDailyPlan('schedule', document.getElementById('sched-conf-daily').checked)) {
+        closeScheduleConfigModal(); return;
+      }
+      if (!document.getElementById('sched-conf-daily').checked) {
+        const healthResp = await fetch('/api/tokens/health-sync', {method:'POST'});
+        const health = await healthResp.json();
+        if (!healthResp.ok || !health.success) throw new Error(health.error || 'Meta token preflight failed');
+        if (health.blocked_tokens) alert(`Meta từ chối ${health.blocked_tokens} token. Đã chuyển ${health.reassigned_pages} Page sang token còn hoạt động.`);
+      }
       const res = await fetch('/api/distribute/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           group_id: groupId,
           posts_per_page: postsPerPage,
+          post_daily: document.getElementById('sched-conf-daily')?.checked === true,
+          approval_mode: document.getElementById('sched-conf-review-mode')?.value || 'automatic',
+          publish_mode: document.getElementById('sched-conf-daily')?.checked ? document.getElementById('sched-conf-publish-mode').value : 'app_queue',
+          daily_slots: JSON.parse(document.getElementById('sched-conf-posts-per-page').dataset.slots || 'null'),
+          token_group_id: groupDailyModalState.schedule?.plan?.token_group_id || '',
+          stagger_minutes: groupDailyModalState.schedule?.plan?.stagger_minutes,
           auto_first_comment: true,
           use_llm_comment: useLlm,
           english_mode: true
@@ -5909,6 +6035,9 @@
         const pending = data.content_package_pending || 0;
         const fallback = data.content_package_fallback || 0;
         closeScheduleConfigModal();
+        if (data.post_daily) {
+          showToast(data.message); loadPostsTable(); return;
+        }
         alert(`Đã lên lịch thành công ${data.scheduled_count} bài viết!\n- Mỗi page: ${postsPerPage} bài\n- Content LLM: ${data.content_package_llm || 0} bài\n- Đang chờ xử lý: ${pending} bài${fallback ? `\n- LLM fallback: ${fallback} bài (xem Content Studio để thử lại)` : ''}\n- Trạng thái chi tiết ở Quản lý Bài Đăng và Content Studio.`);
         switchTab('pane-posts');
         loadPostsTable();
@@ -6082,8 +6211,9 @@
   let postsScheduleFilter = 'all';
   let metaHandoffBusy = false;
   const selectedMetaPosts = new Set();
-  const postBucketLabels = {app:'App giữ lịch', sending:'Đang giao Meta', publishing:'Đang đăng', processing:'Chờ xác minh Meta', meta:'Meta giữ lịch', published:'Đã đăng', failed:'Thất bại', other:'Trạng thái khác'};
+  const postBucketLabels = {preparing:'Đang chuẩn bị', draft:'Draft chờ duyệt', app:'App giữ lịch', sending:'Đang giao Meta', publishing:'Đang đăng', processing:'Chờ xác minh Meta', meta:'Meta giữ lịch', published:'Đã đăng', failed:'Thất bại', other:'Trạng thái khác'};
   function postBucket(p) {
+    if (['preparing','draft'].includes(p.status)) return p.status;
     if (p.post_bucket) return p.post_bucket;
     if (['published','success'].includes(p.status)) return 'published';
     if (['failed','error'].includes(p.status)) return 'failed';
@@ -6193,6 +6323,42 @@
     } finally { metaHandoffBusy = false; await loadPostsTable({quiet:true}); updateMetaHandoffControls(); }
   }
   const postsOverdue = new Map();
+  async function openOutputDraft(postId) {
+    try {
+      const [posts, pagesData] = await Promise.all([fetch('/api/posts').then(r=>r.json()), fetch('/api/pages').then(r=>r.json())]);
+      const post = posts.find(p=>p.id === postId);
+      if (!post) throw new Error('Draft không còn tồn tại.');
+      document.getElementById('draft-review-id').value = postId;
+      document.getElementById('draft-review-title').value = post.title || '';
+      document.getElementById('draft-review-caption').value = post.content || '';
+      document.getElementById('draft-review-comment').value = post.first_comment || '';
+      const link = document.getElementById('draft-review-article');
+      link.href = /^https?:\/\//i.test(post.article_url || '') ? post.article_url : '#';
+      link.textContent = post.article_url || 'Bài Website đang chuẩn bị';
+      const video = document.getElementById('draft-review-video');
+      video.src = post.local_video_url || '/api/clips/play/' + encodeURIComponent(post.media_file || '');
+      const picker = document.getElementById('draft-review-page');
+      picker.innerHTML = '<option value="">Chọn Page đăng bài</option>' + (pagesData.pages || []).map(p=>`<option value="${escapeHtml(String(p.page_id))}">${escapeHtml(p.page_name || p.page_id)}</option>`).join('');
+      picker.value = post.page_id || '';
+      document.getElementById('draft-review-time').value = (post.scheduled_time || '').replace(' ', 'T').slice(0,16);
+      document.getElementById('draft-review-error').textContent = post.website_error || post.content_package_error || '';
+      document.getElementById('draft-review-modal').style.display = 'flex';
+    } catch (error) { showToast(error.message); }
+  }
+  function closeOutputDraft() { document.getElementById('draft-review-modal').style.display = 'none'; document.getElementById('draft-review-video').pause(); }
+  async function saveOutputDraft(approve=false, immediate=false) {
+    const postId = document.getElementById('draft-review-id').value;
+    const body = {title:document.getElementById('draft-review-title').value, content:document.getElementById('draft-review-caption').value,
+      first_comment:document.getElementById('draft-review-comment').value, page_id:document.getElementById('draft-review-page').value,
+      scheduled_time:immediate ? '' : document.getElementById('draft-review-time').value};
+    try {
+      const response = await fetch(`/api/posts/${encodeURIComponent(postId)}/draft`, {method:approve ? 'POST' : 'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Không lưu được Draft');
+      showToast(approve ? (immediate ? 'Đã duyệt và đưa vào hàng đợi đăng ngay.' : 'Đã duyệt và lưu lịch đăng.') : 'Đã lưu Draft.');
+      closeOutputDraft(); loadPostsTable();
+    } catch(error) { document.getElementById('draft-review-error').textContent=error.message; }
+  }
   const postsOverdueIds = postsOverdue;
   let schedulerCycleActive = false;
 
@@ -6398,7 +6564,9 @@
         const safeLocalVideoUrl = p.local_video_available ? escapeHtml(p.local_video_url || '') : '';
         const safeLocalDownloadUrl = p.local_video_available ? escapeHtml(p.local_download_url || '') : '';
         let statusBadge = '';
-        if (p.status === 'published' || p.status === 'success') {
+        if (['preparing','draft'].includes(p.status)) {
+          statusBadge = `<div style="color:#c084fc;font-weight:700;font-size:12px;">${p.status === 'draft' ? 'Draft · chờ duyệt' : 'Đang chuẩn bị Content/Website'}</div><div style="font-size:11px;color:#94a3b8;max-width:240px;white-space:normal;">${escapeHtml(p.website_error || p.content_package_error || '')}</div><button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(p.id)}" onclick="openOutputDraft(this.dataset.postId)" style="margin-top:5px;">Xem / sửa / duyệt</button>`;
+        } else if (p.status === 'published' || p.status === 'success') {
           const reelUrl = safeFacebookUrl || (p.post_fb_id ? `https://www.facebook.com/reel/${encodeURIComponent(p.post_fb_id)}` : '');
           statusBadge = `
             <div>
@@ -6432,6 +6600,8 @@
           statusBadge = `<span style="background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-x-circle"></i> ${p.meta_schedule_status === 'rejected' ? 'Meta từ chối' : (p.retryable ? 'Lỗi · có thể thử lại' : 'Lỗi · cần kiểm tra')}</span><div style="color:#fca5a5;font-size:11px;white-space:normal;max-width:280px;">${escapeHtml(p.error || p.website_error || 'Không rõ lỗi')}</div>`;
         } else if (p.status === 'publishing') {
           statusBadge = '<span style="background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-arrow-repeat spin"></i> Đang đăng...</span>';
+        } else if (p.status === 'superseded') {
+          statusBadge = `<span style="color:#94a3b8;font-size:11px;">Video lỗi đã thay thế</span><div style="font-size:10px;color:#64748b;">Lịch mới: ${escapeHtml(p.replacement_post_id || '')}</div>`;
         } else if (p.status !== 'scheduled') {
           statusBadge = `<span style="color:#94a3b8;font-size:11px;">Trạng thái khác: ${escapeHtml(String(p.status || 'chưa xác định'))}</span>`;
         } else {
@@ -6482,13 +6652,14 @@
         } else {
           commentSnippet = '<span style="color: #64748b;">Không cấu hình</span>';
         }
-        const articleLink = safeArticleUrl
+        let articleLink = safeArticleUrl
           ? `<a href="${safeArticleUrl}" target="_blank" rel="noopener" style="display:block;color:#38bdf8;margin-top:5px;"><i class="bi bi-link-45deg"></i> Mở bài website</a>`
           : (p.website_status === 'pending_generation' || p.website_status === 'generating')
             ? '<div style="color:#f59e0b;margin-top:5px;">Website: chờ tạo</div>'
             : (p.website_status === 'failed')
               ? `<div style="color:#ef4444;margin-top:5px;" title="${escapeHtml(p.website_error || '')}">Website: tạo thất bại</div><button type="button" onclick="retryWebsiteForPost('${p.id}')" style="margin-top:4px;background:#7c3aed;color:#fff;border:none;padding:3px 8px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;"><i class="bi bi-arrow-repeat"></i> Thử lại Website</button>`
               : '<div style="color:#64748b;margin-top:5px;">Website: không cấu hình</div>';
+        if (safeArticleUrl && p.website_status === 'failed') articleLink += `<div style="color:#fca5a5;font-size:11px;white-space:normal;">${escapeHtml(p.website_error || 'Website cần sửa')}</div><button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="retryWebsiteForPost(this.dataset.postId)" style="margin-top:4px;">Thử lại Website</button>`;
         const videoActions = safeLocalVideoUrl
           ? `<div style="margin-top:5px;display:flex;gap:8px;"><a href="${safeLocalVideoUrl}" target="_blank" rel="noopener" style="color:#22d3ee;"><i class="bi bi-play-circle"></i> Xem video</a><a href="${safeLocalDownloadUrl}" style="color:#94a3b8;"><i class="bi bi-download"></i> Tải</a></div>`
           : `<div style="margin-top:5px;color:#94a3b8;font-size:11px;">${p.local_video_removed_after_publish ? 'Video đã xóa sau khi đăng thành công' : 'Không tìm thấy file video local'}</div>`;
@@ -6534,7 +6705,8 @@
               <i class="bi bi-calendar3"></i> ${p.scheduled_time || 'Chưa hẹn'}
             </td>
             <td style="padding: 12px 14px; text-align: right;">
-              ${p.status === 'processing' ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="openMetaDiagnosis(this.dataset.postId)" style="margin-bottom:6px;white-space:nowrap;">Kiểm tra Meta</button>` : ''}
+              ${p.status === 'processing' || (p.status === 'failed' && (p.meta_upload_video_id || p.meta_video_id)) ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="openMetaDiagnosis(this.dataset.postId)" style="margin-bottom:6px;white-space:nowrap;">Kiểm tra Meta</button>` : ''}
+              ${p.status === 'failed' && p.retry_stage === 'invalid_media' ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="retryLocalMedia(this.dataset.postId)" style="margin-bottom:6px;white-space:nowrap;">Kiểm tra MP4 và thử lại</button>` : ''}
               ${p.can_handoff_meta ? `<button class="btn btn-primary btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="handoffMetaPosts(false,this.dataset.postId)" style="white-space:nowrap;margin-bottom:6px;" ${metaHandoffBusy ? 'disabled' : ''}><i class="bi bi-cloud-arrow-up"></i> Đưa lên Meta chờ</button>` : ''}
               ${p.status === 'meta_scheduled' ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="cancelMetaPosts(this.dataset.postId)" style="white-space:nowrap;margin-bottom:6px;color:#fca5a5;border-color:rgba(239,68,68,.4);" ${metaHandoffBusy ? 'disabled' : ''} title="Đọc đúng trạng thái Meta rồi hủy lịch; chỉ xóa app sau khi Meta xác nhận"><i class="bi bi-cloud-slash"></i> ${p.meta_cancel_requested ? 'Kiểm tra hủy & xóa app' : 'Hủy Meta & xóa app'}</button>` : `
               <button class="btn btn-outline btn-sm" onclick="deletePostItem('${p.id}')" ${['meta_handoff','publishing','processing','meta_scheduled'].includes(p.status) ? 'disabled' : ''} style="color: #ef4444; border-color: rgba(239,68,68,0.3); padding: 4px 8px;" title="Xóa khỏi hàng đợi local; không hủy lịch Meta">
@@ -6578,7 +6750,7 @@
       const res = await fetch(`/api/posts/${postId}/retry-website`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Không thể tạo bài Website');
-      showToast(data.already_ready ? 'Website article đã sẵn sàng.' : 'Đã tạo lại Website article thành công!');
+      showToast(data.already_ready ? 'Website article đã sẵn sàng.' : (data.queued ? data.message : 'Đã sửa Website article thành công!'));
       loadPostsTable();
     } catch (err) {
       alert('Website vẫn lỗi: ' + err.message + '\nLịch Facebook vẫn được giữ nguyên.');
@@ -6596,6 +6768,15 @@
     } catch (err) {
       alert('Lỗi: ' + err.message);
     }
+  }
+
+  async function retryLocalMedia(postId) {
+    try {
+      const response = await fetch(`/api/posts/${encodeURIComponent(postId)}/retry-media`, {method:'POST'});
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Chưa kiểm tra được MP4');
+      showToast(data.message); loadPostsTable();
+    } catch (error) { showToast(error.message, 'error'); }
   }
 
   async function triggerPurgePostedClips() {
@@ -7297,6 +7478,22 @@
     </div>
   </div>
 
+  <div id="draft-review-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.8);align-items:center;justify-content:center;padding:20px;">
+    <div style="background:#111c33;border:1px solid #334155;border-radius:12px;width:700px;max-width:95vw;max-height:90vh;overflow:auto;padding:20px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;"><strong>Draft · Xem, sửa và duyệt bài</strong><button class="btn btn-secondary btn-sm" onclick="closeOutputDraft()">Đóng</button></div>
+      <input id="draft-review-id" type="hidden">
+      <video id="draft-review-video" controls preload="metadata" style="width:100%;max-height:220px;margin:10px 0;"></video>
+      <label class="form-label">Tiêu đề</label><input id="draft-review-title" class="form-control">
+      <label class="form-label" style="margin-top:10px;">Caption</label><textarea id="draft-review-caption" class="form-control" rows="3"></textarea>
+      <label class="form-label" style="margin-top:10px;">First Comment (giữ đúng link bài Website)</label><textarea id="draft-review-comment" class="form-control" rows="2"></textarea>
+      <a id="draft-review-article" target="_blank" rel="noopener" style="display:block;margin:8px 0;font-size:12px;color:#38bdf8;overflow-wrap:anywhere;">Bài Website</a>
+      <label class="form-label">Page đăng bài</label><select id="draft-review-page" class="form-select"></select>
+      <label class="form-label" style="margin-top:10px;">Ngày / giờ đăng</label><input id="draft-review-time" type="datetime-local" class="form-control">
+      <div id="draft-review-error" style="font-size:12px;color:#fbbf24;margin:10px 0;"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;"><button class="btn btn-secondary" onclick="saveOutputDraft()">Lưu Draft</button><button class="btn btn-primary" onclick="saveOutputDraft(true,false)">Duyệt &amp; hẹn lịch</button><button class="btn btn-success" onclick="saveOutputDraft(true,true)">Duyệt &amp; đăng ngay</button></div>
+    </div>
+  </div>
+
   <!-- MODAL: QUY TẮC HẸN LỊCH TỰ ĐỘNG (LOHA PAGE SPEC) -->
 
   <!-- MODAL: QUY TẮC LÊN LỊCH & ĐĂNG BÀI (CHUẨN LOHAPAGE) -->
@@ -7365,6 +7562,17 @@
           <div style="font-size: 11px; color: #64748b; margin-left: 24px;">Kéo tương tác & traffic về website bài viết chính thức.</div>
         </div>
 
+        <div style="margin-bottom:14px;padding:12px;border:1px solid rgba(34,197,94,.35);background:rgba(34,197,94,.08);border-radius:8px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="loha-post-daily" style="width:16px;height:16px;accent-color:#22c55e;"><strong style="font-size:12.5px;color:#bbf7d0;">Post hàng ngày</strong></label>
+          <div style="font-size:11px;color:#94a3b8;margin:4px 0 8px 24px;">Khi có video trong kho, nhóm đã tick tự nhận clip và upload trước để Facebook tự đăng theo giờ đã chọn. Hết video thì chờ video mới.</div>
+          <select id="loha-daily-mode" class="form-select form-select-sm" style="background:#0b1329;border-color:#334155;"><option value="automatic">Tự động đăng/lên lịch</option><option value="manual">Duyệt tay → Draft</option></select>
+          <select id="loha-daily-publish-mode" class="form-select form-select-sm" style="margin-top:7px;background:#0b1329;border-color:#334155;"><option value="meta_scheduled">Upload trước — Facebook giữ lịch và tự đăng</option><option value="app_queue">App giữ lịch — upload khi đến giờ</option></select>
+          <div style="font-size:11px;color:#cbd5e1;margin-top:8px;">Nhóm Page đã chọn:</div><div id="loha-daily-groups" style="font-size:11px;max-height:82px;overflow:auto;color:#94a3b8;"></div>
+          <div style="font-size:11px;color:#cbd5e1;margin-top:6px;">Page đã chọn thêm:</div><div id="loha-daily-pages" style="font-size:11px;max-height:82px;overflow:auto;color:#94a3b8;"></div>
+          <div style="font-size:11px;color:#cbd5e1;margin-top:8px;">Lịch hàng ngày đã lưu theo nhóm:</div><div id="loha-daily-plans" style="font-size:11px;color:#94a3b8;"></div>
+          <div id="loha-pipeline-status" style="font-size:11px;color:#38bdf8;margin-top:8px;">Đang kiểm tra worker output…</div>
+        </div>
+
       </div>
       <div style="padding: 14px 20px; background: #0b1329; border-top: 1px solid #1e293b; display: flex; justify-content: flex-end; gap: 8px;">
         <button type="button" class="btn btn-secondary btn-sm" onclick="closeScheduleRulesModal()">Đóng</button>
@@ -7386,7 +7594,7 @@
       <div class="app-modal-body" style="padding: 20px;">
         <div style="margin-bottom: 16px;">
           <label style="font-size: 12px; font-weight: 700; color: #94a3b8;">1. Chọn Nhóm Fanpage vệ tinh:</label>
-          <select id="modal-dist-group" class="form-select form-select-sm" style="background: #0b1329; border-color: #23304d;"></select>
+          <select id="modal-dist-group" onchange="loadGroupDailyModalPlan(this.value, 'dist')" class="form-select form-select-sm" style="background: #0b1329; border-color: #23304d;"></select>
           <label style="font-size: 12px; color: #94a3b8;">Nhóm Token đăng (tuỳ chọn):</label>
           <select id="modal-dist-token-group" class="form-select form-select-sm" style="background: #0b1329; border-color: #23304d;"><option value="">Dùng mapping hiện tại</option></select>
           <label style="font-size:12px;color:#94a3b8;">Số luồng đăng (1–32):</label><input data-posting-threads type="number" min="1" max="32" step="1" value="4" onchange="savePostingThreads(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" aria-label="Số luồng đăng" class="form-control form-control-sm">
@@ -7395,10 +7603,12 @@
           <label style="font-size: 12px; font-weight: 700; color: #94a3b8;">2. Thời gian bắt đầu lên lịch:</label>
           <input type="datetime-local" id="modal-dist-starttime" class="form-control form-control-sm" style="background: #0b1329; border-color: #23304d;">
           <div style="margin-top:10px;padding:10px;background:#0f172a;border:1px solid #334155;border-radius:8px;font-size:12px;">
-            <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;"><input style="width:auto;margin:0;" type="radio" name="modal-dist-mode" value="app_queue" checked> App giữ lịch — cần mở app</label>
-            <label style="display:flex;align-items:center;gap:8px;"><input style="width:auto;margin:0;" id="modal-dist-mode-meta" type="radio" name="modal-dist-mode" value="meta_scheduled"> Giao lịch cho Meta — Meta tự đăng</label>
+            <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;"><input style="width:auto;margin:0;" type="radio" name="modal-dist-mode" value="app_queue"> App giữ lịch — cần mở app</label>
+            <label style="display:flex;align-items:center;gap:8px;"><input style="width:auto;margin:0;" id="modal-dist-mode-meta" type="radio" name="modal-dist-mode" value="meta_scheduled" checked> Upload trước — Facebook giữ lịch và tự đăng</label>
             <div style="color:#94a3b8;margin-top:8px;">Meta: giữ app mở đến khi tạo xong Website/comment và Meta nhận lịch. Giờ đăng phải còn hơn 10 phút, trong 29 ngày. First Comment vẫn cần app chạy sau giờ đăng.</div>
           </div>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:#bbf7d0;cursor:pointer;"><input id="modal-dist-daily" type="checkbox" style="width:auto;margin:0;accent-color:#22c55e;"> Post hàng ngày với nhóm Page này</label>
+          <select id="modal-dist-daily-mode" class="form-select form-select-sm" style="margin-top:7px;background:#0b1329;border-color:#334155;"><option value="automatic">Tự động đăng/lên lịch</option><option value="manual">Duyệt tay → Draft</option></select>
         </div>
         <div style="margin-bottom: 16px;">
           <label style="font-size: 12px; font-weight: 700; color: #94a3b8;">3. Giãn cách giữa các Page:</label>
@@ -7665,6 +7875,12 @@
         Nhóm áp dụng: <strong id="sched-conf-group-name" style="color: #ec4899;"></strong>
       </div>
 
+      <div style="margin-bottom:16px;padding:10px 12px;border:1px solid rgba(34,197,94,.3);background:rgba(34,197,94,.07);border-radius:8px;">
+        <label style="display:flex;align-items:center;gap:8px;color:#bbf7d0;cursor:pointer;"><input id="sched-conf-daily" type="checkbox" style="width:auto;margin:0;accent-color:#22c55e;"> Post hàng ngày với nhóm này</label>
+        <select id="sched-conf-review-mode" class="form-select form-select-sm" style="margin-top:7px;background:#0b1120;border-color:#334155;"><option value="automatic">Tự động đăng/lên lịch</option><option value="manual">Duyệt tay → Draft</option></select>
+        <select id="sched-conf-publish-mode" class="form-select form-select-sm" style="margin-top:7px;background:#0b1120;border-color:#334155;"><option value="meta_scheduled">Upload trước — Facebook giữ lịch và tự đăng</option><option value="app_queue">App giữ lịch — upload khi đến giờ</option></select>
+      </div>
+
       <div style="margin-bottom: 16px;">
         <label style="display: block; font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">Số bài muốn lên cho MỖI FANPAGE:</label>
         <select id="sched-conf-posts-per-page" style="width: 100%; background: #0b1120; border: 1px solid #334155; border-radius: 8px; padding: 10px; color: #fff; font-size: 13px; font-weight: 700;">
@@ -7789,6 +8005,7 @@
         <button class="btn btn-secondary" onclick="copyMetaDiagnostic()">Sao chép báo cáo lỗi</button>
         <button class="btn btn-primary" id="meta-recover-existing" style="display:none;" onclick="recoverExistingPost()">Đồng bộ quyền và thử đăng lại</button>
         <button class="btn btn-primary" id="meta-finish-existing" style="display:none;" onclick="finishExistingUpload()">Hoàn tất video đã upload</button>
+        <button class="btn btn-primary" id="meta-replace-failed" style="display:none;" onclick="replaceFailedVideo()">Tạo lịch lại bằng video đã sửa</button>
       </div>
     </div>
   </div>
@@ -7908,7 +8125,7 @@
   let currentMetaDiagnosisPost=null,currentMetaDiagnosis=null,metaFinishBusy=false;
   async function openMetaDiagnosis(postId){
     if(metaFinishBusy) return; currentMetaDiagnosisPost=postId;currentMetaDiagnosis=null;
-    document.getElementById('modal-meta-diagnosis').style.display='flex';const body=document.getElementById('meta-diagnosis-body');body.textContent='Đang đọc trạng thái hiện tại trên Meta...';document.getElementById('meta-finish-existing').style.display='none';document.getElementById('meta-recover-existing').style.display='none';
+    document.getElementById('modal-meta-diagnosis').style.display='flex';const body=document.getElementById('meta-diagnosis-body');body.textContent='Đang đọc trạng thái hiện tại trên Meta...';document.getElementById('meta-finish-existing').style.display='none';document.getElementById('meta-recover-existing').style.display='none';document.getElementById('meta-replace-failed').style.display='none';
     try{
       const response=await fetch('/api/posts/'+encodeURIComponent(postId)+'/meta-diagnosis'); const data=await response.json();
       if(postId!==currentMetaDiagnosisPost) return;
@@ -7920,6 +8137,12 @@
       extra.innerHTML=`<b>Quyền đang dùng:</b> ${escapeHtml(credential.owner_name || credential.token_id || '')} · ${escapeHtml(credential.status || 'Chưa xác minh')}<br>Mapping Page: ${credential.mapping_verified ? 'đã xác minh' : 'chưa xác minh'} · Quyền tạo nội dung: ${credential.can_create_content ? 'có' : 'chưa xác minh'}<br>${Number(data.read_checks || 0)} lần đọc trạng thái · ${Number(data.publish_attempts || 0)} lần thử đăng`;
       if(attempt.checked_at) extra.innerHTML+=`<br><b>Phản hồi đăng gần nhất:</b> ${escapeHtml(new Date(attempt.checked_at).toLocaleString('vi-VN'))} · HTTP ${Number(attempt.http_status || 0) || 'chưa nhận'}<br>${escapeHtml(attempt.method || '')} ${escapeHtml(attempt.endpoint || '')}<br>Token: ${escapeHtml(attempt.token_id || '')} · ${escapeHtml(attempt.state || '')}<br>Meta: ${escapeHtml(String(attempt.error_code ?? '—'))} / ${escapeHtml(String(attempt.error_subcode ?? '—'))} · Trace: ${escapeHtml(attempt.trace_id || '—')}`;
       body.appendChild(extra);
+      if(diag.can_replace_failed_video){
+        const container=document.createElement('div');container.style='margin-top:16px;';
+        container.innerHTML='<div style="color:#fbbf24;margin-bottom:8px;">Meta đã xác nhận video lỗi. Render lại clip với mốc nằm trong video gốc, rồi chọn MP4 đã sửa trong thư mục output và giờ mới. App giữ bài Website và lịch sử ID lỗi cũ.</div><label for="meta-replacement-file">Tên file MP4 đã sửa</label><input id="meta-replacement-file" class="form-control"><label for="meta-replacement-schedule">Giờ Facebook đăng (ít nhất 30 phút từ bây giờ)</label><input id="meta-replacement-schedule" type="datetime-local" class="form-control">';
+        body.appendChild(container);document.getElementById('meta-replacement-file').value=data.media_file || '';
+        document.getElementById('meta-replace-failed').style.display='';
+      }
       if(diag.can_reschedule_existing){ const input=document.createElement('input'); input.type='datetime-local'; input.id='meta-replacement-time'; input.style='margin-top:16px;padding:8px;background:#0f172a;color:white;border:1px solid #475569;border-radius:6px;'; const label=document.createElement('label'); label.textContent='Giờ đăng mới (nên chọn ít nhất 30 phút từ bây giờ để có thời gian xử lý): '; label.appendChild(input); body.appendChild(label); }
       if(diag.can_retry_existing){
         const options=data.recovery_credentials || [];
@@ -7969,6 +8192,23 @@
       const data=await response.json();if(!response.ok || !data.success) throw new Error(data.error || 'Không hoàn tất được upload');
       document.getElementById('meta-diagnosis-body').textContent=data.message;button.style.display='none';loadDashboard();loadPostsTable({quiet:true});
     }catch(error){document.getElementById('meta-diagnosis-body').textContent=error.message;}finally{metaFinishBusy=false;button.disabled=false;}
+  }
+  async function replaceFailedVideo(){
+    if(metaFinishBusy || !currentMetaDiagnosis?.diagnosis?.can_replace_failed_video) return;
+    const filename=document.getElementById('meta-replacement-file')?.value.trim();
+    const schedule=document.getElementById('meta-replacement-schedule')?.value;
+    if(!filename || !schedule){showToast('Chọn MP4 đã sửa và giờ đăng mới.');return;}
+    if(!confirm('Tạo lịch thay thế bằng MP4 đã sửa? Facebook sẽ nhận video mới; ID lỗi cũ vẫn được lưu trong lịch sử.')) return;
+    metaFinishBusy=true;const button=document.getElementById('meta-replace-failed');button.disabled=true;
+    const feedback=document.getElementById('meta-recovery-result');feedback.textContent='Đang xác minh Meta và MP4 đã sửa...';
+    try{
+      const response=await fetch('/api/posts/'+encodeURIComponent(currentMetaDiagnosisPost)+'/replace-failed-video',{
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_replace_failed_video:true,
+          video_id:currentMetaDiagnosis.diagnosis.video_id,filename,schedule_time:schedule})});
+      const data=await response.json();if(!response.ok || !data.success) throw new Error(data.error || 'Chưa tạo được lịch thay thế');
+      feedback.textContent=data.message || 'Lịch thay thế đã được tạo.';button.style.display='none';
+      currentMetaDiagnosis.diagnosis.can_replace_failed_video=false;loadDashboard();loadPostsTable({quiet:true});
+    }catch(error){feedback.textContent=error.message;}finally{metaFinishBusy=false;button.disabled=false;}
   }
   document.addEventListener('DOMContentLoaded',()=>{loadDashboard();setInterval(()=>{if(document.getElementById('pane-dashboard')?.classList.contains('active')) loadDashboard();},30000);});
 </script>

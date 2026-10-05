@@ -56,11 +56,20 @@ def _merge_revision(current, incoming, baseline):
             continue
         original = old[post_id]
         target = now[post_id]
+        frozen_before_merge = bool(target.get("content_frozen_at") and not original.get("content_frozen_at"))
         protected = target.get("status") in ("published", "processing") and incoming_row.get("status") not in ("published", "processing")
         for key in set(original) | set(incoming_row):
             if original.get(key) == incoming_row.get(key) and (key in original) == (key in incoming_row):
                 continue
             if protected and target.get(key) != original.get(key) and key in ("status", "post_fb_id", "fb_url", "meta_post_id", "meta_upload_video_id", "retryable", "retry_stage", "error"):
+                continue
+            # An approval/publish claim can race a slow content response. A
+            # worker revision loaded before the freeze cannot replace the
+            # caption, website or comment version that was approved.
+            if frozen_before_merge and key in (
+                "title", "content", "hashtags", "first_comment", "first_comment_snapshot", "article_url",
+                "content_package_id", "content_package_source", "website_status", "website_error",
+                "website_video_status", "website_video_url", "first_comment_source"):
                 continue
             if key in incoming_row:
                 target[key] = copy.deepcopy(incoming_row[key])

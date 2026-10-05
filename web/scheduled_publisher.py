@@ -364,10 +364,34 @@ def remove_posted_clip_file(clip_filename, posts):
             return False
         path = Path(value)
         return (path if path.is_absolute() else OUTPUT_DIR / path).resolve() == candidate
-    users = [post for post in posts if same_clip(post)]
+    users = [post for post in posts if same_clip(post) and post.get("status") != "superseded"]
     if not users or any(post.get("status") != "published" or not post.get("post_fb_id") for post in users):
         return False
     if any(post.get("auto_first_comment") and post.get("website_status") in ("pending_generation", "failed") for post in users):
+        return False
+    if any(post.get("output_pipeline") and not ((post.get("website_video_status") == "verified" or
+            (post.get("website_media_mode") == "youtube" and post.get("website_video_status") == "youtube_embed_verified"))
+            and str(post.get("website_video_url") or "").startswith("https://")) for post in users):
+        return False
+    from src import content_packages
+    for package in content_packages.list_packages():
+        package_path = Path(str(package.get("clip_filename") or ""))
+        package_path = (package_path if package_path.is_absolute() else root / package_path).resolve()
+        same_hash = package.get("source_sha256") and any(package.get("source_sha256") == p.get("source_sha256") for p in users)
+        if (package_path == candidate or same_hash) and package.get("status") in ("queued", "running", "retryable"):
+            return False
+    # A producer must never replace/delete a path while an upload or content
+    # worker consumes it. Render temporary files share this exact stem.
+    if any(root.glob(f".{candidate.stem}.rendering.*.mp4")):
+        return False
+    try:
+        jobs = json.loads((POSTS_FILE.parent / "jobs.json").read_text(encoding="utf-8"))
+        if any(job.get("status") == "running" and job.get("video_path") and
+               Path(job["video_path"]).resolve() == candidate for job in jobs):
+            return False
+    except FileNotFoundError:
+        pass
+    except (ValueError, OSError):
         return False
     try:
         if raw not in json.loads(POSTED_CLIPS_FILE.read_text(encoding="utf-8")):
@@ -375,6 +399,14 @@ def remove_posted_clip_file(clip_filename, posts):
     except (OSError, ValueError):
         return False
     try:
+        from src.output_pipeline import file_hash, record_receipt
+        hashed_users = [p for p in users if p.get("source_sha256")]
+        if hashed_users:
+            sha = file_hash(candidate)
+            if any(p.get("source_sha256") != sha for p in hashed_users):
+                return False
+            if not record_receipt(sha, users, POSTS_FILE.parent):
+                return False
         candidate.unlink()
         return True
     except OSError:
@@ -469,7 +501,13 @@ def _process_scheduled_posts_once(
         # The upload video_id is the actual Reel object and is read first.
         poster_for_check = _MetaReelPoster(token_vault=token_vault)
         check = {"verified": False}
-        for candidate in dict.fromkeys((post.get("meta_video_id"), post.get("meta_upload_video_id"), post.get("meta_post_id"))):
+        candidates = (post.get("meta_upload_video_id"), post.get("meta_video_id"))
+        # A Finish post_id can be a Post object: asking it for video.status
+        # returns deprecated singular-status API code 12. Keep real video
+        # phase evidence instead of overwriting it with that unrelated error.
+        if not any(candidates):
+            candidates = (post.get("meta_post_id"),)
+        for candidate in dict.fromkeys(candidates):
             if candidate:
                 if meta_scheduled:
                     check = poster_for_check.check_scheduled_reel(
@@ -485,7 +523,8 @@ def _process_scheduled_posts_once(
                     check = poster_for_check.check_processing_reel(
                         candidate, credential["token"], credential["token_id"]
                     )
-                if check.get("verified"):
+                if check.get("verified") or ((check.get("meta_observation") or {}).get("id") == str(candidate)
+                        and (check.get("meta_observation") or {}).get("http_status") == 200):
                     break
         post["meta_reconcile_attempts"] = (attempts + 1) if post.get("meta_reconcile_version") == 2 else 1
         post["meta_reconcile_version"] = 2
@@ -865,6 +904,8 @@ def _publish_claimed_post(post, posts, poster, current_dt, token_vault, page_man
     try:
         # The worker publishes first, then comments. Passing an empty comment
         # prevents MetaReelPoster from making an implicit/out-of-order call.
+        post["content_frozen_at"] = post.get("content_frozen_at") or current_dt.isoformat(timespec="seconds")
+        post["first_comment_snapshot"] = first_comment
         post["publish_started_at"] = current_dt.strftime("%Y-%m-%d %H:%M:%S")
         save_posts(posts)
         def persist_upload(video_id):
@@ -895,10 +936,14 @@ def _publish_claimed_post(post, posts, poster, current_dt, token_vault, page_man
         if not result.get("success") or not facebook_id:
             post.update({
                 "status": "failed",
-                "retryable": not (result.get("outcome_unknown") or (result.get("success") and not facebook_id)),
-                "retry_stage": "facebook_publish",
+                "retryable": result.get("retryable", True) and not (result.get("outcome_unknown") or (result.get("success") and not facebook_id)),
+                "retry_stage": "invalid_media" if result.get("code") == "invalid_media" else "facebook_publish",
+                "publish_error_code": result.get("code") or "",
                 "error": result.get("error", "Lỗi Meta Graph API không xác định"),
             })
+            if result.get("code") == "invalid_media":
+                post.pop("publish_started_at", None)
+                post.pop("claimed_at", None)
             return post
 
         post.update({

@@ -284,7 +284,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         from src.publisher.meta_reel_poster import MetaReelPoster
         with tempfile.TemporaryDirectory() as folder:
             video = Path(folder) / "clip.mp4"
-            video.write_bytes(b"fixture")
+            video.write_bytes((Path(__file__).parent / "fixtures" / "tiny-video.mp4").read_bytes())
             responses = [
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"video_id": "video-1", "upload_url": "https://upload.test/video-1"}),
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {}),
@@ -303,7 +303,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         from src.publisher.meta_reel_poster import MetaReelPoster
         with tempfile.TemporaryDirectory() as folder:
             video = Path(folder) / "clip.mp4"
-            video.write_bytes(b"fixture")
+            video.write_bytes((Path(__file__).parent / "fixtures" / "tiny-video.mp4").read_bytes())
             responses = [
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"video_id": "video-1", "upload_url": "https://upload.test/video-1"}),
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {}),
@@ -318,7 +318,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         from src.publisher.meta_reel_poster import MetaReelPoster
         with tempfile.TemporaryDirectory() as folder:
             video = Path(folder) / "clip.mp4"
-            video.write_bytes(b"fixture")
+            video.write_bytes((Path(__file__).parent / "fixtures" / "tiny-video.mp4").read_bytes())
             responses = [
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"video_id": "upload-1", "upload_url": "https://upload.test/1"}),
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {}),
@@ -952,7 +952,7 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
             ), mock.patch("src.publisher.meta_preflight.preflight_pages", return_value={
                 "ok": True, "ready": [{"token": "verified-token", "token_id": "tok-1"}]
             }), mock.patch("src.publisher.page_manager.PageManager.list_pages", return_value=[{"page_id": "page-1"}]), mock.patch.object(
-                MetaReelPoster, "check_processing_reel", side_effect=[{"verified": False}, {"verified": False},
+                MetaReelPoster, "check_processing_reel", side_effect=[{"verified": False},
                     {"verified": True, "video_id": "upload-1", "fb_url": "https://www.facebook.com/reel/upload-1/"}]
             ) as check:
                 worker.process_scheduled_posts_once(poster=poster, now=datetime(2026, 1, 1, 1, 0, 0))
@@ -967,7 +967,8 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
                 confirmed = json.loads(posts_file.read_text(encoding="utf-8"))[0]
                 self.assertEqual(confirmed["status"], "published")
                 self.assertEqual(json.loads((root / "posted.json").read_text()), ["clip.mp4"])
-                self.assertEqual(check.call_count, 3)
+                self.assertEqual(check.call_count, 2)
+                self.assertTrue(all(call.args[0] == "upload-1" for call in check.call_args_list))
                 self.assertEqual(confirmed["post_fb_id"], "upload-1")
                 poster.publish_reel.assert_called_once()
                 poster.post_first_comment.assert_not_called()

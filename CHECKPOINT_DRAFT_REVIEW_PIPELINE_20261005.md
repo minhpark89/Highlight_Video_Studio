@@ -1,5 +1,7 @@
 # CHECKPOINT — Output → LLM → Draft hoặc tự đăng theo nhóm → xóa clip đã đăng
 
+> Đính chính mới nhất 2026-10-05: người dùng xác nhận giữ Website nhúng video YouTube gốc dài bằng embed theo cấu hình. Phạm vi fix là video có sẵn trong kho → upload trước lên Facebook/Meta giữ lịch, cùng tick Post hàng ngày cho nhóm được chọn. Nội dung bên dưới yêu cầu bắt buộc upload MP4 lên Website đã được thay thế. Trạng thái triển khai/kiểm chứng mới nhất ở `CHECKPOINT_OUTPUT_PIPELINE_DAILY_20261005.md`.
+
 Ngày: 2026-10-05 (Asia/Saigon).
 Branch: `release/v1.1.9`.
 Commit code nền: `61856d68e9056ef0f62b6e4aa1235fc556e48203` (`1.1.9-meta-cancel1`).

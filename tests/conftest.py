@@ -14,6 +14,7 @@ def _start_test_thread(thread, *args, **kwargs):
         ("web.app", "queue_worker_loop"),
         ("web.scheduled_publisher", "scheduled_publisher_worker_loop"),
         ("src.content_packages", "_worker_loop"),
+        ("src.output_pipeline", "_worker_loop"),
     }:
         return None
     # Concurrency tests still run their actual threads and executors.

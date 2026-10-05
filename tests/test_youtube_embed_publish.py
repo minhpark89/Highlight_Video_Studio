@@ -52,6 +52,22 @@ class YouTubeEmbedPublishTests(unittest.TestCase):
         self.assertEqual(extract_youtube_video_id(f"https://www.youtube.com/embed/{expected}"), expected)
         self.assertEqual(extract_youtube_video_id("https://example.test/video"), "")
 
+    def test_saved_original_url_is_used_when_warehouse_clip_has_been_renamed(self):
+        from src.publisher import website_publisher as publisher
+        original = 'dQw4w9WgXcQ'
+        receipt = {'video_url': f'https://youtu.be/{original}'}
+        def existing(url, **kwargs):
+            return mock.Mock(status_code=200, url=url, text=f'<iframe src="https://www.youtube-nocookie.com/embed/{original}"></iframe>')
+        with mock.patch.object(publisher, 'get_website_config', return_value=(
+            {'base_url':'https://example.test'}, mock.Mock(exists=mock.Mock(return_value=True))
+        )), mock.patch.object(publisher, 'get_clip_metadata', return_value={'video_title':'Original cycling recording'}), \
+                mock.patch.object(publisher.requests, 'get', side_effect=existing), \
+                mock.patch.object(publisher, 'upload_long_video_to_public_stream') as upload:
+            url, _ = publisher.publish_clip_to_website_cms('renamed.mp4', asset_metadata=receipt)
+        upload.assert_not_called()
+        self.assertTrue(url.startswith('https://example.test/blog/'))
+        self.assertEqual(receipt['website_video_url'], f'https://www.youtube.com/watch?v={original}')
+
     @mock.patch("src.publisher.website_publisher.requests.get", return_value=mock.Mock(status_code=404))
     def test_publish_uses_youtube_iframe_without_uploading_mp4(self, _get):
         from src.publisher import website_publisher as publisher

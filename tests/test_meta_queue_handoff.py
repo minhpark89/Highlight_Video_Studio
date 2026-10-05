@@ -163,7 +163,8 @@ def test_existing_worker_executes_queued_handoff(queue_fixture, monkeypatch, tmp
     from src.publisher import first_comment_queue as comments
     api, client, post, output, vault, pages, path = queue_fixture
     client.post("/api/posts/handoff-meta", json={"post_ids": ["original"]})
-    for name, value in {"BASE_DIR": tmp_path, "POSTS_FILE": path, "OUTPUT_DIR": output}.items():
+    for name, value in {"BASE_DIR": tmp_path, "POSTS_FILE": path, "OUTPUT_DIR": output,
+                        "POSTED_CLIPS_FILE": tmp_path / "posted_clips.json"}.items():
         monkeypatch.setattr(worker, name, value)
     monkeypatch.setattr(comments, "QUEUE_FILE", tmp_path / "comments.json")
     poster = mock.Mock()
@@ -172,3 +173,88 @@ def test_existing_worker_executes_queued_handoff(queue_fixture, monkeypatch, tmp
     assert result["handed_off"] == 1 and not result["handoff_pending"]
     assert json.loads(path.read_text())[0]["status"] == "meta_scheduled"
     assert poster.publish_reel.call_count == 1
+
+
+def test_daily_inventory_with_original_youtube_embed_uploads_before_due_time(queue_fixture, monkeypatch, tmp_path):
+    from src import output_pipeline as intake
+    from src import content_packages as packages
+    from src.publisher import first_comment_queue as comments
+    from src.publisher import website_publisher as website_api
+    from src.publisher.meta_reel_poster import MetaReelPoster
+    from web import scheduled_publisher as worker
+    from web.posts_store import load_posts_file, save_posts_file
+
+    api, _client, _old, output, vault, pages, path = queue_fixture
+    save_posts_file(path, [])
+    monkeypatch.setattr(intake, "ROOT", tmp_path)
+    monkeypatch.setattr(intake, "_OBSERVED", {})
+    for name, value in {"BASE_DIR": tmp_path, "POSTS_FILE": path, "OUTPUT_DIR": output,
+                        "POSTED_CLIPS_FILE": tmp_path / "posted_clips.json"}.items():
+        monkeypatch.setattr(worker, name, value)
+    monkeypatch.setattr(comments, "QUEUE_FILE", tmp_path / "comments.json")
+    now = datetime.now()
+    slot = datetime.fromtimestamp(now.timestamp() + 3600).strftime("%H:%M")
+    records = pages.list_pages()
+    intake.save_settings({"stable_seconds": 2, "min_free_gb": 0}, tmp_path)
+    intake.save_plan({"daily": True, "page_ids": ["9901"], "slots": [slot],
+                      "publish_mode": "meta_scheduled", "approval_mode": "automatic"}, records, [], tmp_path)
+    intake.process_once(root=tmp_path, pages=records, now=now, probe=lambda _path: True)
+    clip = output / "clip.mp4"
+    stat = clip.stat()
+    intake._OBSERVED[str(clip.resolve())] = ((stat.st_size, stat.st_mtime_ns), time.monotonic() - 3, "")
+    assert intake.process_once(root=tmp_path, pages=records, now=now, probe=lambda _path: True)["assigned"] == 1
+    post = load_posts_file(path)[0]
+    queued = packages.list_packages()[0]
+    assert queued["require_video_upload"] is False
+    website = "https://example.test/blog/original-story"
+    def publish_site(_filename, _title, *, content_factory, asset_metadata, **kwargs):
+        content_factory(website, {"article_title": "Original cycling story", "youtube_id": "abcdefghijk",
+                                  "youtube_url": "https://www.youtube.com/watch?v=abcdefghijk"})
+        asset_metadata.update({"website_video_status": "youtube_embed_verified", "website_video_source": "youtube",
+                               "website_video_url": "https://www.youtube.com/watch?v=abcdefghijk"})
+        return website
+    site = mock.Mock(side_effect=publish_site)
+    monkeypatch.setattr(website_api, "publish_clip_to_website_cms", site)
+    monkeypatch.setattr(packages, "_llm_package", mock.Mock(side_effect=RuntimeError("fixture LLM timeout")))
+    result = packages.process_content_packages_once()
+    assert result["item"]["status"] == "ready"
+    assert result["item"]["result"]["source"] == "no_llm_error_fallback"
+    post = load_posts_file(path)[0]
+    assert post["status"] == "scheduled" and post["requested_publish_mode"] == "meta_scheduled"
+    assert datetime.fromisoformat(post["scheduled_time"]) > now
+    poster = mock.Mock()
+    poster.publish_reel.return_value = {"success": True, "status": "SCHEDULED", "meta_video_id": "9001",
+                                       "comment_result": {"success": True}}
+    result = worker.process_scheduled_posts_once(poster=poster, now=now)
+    assert result["handed_off"] == 1
+    post = load_posts_file(path)[0]
+    assert post["status"] == "meta_scheduled" and post["meta_video_id"] == "9001"
+    assert website in poster.publish_reel.call_args.kwargs["first_comment"]
+    assert poster.publish_reel.call_args.kwargs["schedule_time"] > now.timestamp()
+    worker.process_scheduled_posts_once(poster=poster, now=now)
+    assert poster.publish_reel.call_count == 1
+    assert clip.exists(), "Native schedule must retain local media until publication is verified"
+    ready = packages.list_packages()[0]
+    consumer = {**ready, "id": "active-image-consumer", "status": "running"}
+    packages._write(packages.QUEUE_FILE, [ready, consumer])
+    monkeypatch.setattr(MetaReelPoster, "check_scheduled_reel", lambda *args, **kwargs: {
+        "verified": True, "status": "published", "video_id": "9001", "fb_url": "https://facebook.test/9001"})
+    later = datetime.fromtimestamp(now.timestamp() + 4000)
+    worker.process_scheduled_posts_once(poster=poster, now=later)
+    assert load_posts_file(path)[0]["status"] == "published" and clip.exists()
+    packages._write(packages.QUEUE_FILE, [ready, {**consumer, "status": "ready"}])
+    worker.process_scheduled_posts_once(poster=poster, now=later)
+    assert not clip.exists() and load_posts_file(path)[0]["local_video_deleted_at"]
+    with intake._connect(tmp_path) as db:
+        receipt = db.execute("SELECT * FROM sources").fetchone()
+        assert receipt["published"] and "9001" in receipt["receipt"]
+    # A new rendered clip continues the same opted-in plan after cleanup/restart.
+    next_clip = output / "next.mp4"
+    next_clip.write_bytes(b"next source")
+    intake._OBSERVED.clear()
+    intake.process_once(root=tmp_path, pages=records, now=later, probe=lambda _: True)
+    stat = next_clip.stat()
+    intake._OBSERVED[str(next_clip.resolve())] = ((stat.st_size, stat.st_mtime_ns), time.monotonic() - 3, "")
+    assert intake.process_once(root=tmp_path, pages=records, now=later, probe=lambda _: True)["assigned"] == 1
+    assert len(load_posts_file(path)) == 2 and len(packages.list_packages()) == 3
+    assert site.call_count == 1 and poster.publish_reel.call_count == 1

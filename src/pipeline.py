@@ -4,7 +4,9 @@ import json
 import re
 import time
 import subprocess
+import uuid
 import threading
+import math
 from contextlib import contextmanager
 from functools import lru_cache
 
@@ -576,7 +578,7 @@ def transcribe_local_whisper(audio_path: str, update_status=None):
         update_status(f"Whisper hoàn tất: {len(results)} đoạn transcript.")
     return results
 
-def _fallback_highlights(transcript_items, num_clips=3, target_length="auto"):
+def _fallback_highlights(transcript_items, num_clips=3, target_length="auto", video_duration=None):
     """Build exactly the requested number of usable clips when the LLM fails or under-returns."""
     try:
         requested = max(1, min(10, int(num_clips)))
@@ -593,6 +595,8 @@ def _fallback_highlights(transcript_items, num_clips=3, target_length="auto"):
             continue
 
     video_end = max((end for _, end in timeline), default=0.0)
+    if video_duration is not None:
+        video_end = float(video_duration)
     clip_duration = 45.0 if target_length == "short" else 55.0
     if video_end <= 0:
         video_end = max(clip_duration, requested * (clip_duration + 15.0))
@@ -623,16 +627,31 @@ def _fallback_highlights(transcript_items, num_clips=3, target_length="auto"):
     return clips
 
 
-def _ensure_highlight_count(clips, transcript_items, num_clips=3, target_length="auto"):
+def _ensure_highlight_count(clips, transcript_items, num_clips=3, target_length="auto", video_duration=None):
     try:
         requested = max(1, min(10, int(num_clips)))
     except (TypeError, ValueError):
         requested = 3
-    result = list(clips or [])[:requested]
+    result = []
+    for clip in clips or []:
+        try:
+            start = float(clip.get("start", clip.get("start_time")))
+            end = float(clip.get("end", clip.get("end_time")))
+            if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+                continue
+            if video_duration is not None:
+                if start >= video_duration:
+                    continue
+                end = min(end, video_duration)
+            result.append({**clip, "start": start, "start_time": start, "end": end, "end_time": end})
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if len(result) == requested:
+            break
     if len(result) >= requested:
         return result
 
-    candidates = _fallback_highlights(transcript_items, requested, target_length)
+    candidates = _fallback_highlights(transcript_items, requested, target_length, video_duration)
     existing = {(round(float(c.get("start", 0.0)), 1), round(float(c.get("end", 0.0)), 1)) for c in result}
     for candidate in candidates:
         key = (round(candidate["start"], 1), round(candidate["end"], 1))
@@ -647,8 +666,7 @@ def _ensure_highlight_count(clips, transcript_items, num_clips=3, target_length=
 def ask_llm_for_highlights(transcript_items, *args, num_clips=3, target_length="auto", criteria="hook_viral", hook_duration=6, update_status=None, **kwargs):
     # Support positional args if passed as (transcript_items, duration, title, num_clips)
     if len(args) >= 1 and isinstance(args[0], (int, float)):
-        # duration was passed
-        pass
+        kwargs.setdefault("video_duration", args[0])
     if len(args) >= 2 and isinstance(args[1], str):
         # title was passed
         pass
@@ -664,6 +682,11 @@ def ask_llm_for_highlights(transcript_items, *args, num_clips=3, target_length="
         hook_duration = kwargs["hook_duration"]
     if "update_status" in kwargs:
         update_status = kwargs["update_status"]
+    video_duration = kwargs.get("video_duration")
+    if video_duration is not None:
+        video_duration = float(video_duration)
+        if not math.isfinite(video_duration) or video_duration <= 0:
+            raise ValueError("Source video duration must be positive")
     """Gửi transcript vào LLM để phân tích và trích xuất các đoạn highlight đắt giá nhất"""
     if update_status:
         update_status(f"AI ({LLM_MODEL}) đang phân tích kịch bản tìm {num_clips} highlight...")
@@ -686,6 +709,7 @@ TIÊU CHÍ LỌC:
 - Điểm bắt đầu (start_time): Phải là một câu nói mở đầu cuốn hút, gây tò mò kích thích cao trào ngay lập tức (trong {hook_duration} giây đầu tiên của đoạn clip).
 - Điểm kết thúc (end_time): Phải là điểm kết thúc trọn vẹn một ý nghĩ hoặc câu chuyện, không bị cắt giữa chừng khi người nói chưa hết câu.
 - Tính điểm viral (viral_score): từ 80 đến 99 điểm.
+- Thời lượng video thật: {video_duration if video_duration is not None else 'the transcript timeline'} giây. Mọi mốc cắt phải nằm trong video này; không tạo timestamp bên ngoài video.
 
 ĐỊNH DẠNG TRẢ VỀ: Trả về duy nhất một JSON Array hợp lệ, không giải thích gì thêm:
 [
@@ -738,7 +762,7 @@ Dưới đây là transcript có timestamp:
                 "reason": c_summary,
                 "viral_score": v_score
             })
-        return _ensure_highlight_count(normalized_clips, transcript_items, num_clips, target_length)
+        return _ensure_highlight_count(normalized_clips, transcript_items, num_clips, target_length, video_duration)
     except Exception as e:
         # Desktop stdout can be a redirected legacy Windows code page. Keep the
         # original failure visible as ASCII escapes without masking the fallback.
@@ -747,7 +771,7 @@ Dưới đây là transcript có timestamp:
             print(message.encode("ascii", errors="backslashreplace").decode("ascii"))
         except (OSError, UnicodeError, ValueError):
             pass  # An unavailable log stream must not turn LLM fallback into a failed job.
-        return _fallback_highlights(transcript_items, num_clips, target_length)
+        return _fallback_highlights(transcript_items, num_clips, target_length, video_duration)
 
 def render_highlight_clip(source_video: str = None, audio_path: str = None, start_time: float = None, end_time: float = None, output_path: str = None, aspect_ratio="9:16", reframe_mode="face_center", subtitle_style="hormozi_yellow", update_status=None, **kwargs):
     # Support kwargs from app.py: video_path, start_sec, end_sec, job_id, clip_idx, output_dir
@@ -766,9 +790,14 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
     else:
         output_path = Path(output_path)
     """Cắt, tạo phụ đề động Karaoke và render video bằng FFmpeg hardware encoder (auto)"""
+    from src.media_validation import probe_video, InvalidMedia
+    source_duration = probe_video(source_video)["duration"]
+    start_time, end_time = float(start_time), float(end_time)
+    if (not math.isfinite(start_time) or not math.isfinite(end_time) or start_time < 0
+            or end_time <= start_time or start_time >= source_duration):
+        raise InvalidMedia(f"Mốc cắt {start_time}–{end_time}s không hợp lệ: video gốc dài {source_duration:.2f}s.")
+    end_time = min(end_time, source_duration)
     duration = end_time - start_time
-    if duration <= 0:
-        duration = 30
         
     if update_status:
         update_status(f"Đang phân tích lời thoại và tạo phụ đề chạy chữ ({subtitle_style})...")
@@ -835,16 +864,31 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
 
     if update_status:
         update_status(f"Đang render bằng {codec} (tối đa {RENDER_CONCURRENCY} render đồng thời)...")
+    # Render into a private temporary name. The output watcher only sees the
+    # final MP4 after ffmpeg exits successfully, so a half-written file can
+    # never enter Content/LLM or the posting queue.
+    final_output = Path(output_path)
+    temporary_output = final_output.with_name(f".{final_output.stem}.rendering.{uuid.uuid4().hex}{final_output.suffix}")
+    def command_to_temp(command):
+        return command[:-1] + [str(temporary_output)]
     with render_slot():
-        cmd = build_command(encoder)
+        cmd = command_to_temp(build_command(encoder))
         rendered = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=max(900, int(duration * 120)), creationflags=NO_WINDOW)
         if rendered.returncode != 0 and encoder != "cpu":
             print(f"[FFmpeg Warning] {codec} failed; fallback to libx264: {rendered.stderr[:300]}")
-            rendered = subprocess.run(build_command("cpu"), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=max(900, int(duration * 180)), creationflags=NO_WINDOW)
+            rendered = subprocess.run(command_to_temp(build_command("cpu")), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=max(900, int(duration * 180)), creationflags=NO_WINDOW)
         if rendered.returncode != 0:
+            temporary_output.unlink(missing_ok=True)
             raise RuntimeError(f"FFmpeg render thất bại: {rendered.stderr}")
+    try:
+        probe_video(temporary_output, allow_rendering=True)
+    except Exception:
+        temporary_output.unlink(missing_ok=True)
+        raise
+    final_output.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(temporary_output, final_output)
 
-    return Path(output_path)
+    return final_output
 
 
 

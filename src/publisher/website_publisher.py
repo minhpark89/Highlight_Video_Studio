@@ -1138,6 +1138,73 @@ Rules:
 
     return fallback_comment
 
+def repair_existing_website_article(article_url, clip_filename, *, content_factory, asset_metadata=None,
+                                    mode="auto", progress=None):
+    """Repair/revalidate the existing CMS ID while retaining its source media."""
+    progress = progress or (lambda stage: None)
+    metadata = asset_metadata if asset_metadata is not None else {}
+    _cfg, config_file = get_website_config()
+    service = WebsiteArticleService(str(config_file))
+    progress("checking_existing_article")
+    article = service.read_existing_article(article_url)
+    source = get_clip_metadata(clip_filename)
+    youtube_id = (extract_youtube_video_id(metadata.get("youtube_id")) or
+                  extract_youtube_video_id(metadata.get("video_url")) or
+                  extract_youtube_video_id(source.get("youtube_id")) or
+                  extract_youtube_video_id(source.get("youtube_url")))
+    old_body = str(article.get("description") or "")
+    if not youtube_id:
+        match = re.search(r'youtube(?:-nocookie)?\.com/embed/([A-Za-z0-9_-]{11})', old_body)
+        youtube_id = match.group(1) if match else ""
+    stream_url = str(metadata.get("website_video_url") or "") if not youtube_id else ""
+    if not youtube_id and not stream_url:
+        raise WebsiteServiceError("Bài Website hiện tại thiếu video gốc để xác minh; giữ URL và sửa embed trước.")
+    # Validate the source on the existing page before either reusing or updating.
+    service.verify_article_embed(article_url, youtube_id=youtube_id, video_stream_url=stream_url)
+    source.update(article_title=source.get("video_title") or article.get("title") or "Original Video",
+                  youtube_id=youtube_id, youtube_url=f"https://www.youtube.com/watch?v={youtube_id}" if youtube_id else "")
+    cached = metadata.get("result") or {}
+    from src.english_text import package_is_english
+    needs_repair = not is_english(str(article.get("title") or "")) or not is_english(old_body)
+    rewrite_article = needs_repair or bool(metadata.get("regenerate_text"))
+    if needs_repair or not package_is_english(cached) or not cached.get("article_html") or metadata.get("regenerate_text"):
+        progress("generating_text")
+        generated = content_factory(article_url, source)
+        assert_english_package(generated)
+    else:
+        generated = cached
+    if rewrite_article:
+        # Retain whole player elements and each image, including source/poster
+        # URLs. Only accessible labels and article text are translated.
+        media = re.findall(r'<iframe\b[^>]*>.*?</iframe\s*>|<video\b[^>]*>.*?</video\s*>|<img\b[^>]*>|<source\b[^>]*>',
+                           old_body, re.I | re.S)
+        title = str(generated.get("hero_title") or "Original Video")
+        safe_title = html.escape(title, quote=True)
+        media = [re.sub(r'\b(alt|title)\s*=\s*(["\']).*?\2',
+                        lambda m: f'{m.group(1)}="{safe_title}"', tag, flags=re.I | re.S) for tag in media]
+        media = [re.sub(r'(<video\b[^>]*>)(.*?)(</video\s*>)',
+                        lambda m: m.group(1) + "".join(re.findall(r'<source\b[^>]*>', m.group(2), re.I)) +
+                        "Your browser does not support embedded video." + m.group(3), tag, flags=re.I | re.S) for tag in media]
+        text_body = re.sub(r'<iframe\b[^>]*>.*?</iframe\s*>|<video\b[^>]*>.*?</video\s*>|<img\b[^>]*>|<source\b[^>]*>',
+                           "", str(generated.get("article_html") or ""), flags=re.I | re.S)
+        body = text_body + "\n" + "\n".join(media)
+        progress("repairing_article")
+        service.update_existing_article(article_url, title=title, body_html=body, expected_article=article)
+    progress("verifying_article")
+    service.verify_article(article_url)
+    service.verify_article_english(article_url)
+    service.verify_article_embed(article_url, youtube_id=youtube_id, video_stream_url=stream_url)
+    metadata.update(result=generated, youtube_id=youtube_id, video_url=source.get("youtube_url") or metadata.get("video_url", ""),
+                    website_video_status="youtube_embed_verified" if youtube_id else "verified",
+                    website_video_source="youtube" if youtube_id else "original",
+                    website_video_url=source.get("youtube_url") or stream_url, embed_status="ready")
+    from datetime import datetime
+    metadata["website_repair_verified_at"] = datetime.now().isoformat(timespec="seconds")
+    metadata.pop("repair_existing_article", None)
+    metadata.pop("regenerate_text", None)
+    return article_url, str(article.get("image") or "")
+
+
 def publish_clip_to_website_cms(clip_filename: str, video_title: str = None, *, content_factory=None,
                               mode="auto", progress=None, asset_metadata=None) -> tuple:
     """
@@ -1162,6 +1229,9 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None, *, 
 
     # 1. Metadata chuẩn sạch, loại bỏ hoàn toàn 'Clip 1', 'Clip 2'
     meta = get_clip_metadata(clip_filename)
+    if not (extract_youtube_video_id(meta.get("youtube_id")) or extract_youtube_video_id(meta.get("youtube_url"))) and extract_youtube_video_id(asset_metadata.get("video_url")):
+        meta["youtube_url"] = asset_metadata["video_url"]
+        meta["youtube_id"] = extract_youtube_video_id(meta["youtube_url"])
     if not video_title or re.search(r'^(video highlight|job_\d+|clip_\d+)', video_title, re.IGNORECASE):
         video_title = meta.get("video_title") or meta.get("clean_title")
     meta["article_title"] = video_title
@@ -1174,6 +1244,14 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None, *, 
         video_stream_url = upload_long_video_to_public_stream(meta, clip_filename)
         if not video_stream_url:
             raise WebsiteServiceError("Không có YouTube ID và upload video không trả public URL")
+
+    if youtube_id:
+        asset_metadata.update({"website_video_status": "youtube_embed_verified",
+                               "website_video_url": f"https://www.youtube.com/watch?v={youtube_id}",
+                               "website_video_source": "youtube"})
+    else:
+        asset_metadata.update({"website_video_status": "verified", "website_video_url": video_stream_url,
+                               "website_video_source": "original"})
 
     # 3. Tạo slug ổn định cho cùng một clip qua các lần khởi động.
     clean_slug = re.sub(r'[^a-zA-Z0-9]+', '-', video_title.lower()).strip('-')[:50]
@@ -1203,7 +1281,12 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None, *, 
             public = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", "", public, flags=re.S | re.I)
             assert_english(public, "Existing CMS article")
         except ValueError as exc:
-            raise WebsiteServiceError("Repair the non-English article at its existing URL before reusing it") from exc
+            if content_factory is None:
+                from src.content_packages import generate_package
+                content_factory = lambda url, metadata: generate_package(
+                    video_title, metadata.get("description", ""), metadata.get("youtube_url", ""), mode=mode, article_url=url)
+            return repair_existing_website_article(expected_url, clip_filename, content_factory=content_factory,
+                                                   asset_metadata=asset_metadata, mode=mode, progress=progress)
         return expected_url, ""
     if existing.status_code != 404 and (existing.status_code != 200 or urlparse(existing.url).path.rstrip("/") != urlparse(base_url).path.rstrip("/")):
         raise WebsiteServiceError(f"CMS article lookup HTTP {existing.status_code}; publication paused to avoid duplicates")

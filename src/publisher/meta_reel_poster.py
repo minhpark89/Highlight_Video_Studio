@@ -5,6 +5,7 @@ import re
 from src.english_text import assert_english
 from pathlib import Path
 from datetime import datetime
+from src.media_validation import InvalidMedia, probe_video
 
 class MetaReelPoster:
     @staticmethod
@@ -48,17 +49,21 @@ class MetaReelPoster:
             except Exception:
                 pass
 
+    def _read_meta_object(self, object_id, page_token, token_id=None, timeout=12):
+        """The phases belong to the upload Video, not the Finish post_id."""
+        response = requests.get(f"{self.base_url}/{object_id}",
+                                params={"fields": "id,status,permalink_url", "access_token": page_token},
+                                timeout=timeout)
+        self._track_headers(token_id or page_token, response)
+        return response, response.json()
+
     def check_processing_reel(self, candidate_id, page_token, token_id=None):
         """Read only: a finish post_id is a candidate, never proof of publication."""
         if not re.fullmatch(r"[0-9]+(?:_[0-9]+)?", str(candidate_id or "")) or not page_token:
             return {"verified": False}
         try:
-            response = requests.get(f"{self.base_url}/{candidate_id}", params={
-                "fields": "id,status,permalink_url", "access_token": page_token,
-            }, timeout=12)
-            self._track_headers(token_id or page_token, response)
             from web.meta_diagnostics import observation
-            data = response.json()
+            response, data = self._read_meta_object(candidate_id, page_token, token_id)
             seen = observation(data, response.status_code)
             seen["error"] = seen["error"].replace(page_token, "[redacted]")
             if not response.ok:
@@ -86,11 +91,8 @@ class MetaReelPoster:
         if not re.fullmatch(r"[0-9]+", str(video_id or "")) or not page_token:
             return observation({"error": {"message": "Thiếu Meta upload ID hoặc Token gốc."}}, 400)
         try:
-            response = requests.get(f"{self.base_url}/{video_id}", params={
-                "fields": "id,status,permalink_url", "access_token": page_token,
-            }, timeout=15)
-            self._track_headers(token_id or page_token, response)
-            seen = observation(response.json(), response.status_code)
+            response, data = self._read_meta_object(video_id, page_token, token_id, timeout=15)
+            seen = observation(data, response.status_code)
             seen["error"] = seen["error"].replace(page_token, "[redacted]")
             return seen
         except (requests.RequestException, ValueError, TypeError):
@@ -221,11 +223,7 @@ class MetaReelPoster:
         if not re.fullmatch(r"[0-9]+(?:_[0-9]+)?", str(candidate_id or "")) or not page_token:
             return {"verified": False, "status": "unverified"}
         try:
-            response = requests.get(f"{self.base_url}/{candidate_id}", params={
-                "fields": "id,status,permalink_url", "access_token": page_token,
-            }, timeout=12)
-            self._track_headers(token_id or page_token, response)
-            data = response.json()
+            response, data = self._read_meta_object(candidate_id, page_token, token_id)
             seen = observation(data, response.status_code)
             seen["error"] = seen["error"].replace(page_token, "[redacted]")
             result = {"verified": False, "status": "unverified", "meta_observation": seen}
@@ -291,7 +289,6 @@ class MetaReelPoster:
         if not video_path.exists():
             return {"success": False, "error": f"Video không tồn tại: {video_path}"}
 
-        file_size = video_path.stat().st_size
         track_target = token_id or page_token
         finish_started = False
         target_ts = None
@@ -302,6 +299,14 @@ class MetaReelPoster:
                 target_ts = parse_meta_schedule_time(schedule_time)
             except ValueError as exc:
                 return {"success": False, "error": str(exc), "code": getattr(exc, "code", "invalid_schedule_time")}
+
+        # ffmpeg can return success for an empty MP4 when seeking past EOF.
+        # Validate the actual stream before allocating any remote upload ID.
+        try:
+            file_size = probe_video(video_path)["size"]
+        except InvalidMedia as exc:
+            return {"success": False, "retryable": False, "code": "invalid_media",
+                    "error": str(exc), "outcome_unknown": False}
 
         # Bước 1: Khởi tạo phiên upload Reel (Initialize)
         init_url = f"{self.base_url}/{page_id}/video_reels"

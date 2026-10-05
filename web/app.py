@@ -105,7 +105,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.1.9"
+APP_VERSION = "1.2.0"
 
 @app.after_request
 def add_header(response):
@@ -372,7 +372,10 @@ def run_job_pipeline(job):
 
         # Bước 3: AI LLM phân tích Hook & Highlight
         update_msg("AI Gemini đang phân tích nội dung, chấm điểm Viral & cắt Hook...", step=3)
-        highlights = ask_llm_for_highlights(segments, num_clips=num_clips, target_length=job.get("clip_length", "auto"), criteria=job.get("highlight_criteria", "hook_viral"), hook_duration=job.get("hook_duration", 6), update_status=lambda m: update_msg(m, step=3))
+        from src.media_validation import probe_video
+        duration = probe_video(video_path)["duration"] if Path(video_path).is_file() else float(duration or 0)
+        update_job_status(job_id, {"duration": duration})
+        highlights = ask_llm_for_highlights(segments, num_clips=num_clips, video_duration=duration, target_length=job.get("clip_length", "auto"), criteria=job.get("highlight_criteria", "hook_viral"), hook_duration=job.get("hook_duration", 6), update_status=lambda m: update_msg(m, step=3))
         if not highlights:
             raise RuntimeError("AI không thể tìm thấy đoạn highlight phù hợp.")
 
@@ -380,6 +383,11 @@ def run_job_pipeline(job):
         update_msg(f"Bắt đầu render {len(highlights)} clips highlight 9:16 (encoder tự động, tối đa {MAX_CONCURRENT_JOBS} job)...", step=4)
         rendered_clips = []
         for idx, h in enumerate(highlights, 1):
+            from src.output_pipeline import pressure
+            while pressure(BASE_DIR)["paused"]:
+                state = pressure(BASE_DIR)
+                update_msg(f"Render tạm chờ: {state['backlog']} video trong output, còn {state['free_gb']} GB. App vẫn xử lý Content và bài đã có lịch.", step=4)
+                time.sleep(5)
             update_msg(f"Đang render clip {idx}/{len(highlights)}: {h.get('title', 'Clip')}...", step=4)
             clip_file = render_highlight_clip(
                 video_path=video_path,
@@ -406,6 +414,9 @@ def run_job_pipeline(job):
                     "end": h["end"],
                     "duration": round(h["end"] - h["start"], 1)
                 })
+                # Each complete clip can enter Content while the producer
+                # continues rendering the next one with the correct source.
+                update_job_status(job_id, {"clips": list(rendered_clips)})
 
         now = datetime.now().isoformat(timespec="seconds")
         update_job_status(job_id, {
@@ -2664,7 +2675,7 @@ def api_publish_reel():
                     video_url=str(post_entry.get("video_url") or post_entry.get("youtube_url") or ""),
                     create_website_article=not post_entry.get("article_url"),
                     source_job_id=meta.get("job_id", ""), source_clip_id=meta.get("clip_index", ""),
-                    first_comment_profile_id=first_comment_profile_id,
+                    first_comment_profile_id=first_comment_profile_id
                 )
                 post_entry["content_package_id"] = package["id"]
                 post_entry["content_package_status"] = package["status"]
@@ -3136,6 +3147,8 @@ def api_post_meta_diagnosis(post_id):
     seen, mapping = _inspect_post_meta(post)
     from web.meta_recovery import can_retry_existing, can_refresh_existing, recovery_credentials, publishing_token_id
     diagnostic = diagnose(post, seen)
+    from web.video_recovery import can_replace_failed_video
+    diagnostic["can_replace_failed_video"] = bool(mapping and can_replace_failed_video(post, seen))
     diagnostic["can_retry_existing"] = can_refresh_existing(post) and (
         can_retry_existing(post, seen) or seen.get("http_status") != 200 or bool(seen.get("error")))
     selected_entry = token_vault.get_token_by_id(publishing_token_id(post)) or {}
@@ -3151,7 +3164,75 @@ def api_post_meta_diagnosis(post_id):
                         "owner_name": selected_entry.get("owner_name") or selected_entry.get("name") or "",
                         "mapping_verified": bool(mapping), "can_create_content": bool(set(tasks).intersection(PUBLISH_TASKS))},
                     "recovery_credentials": recovery_credentials(post, token_vault, page_manager),
-                    "recovery_token_id": publishing_token_id(post)})
+                    "recovery_token_id": publishing_token_id(post),
+                    "media_file": post.get("media_file") or post.get("clip_filename") or ""})
+
+
+@app.route("/api/posts/<post_id>/replace-failed-video", methods=["POST"])
+def api_replace_failed_video(post_id):
+    from web.scheduled_publisher import _cycle_lock
+    from web.video_recovery import prepare_replacement
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or body.get("confirm_replace_failed_video") is not True:
+        return jsonify({"success": False, "error": "Cần xác nhận tạo lịch thay thế cho video lỗi."}), 400
+    if not _cycle_lock.acquire(blocking=False):
+        return jsonify({"success": False, "error": "App đang xử lý bài; thử lại sau ít giây."}), 409
+    try:
+        posts = load_posts()
+        post = next((p for p in posts if p.get("id") == post_id), None)
+        if not post:
+            return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
+        video_id = str(post.get("meta_upload_video_id") or post.get("meta_video_id") or "")
+        if str(body.get("video_id") or "") != video_id:
+            return jsonify({"success": False, "error": "Meta ID đã thay đổi; kiểm tra lại bài."}), 409
+        existing = next((p for p in posts if p.get("id") == post.get("replacement_post_id")), None)
+        if existing:
+            return jsonify({"success": True, "already_queued": True, "post_id": existing["id"]})
+        seen, mapping = _inspect_post_meta(post)
+        if not mapping:
+            return jsonify({"success": False, "error": "Sync Token đúng Page trước khi tạo lịch thay thế."}), 409
+        replacement, created = prepare_replacement(posts, post, seen, OUTPUT_DIR,
+            filename=body.get("filename"), schedule_time=body.get("schedule_time"))
+        save_posts(posts)
+        from src.publisher.first_comment_queue import cancel_first_comment
+        cancel_first_comment(post_id=post_id, object_id=video_id)
+        return jsonify({"success": True, "queued": created, "post_id": replacement["id"],
+                        "message": "Đã tạo lịch thay thế. App sẽ upload MP4 đã kiểm tra để Facebook giữ lịch; ID lỗi cũ được lưu trong lịch sử."})
+    except (ValueError, FileNotFoundError) as exc:
+        return jsonify({"success": False, "error": sanitize_error(exc)}), 409
+    except Exception as exc:
+        return jsonify({"success": False, "error": sanitize_error(exc)}), 500
+    finally:
+        _cycle_lock.release()
+
+
+@app.route("/api/posts/<post_id>/retry-media", methods=["POST"])
+def api_retry_local_media(post_id):
+    from web.scheduled_publisher import _cycle_lock
+    from src.media_validation import probe_video
+    from src.content_packages import scheduled_video_path
+    if not _cycle_lock.acquire(blocking=False):
+        return jsonify({"success": False, "error": "App đang xử lý bài; thử lại sau ít giây."}), 409
+    try:
+        posts = load_posts()
+        post = next((p for p in posts if p.get("id") == post_id), None)
+        if not post:
+            return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
+        if post.get("status") != "failed" or post.get("retry_stage") != "invalid_media" or any(post.get(k) for k in
+                ("meta_upload_video_id", "meta_video_id", "meta_post_id", "post_fb_id", "outcome_unknown")):
+            return jsonify({"success": False, "error": "Bài đã có ID Meta hoặc không phải lỗi MP4 local; kiểm tra Meta trước."}), 409
+        probe_video(scheduled_video_path(OUTPUT_DIR, post.get("media_file") or post.get("clip_filename")))
+        if post.get("publish_mode") == "meta_scheduled":
+            from multi_pc.meta_scheduling import parse_meta_schedule_time
+            parse_meta_schedule_time(post.get("scheduled_time"))
+        post.update(status="meta_handoff" if post.get("publish_mode") == "meta_scheduled" else "scheduled",
+                    retryable=False, error="", publish_error_code="", retry_stage="")
+        save_posts(posts)
+        return jsonify({"success": True, "message": "MP4 đã hợp lệ; bài được đưa lại vào lịch."})
+    except (ValueError, FileNotFoundError) as exc:
+        return jsonify({"success": False, "error": sanitize_error(exc)}), 409
+    finally:
+        _cycle_lock.release()
 
 
 @app.route("/api/posts/<post_id>/recover-existing", methods=["POST"])
@@ -3468,6 +3549,17 @@ def api_delete_post(post_id):
         _cycle_lock.release()
 
 
+@app.route("/api/posts/<post_id>/draft", methods=["PUT", "POST"])
+def api_review_output_draft(post_id):
+    from src.output_pipeline import review_draft
+    try:
+        post = review_draft(post_id, request.get_json(silent=True) or {}, page_manager.list_pages(),
+                            approve=request.method == "POST")
+        return jsonify({"success": True, "post": post})
+    except (TypeError, ValueError, sqlite3.IntegrityError) as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
+
+
 def _cancel_meta_post_record(post, posts, expected_video_id):
     """Cancel one Meta-native schedule; remove its local row only on proof."""
     from web.meta_diagnostics import safe_error
@@ -3638,7 +3730,38 @@ def api_retry_post_website(post_id):
     if not post:
         return jsonify({"success": False, "error": "Không tìm thấy bài đã lên lịch"}), 404
     if post.get("article_url") and post.get("website_status") == "ready":
-        return jsonify({"success": True, "post": post, "already_ready": True})
+        return jsonify({"success": True, "already_ready": True})
+
+    # The content worker repairs the same CMS URL and generates the dependent
+    # comment. Do not bless a failed URL merely because it is already present.
+    from src.content_packages import get_package, retry_package, enqueue_content_package
+    package = get_package(post.get("content_package_id")) if post.get("content_package_id") else None
+    if package or post.get("article_url"):
+        if not package:
+            package = enqueue_content_package(
+                clip_filename=post.get("media_file") or post.get("clip_filename"), title=post.get("title", "Original Video"),
+                video_url=post.get("video_url", ""), article_url=post.get("article_url", ""),
+                post_ids=[post_id], create_website_article=True, mode="auto",
+                first_comment_profile_id=post.get("first_comment_profile_id", ""))
+            # Newly queued legacy rows also need an authenticated revalidation.
+            from src.content_packages import _LOCK, _read, _write, QUEUE_FILE
+            with _LOCK:
+                items = _read(QUEUE_FILE, [])
+                for item in items:
+                    if item.get("id") == package["id"]:
+                        item["repair_existing_article"] = bool(item.get("article_url"))
+                _write(QUEUE_FILE, items)
+        else:
+            retry_package(package["id"], repair_website=True)
+        post.update(content_package_id=package["id"], content_package_status="queued", website_status="pending_generation",
+                    website_error="", website_retried_at=datetime.now().isoformat(timespec="seconds"))
+        if not post.get("first_comment_snapshot") and post.get("first_comment_status") != "posted":
+            post["first_comment_status"] = "pending_generation"
+        save_posts(posts)
+        start_content_package_worker()
+        return jsonify({"success": True, "queued": True, "package_id": package["id"],
+                        "article_url": post.get("article_url", ""),
+                        "message": "Đang sửa và xác minh bài Website tại URL hiện tại, sau đó tạo lại First Comment."}), 202
 
     fields = prepare_website_article_for_schedule(
         post.get("media_file") or post.get("clip_filename"),
@@ -3658,11 +3781,40 @@ def api_retry_post_website(post_id):
 
 @app.route("/api/distribute/batch", methods=["POST"])
 def api_distribute_batch():
+    from src.output_pipeline import _LOCK
+    with _LOCK:
+        return _distribute_batch()
+
+
+def _distribute_batch():
     from src.content_packages import scheduled_video_path
     from src.publisher.schedule_media import selected_video, source_identity, stage_video
     import re
     from datetime import datetime, timedelta
     data = request.json or {}
+    if data.get("post_daily") is True:
+        from src.output_pipeline import save_plan
+        groups = page_manager.list_groups()
+        group = next((g for g in groups if str(g.get("id")) == str(data.get("group_id"))), None)
+        if not group:
+            return jsonify({"success": False, "error": "Không tìm thấy Nhóm Page"}), 404
+        try:
+            start = datetime.fromisoformat(str(data["start_time"])) if data.get("start_time") else None
+            slots = data.get("daily_slots") or ([start.strftime("%H:%M")] if start else (group.get("schedule_config") or {}).get("times", ["11:30", "19:30"]))
+            plan = save_plan({"id": f"group:{group['id']}", "enabled": True, "daily": True,
+                              "approval_mode": data.get("approval_mode", "manual"),
+                              "publish_mode": data.get("publish_mode") or
+                                              ("meta_scheduled" if data.get("approval_mode") == "automatic" else "app_queue"),
+                              "group_ids": [str(group["id"])], "slots": slots,
+                              "posts_per_day": int(data.get("posts_per_page", len(slots))),
+                              "stagger_minutes": int(data.get("stagger_minutes") or (group.get("schedule_config") or {}).get("stagger_minutes") or 15),
+                              "start_date": start.date().isoformat() if start else datetime.now().date().isoformat(),
+                              "token_group_id": data.get("token_group_id", ""),
+                              "use_llm": data.get("use_llm_comment", True)}, page_manager.list_pages(), groups)
+        except (TypeError, ValueError) as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        return jsonify({"success": True, "post_daily": True, "scheduled_count": 0, "plan": plan,
+                        "message": "Đã lưu Post hàng ngày. App tự nhận clip mới, xử lý nội dung và chạy theo lịch đã chọn."})
     blocked = _ensure_recent_meta_health()
     if blocked is not None:
         return blocked
@@ -3816,7 +3968,8 @@ def api_distribute_batch():
         except Exception:
             posted_set = set()
 
-    handled_posts = [p for p in posts if p.get("status") in ("scheduled", "publishing", "processing") or
+    handled_posts = [p for p in posts if p.get("status") in ("preparing", "draft", "reserved", "scheduled", "meta_handoff", "meta_scheduled", "publishing", "processing")
+                     and not (p.get("output_pipeline") and not p.get("page_id")) or
                      (p.get("status") == "published" and (p.get("post_fb_id") or p.get("reel_id")))]
     queued_clips = {str(p.get(key)) for p in handled_posts for key in ("media_file", "source_video_path") if p.get(key)}
 
@@ -3848,6 +4001,9 @@ def api_distribute_batch():
         seen_sources.add(identity)
         filtered.append(candidate)
     available_clips = filtered
+    from src.output_pipeline import file_hash, claimed_hashes
+    claimed = claimed_hashes(BASE_DIR)
+    available_clips = [path for path in available_clips if file_hash(path) not in claimed]
 
     if not available_clips:
         return jsonify({"error": "Không còn video clip mới nào chưa đăng/chưa hẹn để phân bổ! Hãy render thêm hoặc kiểm tra thư mục nguồn."}), 400
@@ -3886,7 +4042,7 @@ def api_distribute_batch():
         for source_clip in available_clips[:min(len(available_clips), posts_per_page * len(page_ids))]:
             if folder_path == canonical_output:
                 clip_fn = str(scheduled_video_path(OUTPUT_DIR, source_clip).relative_to(canonical_output))
-                source_sha = ""
+                source_sha = file_hash(source_clip)
                 source_path = source_identity(source_clip)
             else:
                 clip_fn, source_sha, source_path = stage_video(source_clip, OUTPUT_DIR)
@@ -3903,6 +4059,7 @@ def api_distribute_batch():
     assigned_clips = []
     clip_idx = 0
 
+    new_entries = []
     for slot_idx in range(posts_per_page):
         time_str = group_times[slot_idx % len(group_times)]
         try:
@@ -3915,7 +4072,7 @@ def api_distribute_batch():
         if start_dt is not None:
             slot_base_dt = start_dt + timedelta(days=slot_idx)
         else:
-            target_date = now_ts.date()
+            target_date = (now_ts + timedelta(days=slot_idx // len(group_times))).date()
             slot_base_dt = datetime(target_date.year, target_date.month, target_date.day, th, tm, 0)
             if slot_base_dt <= now_ts:
                 slot_base_dt += timedelta(days=1)
@@ -3979,17 +4136,35 @@ def api_distribute_batch():
                 "token_group_id": token_group_id,
                 "token_gap_seconds": group_stagger * 60,
             }
-            posts.append(post_entry)
+            imported = next((p for p in posts if p.get("source_sha256") == source_sha
+                             and p.get("output_pipeline") and not p.get("page_id")), None)
+            if imported:
+                post_entry["id"] = imported["id"]
+                post_entry.update({key: value for key, value in imported.items() if key not in (
+                    "page_id", "page_name", "group_id", "group_name", "token", "token_id", "token_group_id",
+                    "status", "scheduled_time", "approval_mode", "requested_publish_mode", "post_daily")})
+                post_entry["approval_mode"] = str(data.get("approval_mode") or "automatic")
+                post_entry["status"] = "preparing"
+                imported.update(post_entry)
+            else:
+                posts.append(post_entry)
+            new_entries.append(post_entry)
             assigned_clips.append(clip_fn)
             scheduled_count += 1
 
+    from src.output_pipeline import reserve_batch, finish_batch
+    try:
+        reserve_batch(new_entries, BASE_DIR)
+    except (ValueError, sqlite3.IntegrityError) as exc:
+        return jsonify({"success": False, "error": str(exc), "code": "source_already_claimed"}), 409
     save_posts(posts)
+    finish_batch(BASE_DIR)
     # Content packages run in the background queue; schedule creation never waits on
     # the LLM or the CMS.
     if scheduled_count:
         from src.content_packages import attach_existing_package, enqueue_content_package
         scheduled_package_ids = set()
-        for post_entry in posts[-scheduled_count:]:
+        for post_entry in new_entries:
             meta = get_clip_metadata(post_entry["media_file"]) or {}
             package = attach_existing_package(
                 clip_filename=post_entry["media_file"], post_ids=[post_entry["id"]],
@@ -4005,7 +4180,7 @@ def api_distribute_batch():
                 video_url=str(post_entry.get("video_url") or post_entry.get("youtube_url") or ""),
                 create_website_article=bool(auto_first_comment) and not post_entry.get("article_url"),
                 source_job_id=meta.get("job_id", ""), source_clip_id=meta.get("clip_index", ""),
-                first_comment_profile_id=first_comment_profile_id,
+                first_comment_profile_id=first_comment_profile_id
             )
             post_entry["content_package_id"] = package["id"]
             post_entry["content_package_status"] = package["status"]
@@ -4019,7 +4194,7 @@ def api_distribute_batch():
             start_content_package_worker()
     package_sources = {}
     package_statuses = {}
-    for entry in posts[-scheduled_count:] if scheduled_count else []:
+    for entry in new_entries:
         source = str(entry.get("content_package_source") or "pending")
         status = str(entry.get("content_package_status") or "pending")
         package_sources[source] = package_sources.get(source, 0) + 1
@@ -4083,6 +4258,46 @@ def handle_schedule_rules():
         saved = save_schedule_rules(data)
         return jsonify({"status": "ok", "rules": saved})
     return jsonify({"status": "ok", "rules": get_schedule_rules()})
+
+
+@app.route("/api/output-pipeline/settings", methods=["GET", "PUT"])
+def api_output_pipeline_settings():
+    from src.output_pipeline import settings, save_settings
+    try:
+        value = save_settings(request.get_json(silent=True) or {}) if request.method == "PUT" else settings()
+        return jsonify({"success": True, "settings": value})
+    except (TypeError, ValueError) as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+
+
+@app.route("/api/output-pipeline/status", methods=["GET"])
+def api_output_pipeline_status():
+    from src.output_pipeline import status
+    return jsonify({"success": True, "pipeline": status()})
+
+
+@app.route("/api/output-pipeline/run", methods=["POST"])
+def api_output_pipeline_run():
+    from src.output_pipeline import process_once
+    try:
+        result = process_once(pages=page_manager.list_pages(), groups=page_manager.list_groups(),
+                              token_groups=load_token_groups())
+        return jsonify({"success": True, "result": result})
+    except Exception as exc:
+        return jsonify({"success": False, "error": sanitize_error(exc)}), 502
+
+
+@app.route("/api/output-pipeline/plans", methods=["GET", "POST"])
+def api_output_pipeline_plans():
+    from src.output_pipeline import settings, save_plan
+    if request.method == "GET":
+        return jsonify({"success": True, "plans": settings().get("plans", [])})
+    try:
+        plan = save_plan(request.get_json(silent=True) or {}, page_manager.list_pages(),
+                         page_manager.list_groups())
+        return jsonify({"success": True, "plan": plan})
+    except (TypeError, ValueError) as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
 
 @app.route("/api/schedule/recommendation", methods=["GET"])
@@ -4930,7 +5145,7 @@ def api_content_studio_enqueue():
         create_website_article=bool(payload.get("create_website_article")) and not article_url,
         first_comment_profile_id=str(payload.get("first_comment_profile_id") or ""),
         niche=str(payload.get("niche") or "").strip(),
-        fallback_strategy=str(payload.get("fallback_strategy") or "rotate"),
+        fallback_strategy=str(payload.get("fallback_strategy") or "rotate")
     )
     start_content_package_worker()
     return jsonify({"success": True, "item": item})
@@ -5008,7 +5223,7 @@ def api_content_studio_batch():
             create_website_article=bool(payload.get("create_website_article")),
             first_comment_profile_id=str(payload.get("first_comment_profile_id") or ""),
             niche=str(payload.get("niche") or "").strip(),
-            fallback_strategy=str(payload.get("fallback_strategy") or "rotate"),
+            fallback_strategy=str(payload.get("fallback_strategy") or "rotate")
         )
         created.append(created_item)
         existing_keys.update(keys)
@@ -5060,9 +5275,12 @@ def api_content_studio_process():
                     "message": "Hàng đợi tự xử lý các clip đang chờ; theo dõi video và từng bước tại Content Studio."}), 202
 
 
+from src.output_pipeline import start_worker as start_output_pipeline_worker
+_output_pipeline_thread = start_output_pipeline_worker()
+
+
 if __name__ == "__main__":
     import waitress
     bind_host = os.environ.get("HIGHLIGHT_BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
     print(f"Highlight Video Studio starting on http://{bind_host}:5080 with Waitress (threads=8)...")
     waitress.serve(app, host=bind_host, port=5080, threads=8, channel_timeout=30)
-

@@ -269,7 +269,8 @@ def generate_package(title, summary="", video_url="", mode="auto", article_url="
 
 def enqueue_content_package(*, clip_filename, title, summary="", video_url="", mode="auto", post_ids=None,
                             components=None, article_url="", create_website_article=False, source_job_id="", source_clip_id="",
-                            first_comment_profile_id="", niche="", fallback_strategy="rotate"):
+                            first_comment_profile_id="", niche="", fallback_strategy="rotate",
+                            source_sha256="", require_video_upload=False, schedule_priority=None):
     profile_store = load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json")
     selected_profile_id = str(first_comment_profile_id or profile_store.get("default_profile_id") or "builtin_general")
     selected_profile = next((profile for profile in profile_store["profiles"] if profile["id"] == selected_profile_id), None)
@@ -282,6 +283,8 @@ def enqueue_content_package(*, clip_filename, title, summary="", video_url="", m
             "clip_filename": str(clip_filename or "").strip(),
             "source_job_id": str(source_job_id or "").strip(),
             "source_clip_id": str(source_clip_id or "").strip(),
+            "source_sha256": str(source_sha256 or ""),
+            "require_video_upload": bool(require_video_upload),
             "title": str(title or ""),
             "summary": str(summary or ""),
             "niche": str(niche or selected_profile.get("niche") or "").strip()[:300],
@@ -290,6 +293,7 @@ def enqueue_content_package(*, clip_filename, title, summary="", video_url="", m
             "mode": mode if mode in ("auto", "llm", "no_llm") else "auto",
             "components": components or ["hero_title", "article_html", "first_comment", "caption"],
             "post_ids": list(post_ids or []),
+            "schedule_priority": bool(post_ids) if schedule_priority is None else bool(schedule_priority),
             "article_url": str(article_url or ""),
             "first_comment_profile_id": selected_profile_id,
             "first_comment_profile_store": {"default_profile_id": selected_profile_id, "profiles": [selected_profile],
@@ -307,6 +311,53 @@ def enqueue_content_package(*, clip_filename, title, summary="", video_url="", m
         items.append(item)
         _write(QUEUE_FILE, items)
         return item
+
+
+def ensure_content_package(**kwargs):
+    """Atomically reuse pending/finished work by hash before creating a job."""
+    with _LOCK:
+        items = _read(QUEUE_FILE, [])
+        sha = kwargs.get("source_sha256")
+        item = next((entry for entry in reversed(items) if
+                     (sha and entry.get("source_sha256") == sha) or
+                     ((not sha or not entry.get("source_sha256")) and
+                      _same_clip(entry, kwargs.get("clip_filename"), kwargs.get("source_job_id", ""),
+                                 kwargs.get("source_clip_id", "")))), None)
+        if not item:
+            return enqueue_content_package(**kwargs)
+        item["post_ids"] = list(dict.fromkeys(list(item.get("post_ids") or []) + list(kwargs.get("post_ids") or [])))
+        if sha:
+            item["source_sha256"] = sha
+        requested_clip = str(kwargs.get("clip_filename") or "")
+        if item.get("status") in ("queued", "failed", "retryable") and requested_clip:
+            old_path = Path(item.get("clip_filename") or "")
+            old_path = old_path if old_path.is_absolute() else DATA_ROOT / "output" / old_path
+            if not old_path.is_file():
+                item["clip_filename"] = requested_clip
+        if not item.get("video_url") and kwargs.get("video_url"):
+            item["video_url"] = kwargs["video_url"]
+        # Legacy finished CMS packages already verified the original YouTube
+        # embed, before the intake worker had a separate media receipt field.
+        # Carry that recorded evidence forward when reusing warehouse content.
+        if (not item.get("website_video_status") and item.get("create_website_article")
+                and item.get("embed_status") == "ready" and _reusable(item, needs_article=True)):
+            from src.publisher.website_publisher import extract_youtube_video_id
+            original_id = extract_youtube_video_id(item.get("youtube_id")) or extract_youtube_video_id(item.get("video_url"))
+            if original_id:
+                item.update({"website_video_status": "youtube_embed_verified", "website_video_source": "youtube",
+                             "website_video_url": f"https://www.youtube.com/watch?v={original_id}"})
+        if kwargs.get("require_video_upload"):
+            item["require_video_upload"] = True
+            # A legacy ready YouTube article must be repaired explicitly. It
+            # cannot satisfy an upload plan or generate a second CMS article.
+            if item.get("status") == "ready" and item.get("website_video_status") != "verified":
+                item.update({"status": "failed", "website_status": "failed",
+                             "website_error": "Existing article has no verified uploaded video; repair that article before posting.",
+                             "error": "Website video verification required."})
+        if item.get("status") == "queued":
+            item["schedule_priority"] = bool(item.get("schedule_priority") or kwargs.get("schedule_priority", bool(item.get("post_ids"))))
+        _write(QUEUE_FILE, items)
+        return dict(item)
 
 
 def list_packages():
@@ -480,14 +531,16 @@ def resolve_article_url(item):
     a slow or failing CMS can no longer drop an accepted Facebook schedule.
     """
     existing = str(item.get("article_url") or "").strip()
-    if existing:
+    if existing and not item.get("repair_existing_article"):
+        if item.get("require_video_upload") and item.get("website_video_status") != "verified":
+            return existing, "failed", "Existing CMS article has no verified uploaded video; repair it before posting."
         if item.get("result") and not package_is_english(item["result"]):
             return existing, "failed", "Existing CMS article contains non-English content. Repair that same URL before reusing or regenerating this package."
         return existing, "ready", ""
-    if not item.get("create_website_article"):
+    if not existing and not item.get("create_website_article"):
         return "", "not_configured", ""
     try:
-        from src.publisher.website_publisher import publish_clip_to_website_cms
+        from src.publisher.website_publisher import publish_clip_to_website_cms, repair_existing_website_article
 
         store = dict(item.get("first_comment_profile_store") or load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json"))
         store["selection_strategy"] = item.get("fallback_strategy", "rotate")
@@ -507,11 +560,16 @@ def resolve_article_url(item):
             item.pop("regenerate_text", None)
             return generated
 
-        result = publish_clip_to_website_cms(
-            item.get("clip_filename", ""), item.get("title", ""), content_factory=content_factory,
-            mode=item.get("mode", "auto"), progress=lambda stage: update_package_progress(item, stage),
-            asset_metadata=item,
-        )
+        if existing:
+            result = repair_existing_website_article(existing, item.get("clip_filename", ""),
+                content_factory=content_factory, asset_metadata=item, mode=item.get("mode", "auto"),
+                progress=lambda stage: update_package_progress(item, stage))
+        else:
+            result = publish_clip_to_website_cms(
+                item.get("clip_filename", ""), item.get("title", ""), content_factory=content_factory,
+                mode=item.get("mode", "auto"), progress=lambda stage: update_package_progress(item, stage),
+                asset_metadata=item,
+            )
         if isinstance(result, tuple) and len(result) > 1:
             item["website_thumbnail_url"] = str(result[1] or "")
         url = result[0] if isinstance(result, tuple) else str(result or "")
@@ -519,7 +577,7 @@ def resolve_article_url(item):
             raise RuntimeError("CMS không trả Website URL")
         return url, "ready", ""
     except Exception as exc:
-        return "", "failed", sanitize_error(exc)
+        return existing, "failed", sanitize_error(exc)
 
 
 def _apply_to_posts(item):
@@ -539,8 +597,21 @@ def _apply_to_posts(item):
     for post in posts:
         if post.get("id") not in wanted:
             continue
+        if post.get("content_frozen_at"):
+            # An explicit CMS repair may update verification/error fields while
+            # preserving every approved social field and dispatched comment.
+            if item.get("website_repair_verified_at") and item.get("article_url") == post.get("article_url"):
+                for field in ("website_status", "website_error", "website_video_status", "website_video_url",
+                              "website_video_source", "website_repair_verified_at"):
+                    if field in item:
+                        post[field] = item[field]
+                post["website_embed_status"] = item.get("embed_status") or "ready"
+                post["content_package_status"] = item.get("status", "ready")
+                post["content_package_error"] = ""
+            continue
         post["content_package_id"] = item["id"]
         post["content_package_status"] = item.get("status", "ready")
+        post["content_package_error"] = ""
         post["content_package_source"] = result.get("source")
         if not post.get("first_comment_snapshot") and post.get("first_comment_status") != "posted":
             post["first_comment_source"] = result.get("first_comment_source") or post.get("first_comment_source", "")
@@ -548,8 +619,8 @@ def _apply_to_posts(item):
             post["first_comment_profile_name"] = result.get("first_comment_profile_name") or post.get("first_comment_profile_name", "")
             post["first_comment_model"] = result.get("first_comment_model") or result.get("llm_model", "")
             post["first_comment_fallback_reason"] = sanitize_error(result.get("first_comment_fallback_reason") or result.get("fallback_reason", ""))
-        post["content"] = result.get("caption") or post.get("content", "")
-        if result.get("hero_title"):
+        post["content"] = post.get("content", "") if post.get("draft_edited_at") else result.get("caption") or post.get("content", "")
+        if result.get("hero_title") and not post.get("draft_edited_at"):
             post["title"] = result["hero_title"]
         if item.get("article_url"):
             post["article_url"] = item["article_url"]
@@ -562,10 +633,14 @@ def _apply_to_posts(item):
         post["website_image_source"] = item.get("image_source", "")
         post["website_image_count"] = len(item.get("body_image_urls") or []) + bool(post["website_thumbnail_url"])
         post["website_article_word_count"] = result.get("word_count", 0)
-        if result.get("first_comment") and post.get("first_comment_status") != "posted" and not post.get("first_comment_snapshot"):
+        for field in ("website_video_status", "website_video_url", "website_video_source", "website_video_sha256"):
+            if item.get(field):
+                post[field] = item[field]
+        if result.get("first_comment") and post.get("first_comment_status") != "posted" and not post.get("first_comment_snapshot") and not post.get("draft_edited_at"):
             previous_comment_status = post.get("first_comment_status")
             post["first_comment"] = result["first_comment"]
-            post["first_comment_snapshot"] = result["first_comment"]
+            if not post.get("output_pipeline"):
+                post["first_comment_snapshot"] = result["first_comment"]
             # A package may finish after Facebook published without a comment.
             # Do not suggest that an already-published post still has a pending
             # comment dispatch or trigger an implicit second publishing attempt.
@@ -582,12 +657,25 @@ def _apply_to_posts(item):
                     "comment": post["first_comment"],
                 })
         if (post.get("status") == "failed" and post.get("retry_stage") == "website_content"
+                and not any(post.get(key) for key in ("meta_upload_video_id", "meta_video_id", "meta_post_id", "post_fb_id", "outcome_unknown"))
                 and post.get("article_url") and post.get("website_status") == "ready"
                 and str(post["article_url"]) in str(post.get("first_comment") or "")):
             post["status"] = "scheduled"
             post["retryable"] = False
             post.pop("schedule_error", None)
             post["error"] = ""
+        if post.get("output_pipeline") and post.get("status") in ("preparing", "draft"):
+            valid = (post.get("website_status") == "ready" and post.get("article_url")
+                     and post["article_url"] in str(post.get("first_comment") or "")
+                     and post.get("content") and (post.get("website_video_status") == "verified" or
+                          (post.get("website_media_mode") == "youtube" and post.get("website_video_status") == "youtube_embed_verified")))
+            if valid:
+                post["status"] = "draft"
+                if post.get("approval_mode") == "automatic" and post.get("page_id") and post.get("scheduled_time"):
+                    post["status"] = "scheduled"
+                    post["approved_at"] = _now()
+                    post["content_frozen_at"] = _now()
+                    post["first_comment_snapshot"] = post["first_comment"]
     save_posts_file(posts_file, posts)
     if comments_to_queue:
         try:
@@ -617,6 +705,8 @@ def _apply_failure_to_posts(item):
     posts = load_posts_file(posts_file)
     for post in posts:
         if post.get("id") not in item["post_ids"]:
+            continue
+        if post.get("content_frozen_at") and not post.get("website_retried_at"):
             continue
         post["content_package_status"] = item["status"]
         if item.get("article_url"):
@@ -686,7 +776,7 @@ def retry_package_component(package_id, component, mode=None):
     return {"component": component, "package": merged, "item": item}
 
 
-def retry_package(package_id, mode=None):
+def retry_package(package_id, mode=None, *, repair_website=False):
     """Put a failed/retryable package back in the worker queue with optional mode."""
     with _LOCK:
         items = _read(QUEUE_FILE, [])
@@ -695,7 +785,7 @@ def retry_package(package_id, mode=None):
             return None
         if item.get("status") in ("queued", "running"):
             return dict(item)
-        if not package_needs_attention(item):
+        if not repair_website and not package_needs_attention(item):
             return dict(item)
         if mode is not None:
             if mode not in ("auto", "llm", "no_llm"):
@@ -705,6 +795,8 @@ def retry_package(package_id, mode=None):
                 item["regenerate_text"] = True
         if str((item.get("result") or {}).get("source") or "") in ("no_llm_error_fallback", "no_llm_quota_fallback"):
             item["regenerate_text"] = True
+        if item.get("article_url") and (repair_website or item.get("website_status") == "failed" or not package_is_english(item.get("result") or {})):
+            item["repair_existing_article"] = True
         item.update({"status": "queued", "error": "", "updated_at": _now()})
         _write(QUEUE_FILE, items)
         return dict(item)
@@ -714,7 +806,7 @@ def process_content_packages_once():
     with _LOCK:
         items = _read(QUEUE_FILE, [])
         running = [entry for entry in items if entry.get("status") == "running"]
-        item = next((entry for entry in items if (entry.get("status") == "queued" or
+        item = next((entry for entry in sorted(items, key=lambda entry: not entry.get("schedule_priority")) if (entry.get("status") == "queued" or
                      (entry.get("status") == "retryable" and not circuit_status().get("open")))
                      and not any(_same_clip(active, entry.get("clip_filename"), entry.get("source_job_id"),
                                            entry.get("source_clip_id")) for active in running)), None)
@@ -729,17 +821,21 @@ def process_content_packages_once():
         # A schedule may enqueue a basename already present in the Content Studio
         # library as an absolute path. Reuse a verified finished package rather
         # than publishing a duplicate CMS article or leaving the post pending.
-        prior = next((entry for entry in reversed(items)
+        prior = None if item.get("repair_existing_article") else next((entry for entry in reversed(items)
                       if entry.get("id") != item.get("id")
                       and _same_clip(entry, item.get("clip_filename"), item.get("source_job_id"), item.get("source_clip_id"))
                       and _reusable(entry, needs_article=bool(item.get("create_website_article") or
                                                        "first_comment" in (item.get("components") or [])),
-                                    article_url=item.get("article_url", ""))), None)
+                                    article_url=item.get("article_url", ""))
+                      and (not item.get("require_video_upload") or entry.get("website_video_status") == "verified")), None)
         if prior:
             item.update({"article_url": prior.get("article_url", ""), "website_status": prior.get("website_status", "not_configured"),
                          "website_error": "", "embed_status": prior.get("embed_status") or "ready",
                          "result": dict(prior.get("result") or {}), "status": "ready",
                          "error": "", "completed_at": _now()})
+            for field in ("website_video_status", "website_video_url", "website_video_source", "website_video_sha256"):
+                if prior.get(field):
+                    item[field] = prior[field]
         else:
             _process_new_content_package(item)
     except Exception as exc:

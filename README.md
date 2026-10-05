@@ -2,6 +2,8 @@
 
 Ứng dụng Windows tạo highlight, nghiên cứu nội dung, đăng Reel đa kênh, xuất bản bài website và First Comment.
 
+Bản mới: **1.2.0**. Xem [checkpoint v1.2.0](CHECKPOINT_V1_2_0_20261005.md) để tiếp tục sửa lỗi từ đúng source và bộ cài.
+
 ## Cài đặt
 
 Tải bộ cài mới nhất trong GitHub Releases, chạy file và bấm **Cài đặt & khởi chạy**. Bản cài gồm Python portable cùng các engine cần thiết; người dùng không phải cài Python hoặc chạy lệnh thủ công.

@@ -33,6 +33,9 @@ def handoff_eligibility(post, output_dir, *, now_ts=None):
         return False, "Chờ First Comment chứa đúng một link Website."
     if not post.get("token_id"):
         return False, "Thiếu credential đã gắn với lịch; cần Sync Page."
+    if post.get("output_pipeline") and not (post.get("website_video_status") == "verified" or
+            (post.get("website_media_mode") == "youtube" and post.get("website_video_status") == "youtube_embed_verified")):
+        return False, "Chờ bài Website có video gốc đầy đủ và player đã xác minh."
     try:
         scheduled_video_path(output_dir, post.get("media_file") or post.get("clip_filename"))
     except (ValueError, FileNotFoundError, OSError):
@@ -88,6 +91,8 @@ def process_next_handoff(posts, save, poster, output_dir, vault, pages, *, now=N
     credential = verdict["ready"][0]
     publish_at = parse_meta_schedule_time(post["scheduled_time"], now_ts=current.timestamp())
     comment = str(post.get("first_comment_snapshot") or post.get("first_comment") or "").strip()
+    post["content_frozen_at"] = post.get("content_frozen_at") or current.isoformat(timespec="seconds")
+    post["first_comment_snapshot"] = comment
     post.update({"status": "processing", "meta_schedule_status": "upload_started",
                  "meta_scheduled_publish_time": publish_at, "outcome_unknown": True,
                  "meta_handoff_started_at": current.strftime("%Y-%m-%d %H:%M:%S"),
@@ -128,6 +133,11 @@ def process_next_handoff(posts, save, poster, output_dir, vault, pages, *, now=N
                      "outcome_unknown": bool(result.get("outcome_unknown", True)),
                      "meta_publish_error": sanitize_error(result.get("error")),
                      "error": sanitize_error(result.get("error") or "Chờ đối soát lịch trên Meta.")})
+    elif result.get("code") == "invalid_media":
+        post.update({"status": "failed", "meta_schedule_status": "handoff_blocked",
+                     "retry_stage": "invalid_media", "publish_error_code": "invalid_media",
+                     "retryable": False, "outcome_unknown": False,
+                     "error": sanitize_error(result.get("error"))})
     else:
         # A definitive pre-upload failure leaves the original app schedule intact.
         post.update({"status": "scheduled", "publish_mode": "app_queue",
