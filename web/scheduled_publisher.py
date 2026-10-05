@@ -233,6 +233,8 @@ def _resume_complete_upload(post, seen, poster, credential, posts, current_dt, *
     re-uploaded or blindly replayed after a restart.
     """
     upload_id = str(post.get("meta_upload_video_id") or "")
+    if post.get("meta_cancel_requested"):
+        return False
     now_ts = current_dt.timestamp()
     due = _parse_scheduled_time(post.get("scheduled_time"))
     if not upload_id or due is None or (due > current_dt and not force_retry):
@@ -415,6 +417,8 @@ def _process_scheduled_posts_once(
     posts_by_id = {post.get("id"): post for post in posts}
     def prepare_first_comment(item):
         linked_post = posts_by_id.get(item.get("post_id"))
+        if linked_post and linked_post.get("meta_cancel_requested"):
+            return {"ready": False, "error": "Operator requested cancellation; comment paused."}
         exact_token_id = str((linked_post or {}).get("meta_recovery_token_id") or item.get("token_id") or
                              (linked_post or {}).get("token_id") or "")
         page_token = item.get("page_token")
@@ -437,6 +441,8 @@ def _process_scheduled_posts_once(
     reconciled = 0
     for post in posts:
         if post.get("status") not in ("processing", "meta_scheduled") or not (post.get("meta_video_id") or post.get("meta_upload_video_id") or post.get("meta_post_id")):
+            continue
+        if post.get("meta_cancel_requested"):
             continue
         meta_scheduled = post.get("publish_mode") == "meta_scheduled" or bool(post.get("meta_scheduled_publish_time"))
         if meta_scheduled:

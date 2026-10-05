@@ -60,6 +60,30 @@ def enqueue_first_comment(object_id, page_token, comment_text, due_at, token_id=
             "queue_id": item["id"], "due_at": item["due_at"]}
 
 
+def cancel_first_comment(post_id=None, queue_id=None, object_id=None):
+    """Stop pending comments for a cancelled schedule; retain posted history."""
+    keys = {str(value) for value in (post_id, queue_id, object_id) if value}
+    if not keys:
+        return {"cancelled": 0}
+    cancelled = 0
+    with _LOCK:
+        # Corrupt data must block local removal rather than silently lose a queue.
+        items = json.loads(QUEUE_FILE.read_text(encoding="utf-8")) if QUEUE_FILE.exists() else []
+        if not isinstance(items, list):
+            raise ValueError("Invalid First Comment queue")
+        for item in items:
+            if not keys.intersection({str(item.get("post_id") or ""), str(item.get("id") or ""),
+                                      str(item.get("object_id") or ""), str(item.get("meta_video_id") or "")}):
+                continue
+            if item.get("status") in ("pending", "verification_pending", "pending_retry"):
+                item.update(status="cancelled", cancelled_at=int(time.time()),
+                            last_error="Meta schedule cancelled by the operator.", page_token="")
+                cancelled += 1
+        if cancelled:
+            _save_unlocked(items)
+    return {"cancelled": cancelled}
+
+
 def process_due_first_comments(poster, now=None, prepare=None):
     current = int(now or time.time())
     changed = False

@@ -11,7 +11,7 @@ def can_refresh_existing(post):
     state = post.get("auto_finish_state")
     if state is None and post.get("meta_finish_recovery_attempts"):
         state = post.get("meta_finish_recovery_state") or "unknown"
-    return bool(post.get("status") in ("processing", "meta_scheduled") and post.get("meta_upload_video_id")
+    return bool(not post.get("meta_cancel_requested") and post.get("status") in ("processing", "meta_scheduled") and post.get("meta_upload_video_id")
                 and state not in ("sending", "accepted", "unknown", "requesting"))
 
 

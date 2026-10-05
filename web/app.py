@@ -3468,6 +3468,168 @@ def api_delete_post(post_id):
         _cycle_lock.release()
 
 
+def _cancel_meta_post_record(post, posts, expected_video_id):
+    """Cancel one Meta-native schedule; remove its local row only on proof."""
+    from web.meta_diagnostics import safe_error
+    if not post:
+        return {"post_id": "", "success": False, "code": "not_found", "error": "Không tìm thấy bài."}
+    video_id = str(post.get("meta_upload_video_id") or post.get("meta_video_id") or "")
+    original_token_id = str(post.get("token_id") or "").strip()
+    details = {"post_id": post.get("id"), "page_id": str(post.get("page_id") or ""),
+               "page_name": str(post.get("page_name") or ""), "video_id": video_id, "token_id": original_token_id}
+    def fail(code, error):
+        return {**details, "success": False, "local_removed": False, "code": code, "error": error}
+    if not expected_video_id or str(expected_video_id) != video_id:
+        return fail("meta_id_mismatch", "Meta ID đã thay đổi hoặc chưa được xác nhận; làm mới danh sách rồi thử lại.")
+    if post.get("status") != "meta_scheduled":
+        return fail("not_meta_scheduled", "Chỉ hủy được bài đang ở trạng thái Meta giữ lịch.")
+    if not re.fullmatch(r"[0-9]+", video_id) or not re.fullmatch(r"[0-9]+", details["page_id"]):
+        return fail("meta_id_missing", "Bài không có Meta video ID và Page ID hợp lệ; chưa xóa khỏi app.")
+    post.update(meta_cancel_requested=True, retryable=False)
+    post.setdefault("meta_cancel_requested_at", datetime.now().astimezone().isoformat())
+    try:
+        # Durable intent prevents the scheduler from publishing/recovering or
+        # commenting while a DELETE outcome is uncertain, including on restart.
+        save_posts(posts)
+    except Exception:
+        return fail("intent_save_failed", "Không lưu được yêu cầu hủy; chưa gọi Meta.")
+    # A recovery token is useful for publishing recovery, but cancellation must
+    # use the credential that actually created the scheduled object.
+    if not post.get("meta_cancel_verified"):
+        if not original_token_id:
+            return fail("original_token_missing", "Bài không lưu Token gốc; chưa hủy để tránh nhầm lịch Meta.")
+        entry = token_vault.get_token_by_id(original_token_id)
+        if not entry or entry.get("status") != "ACTIVE":
+            return fail("original_token_unavailable", "Token gốc không còn hoạt động; khôi phục đúng Token gốc trong mục Token rồi thử lại.")
+        mapping, mapping_error = page_manager.resolve_verified_mapping(post.get("page_id"), entry)
+        if mapping_error or not mapping:
+            # Old schedules stored the exact Page token in their own row. Its
+            # Page identity AND video ownership are verified live by delete_reel.
+            saved_token = str(post.get("token") or post.get("page_token") or "")
+            if saved_token:
+                mapping = {"page_token": saved_token, "token_id": original_token_id, "page_id": details["page_id"]}
+            else:
+                return fail("page_token_mapping_missing", "Thiếu Page token gốc; vào mục Token và Đồng bộ Page cho Token gốc rồi thử lại.")
+        if str(mapping.get("token_id")) != original_token_id or str(mapping.get("page_id")) != details["page_id"]:
+            return fail("page_token_mapping_mismatch", "Binding không khớp Token gốc và Page; chưa gửi DELETE.")
+        secrets = [mapping["page_token"], entry.get("token"), post.get("token"), post.get("page_token")]
+        def scrub(value):
+            if isinstance(value, dict):
+                return {key: scrub(item) for key, item in value.items() if key not in ("token", "page_token", "access_token")}
+            if isinstance(value, list):
+                return [scrub(item) for item in value]
+            if isinstance(value, str):
+                for secret in secrets:
+                    if secret:
+                        value = value.replace(secret, "[redacted]")
+                return safe_error(value)
+            return value
+        def remember_attempt(attempt):
+            post["meta_last_cancel_attempt"] = scrub(attempt)
+            save_posts(posts)
+        try:
+            result = scrub(reel_poster.delete_reel(video_id, mapping["page_token"], original_token_id,
+                page_id=details["page_id"], confirmed_attempt=post.get("meta_last_cancel_attempt"),
+                on_delete_attempt=remember_attempt))
+        except Exception:
+            result = {"success": False, "state": "unknown", "error": "Kết quả hủy Meta chưa rõ; giữ bài trong app và kiểm tra lại."}
+        post["meta_cancel_result"] = result
+        if result.get("attempt"):
+            post["meta_last_cancel_attempt"] = result["attempt"]
+        post["meta_cancel_verified"] = bool(result.get("success") and result.get("safe_to_remove_local"))
+        try:
+            save_posts(posts)
+        except Exception:
+            return fail("cancel_result_save_failed", "Chưa lưu được kết quả hủy; giữ bài để kiểm tra lại.")
+        if not post["meta_cancel_verified"]:
+            return {**details, **result, "success": False, "local_removed": False}
+    response = {**details, "success": False, "meta_cancelled": True, "local_removed": False}
+    try:
+        from src.publisher.first_comment_queue import cancel_first_comment
+        response["first_comment"] = cancel_first_comment(
+            post_id=post.get("id"), queue_id=post.get("first_comment_queue_id"), object_id=video_id)
+        # Retain sanitized evidence even after removing the row from the app.
+        audit_path = POSTS_FILE.parent / "data" / "meta_cancel_history.json"
+        history = json.loads(audit_path.read_text(encoding="utf-8")) if audit_path.exists() else []
+        if not isinstance(history, list):
+            raise ValueError("Invalid Meta cancellation audit")
+        history = [item for item in history if item.get("post_id") != post.get("id")]
+        history.append({**details, "cancelled_at": datetime.now().astimezone().isoformat(),
+                        "result": post.get("meta_cancel_result"), "attempt": post.get("meta_last_cancel_attempt")})
+        page_manager._atomic_write(audit_path, history)
+        previous_rows = list(posts)
+        posts[:] = [item for item in posts if item.get("id") != post.get("id")]
+        try:
+            save_posts(posts)
+        except Exception:
+            posts[:] = previous_rows
+            raise
+        response.update(success=True, local_removed=True, state="deleted")
+        return response
+    except Exception:
+        # Meta is already cancelled; retain the row so the operator can retry
+        # local cleanup without ever issuing a second remote DELETE.
+        response.update(code="local_cleanup_failed",
+                        error="Meta đã hủy nhưng app chưa lưu được việc xóa local; mở lại app và thử dọn bài này.")
+        return response
+
+
+@app.route("/api/posts/<post_id>/cancel-meta", methods=["POST"])
+def api_cancel_meta_post(post_id):
+    from web.scheduled_publisher import _cycle_lock
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"success": False, "error": "Dữ liệu hủy không hợp lệ."}), 400
+    if body.get("confirm_cancel_meta") is not True:
+        return jsonify({"success": False, "code": "confirmation_required",
+                        "error": "Cần xác nhận hủy lịch Meta trước khi gửi lệnh DELETE."}), 400
+    if not _cycle_lock.acquire(blocking=False):
+        return jsonify({"success": False, "code": "busy", "error": "App đang xử lý bài; thử lại sau ít giây."}), 409
+    try:
+        posts = load_posts()
+        post = next((item for item in posts if item.get("id") == post_id), None)
+        result = _cancel_meta_post_record(post, posts, body.get("video_id"))
+        return jsonify(result), (200 if result.get("success") else (404 if result.get("code") == "not_found" else 409))
+    finally:
+        _cycle_lock.release()
+
+
+@app.route("/api/posts/cancel-meta-batch", methods=["POST"])
+def api_cancel_meta_batch():
+    from web.scheduled_publisher import _cycle_lock
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"success": False, "error": "Dữ liệu hủy không hợp lệ."}), 400
+    ids = body.get("post_ids")
+    video_ids = body.get("video_ids")
+    if body.get("confirm_cancel_meta") is not True:
+        return jsonify({"success": False, "code": "confirmation_required",
+                        "error": "Cần xác nhận hủy lịch Meta trước khi gửi lệnh DELETE."}), 400
+    if not isinstance(ids, list) or not ids or len(ids) > 500 or any(not isinstance(item, str) or not item.strip() for item in ids):
+        return jsonify({"success": False, "code": "invalid_post_ids", "error": "Chọn từ 1 đến 500 bài Meta đang giữ lịch."}), 400
+    ids = list(dict.fromkeys(str(item).strip() for item in ids))
+    if not isinstance(video_ids, dict) or any(not isinstance(video_ids.get(item), str) or not re.fullmatch(r"[0-9]+", video_ids[item]) for item in ids):
+        return jsonify({"success": False, "code": "meta_ids_required", "error": "Cần xác nhận Meta ID của từng bài; làm mới danh sách rồi thử lại."}), 400
+    if not _cycle_lock.acquire(blocking=False):
+        return jsonify({"success": False, "code": "busy", "error": "App đang xử lý bài; thử lại sau ít giây."}), 409
+    try:
+        posts = load_posts()
+        by_id = {str(item.get("id")): item for item in posts}
+        results = []
+        for post_id in ids:
+            try:
+                result = _cancel_meta_post_record(by_id.get(post_id), posts, video_ids[post_id])
+            except Exception:
+                result = {"success": False, "code": "cancel_failed", "error": "Chưa hoàn tất hủy; giữ lại bài để kiểm tra."}
+            result["post_id"] = post_id
+            results.append(result)
+        succeeded = sum(1 for item in results if item.get("success"))
+        return jsonify({"success": True, "requested": len(ids), "succeeded": succeeded,
+                        "failed": len(ids) - succeeded, "results": results})
+    finally:
+        _cycle_lock.release()
+
+
 @app.route("/api/posts/<post_id>/retry-website", methods=["POST"])
 def api_retry_post_website(post_id):
     """Retry only CMS preparation; never publish or reschedule Facebook."""

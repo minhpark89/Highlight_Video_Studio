@@ -96,6 +96,94 @@ class MetaReelPoster:
         except (requests.RequestException, ValueError, TypeError):
             return observation({"error": {"message": "Không đọc được trạng thái Meta; hãy kiểm tra lại."}}, 503)
 
+    def delete_reel(self, video_id, page_token, token_id=None, *, page_id,
+                    confirmed_attempt=None, on_delete_attempt=None):
+        """Delete an independently observed scheduled video with its own Page token.
+
+        Successful DELETE receipts survive a failed follow-up GET, allowing the
+        operator to verify removal later without sending another remote write.
+        """
+        from web.meta_diagnostics import observation, safe_error
+        video_id, page_id = str(video_id or ""), str(page_id or "")
+        if not re.fullmatch(r"[0-9]+", video_id) or not re.fullmatch(r"[0-9]+", page_id) or not page_token:
+            return {"success": False, "state": "blocked", "error": "Thiếu Meta ID, Page ID hoặc token gốc hợp lệ."}
+        clean = lambda value: safe_error(str(value or "").replace(page_token, "[redacted]"))
+        attempt = None
+        def result(state, error="", **extra):
+            return {"success": state == "deleted", "safe_to_remove_local": state == "deleted",
+                    "state": state, "error": clean(error), **extra}
+        def read_video():
+            response = requests.get(f"{self.base_url}/{video_id}", params={
+                "fields": "id,status,from", "access_token": page_token}, timeout=12)
+            self._track_headers(token_id or page_token, response)
+            data = response.json()
+            seen = observation(data, response.status_code)
+            seen["error"] = clean(seen["error"])
+            return response, data, seen
+        def is_missing(response, data):
+            error = data.get("error") if isinstance(data, dict) else {}
+            # An inaccessible object is evidence of removal ONLY alongside an
+            # explicit successful DELETE receipt for this exact video/Page.
+            return bool(not response.ok and isinstance(error, dict) and
+                        error.get("code") == 100 and error.get("error_subcode") == 33)
+        prior = confirmed_attempt if isinstance(confirmed_attempt, dict) else {}
+        already_accepted = (prior.get("state") == "accepted" and prior.get("video_id") == video_id
+                            and prior.get("page_id") == page_id and prior.get("token_id") == str(token_id or ""))
+        try:
+            identity = requests.get(f"{self.base_url}/me", params={
+                "fields": "id", "access_token": page_token}, timeout=12)
+            self._track_headers(token_id or page_token, identity)
+            identity_data = identity.json()
+            if not identity.ok or not isinstance(identity_data, dict) or str(identity_data.get("id") or "") != page_id:
+                return result("blocked", "Token chưa xác minh đúng Page của bài; chưa gửi DELETE.")
+            response, data, before = read_video()
+            if already_accepted and is_missing(response, data):
+                return result("deleted", attempt=prior, after=before)
+            if not response.ok or not isinstance(data, dict) or data.get("error") or str(data.get("id") or "") != video_id:
+                return result("unverified", "Không đọc được trạng thái video trên Meta; giữ bài trong app.", before=before)
+            owner = data.get("from") or {}
+            if not isinstance(owner, dict) or str(owner.get("id") or "") != page_id:
+                return result("blocked", "Chưa xác minh video thuộc đúng Page; chưa gửi DELETE.", before=before)
+            if before.get("publishing_status") != "scheduled" or before.get("video_status") == "published":
+                return result("unsafe", "Video không còn ở trạng thái Meta giữ lịch; chưa hủy.", before=before)
+            if already_accepted:
+                return result("unknown", "Meta đã nhận lệnh hủy nhưng video vẫn còn. Giữ bài để kiểm tra lại.",
+                              attempt=prior, before=before)
+            attempt = {"checked_at": datetime.now().astimezone().isoformat(), "operation": "delete_scheduled",
+                       "method": "DELETE", "endpoint": f"/{self.api_version}/{video_id}",
+                       "video_id": video_id, "page_id": page_id, "token_id": str(token_id or ""), "state": "unknown"}
+            response = requests.delete(f"{self.base_url}/{video_id}",
+                                       data={"access_token": page_token}, timeout=20)
+            self._track_headers(token_id or page_token, response)
+            attempt["http_status"] = response.status_code
+            try:
+                data = response.json()
+            except (ValueError, TypeError):
+                data = None
+            error = data.get("error") if isinstance(data, dict) else {}
+            error = error if isinstance(error, dict) else {}
+            attempt.update(error_code=error.get("code"), error_subcode=error.get("error_subcode"),
+                           error_message=clean(error.get("message")), trace_id=clean(error.get("fbtrace_id")))
+            accepted = response.ok and not error and (data is True or isinstance(data, dict) and data.get("success") is True)
+            if accepted:
+                attempt["state"] = "accepted"
+            elif response.status_code < 500 and error:
+                attempt["state"] = "rejected"
+            if on_delete_attempt:
+                on_delete_attempt(attempt)
+            if not accepted:
+                return result(attempt["state"], clean(self._meta_error(data)) if error else
+                              "Meta chưa xác nhận hủy; giữ bài trong app.", before=before, attempt=attempt)
+            response, data, after = read_video()
+            if is_missing(response, data):
+                return result("deleted", before=before, attempt=attempt, after=after)
+            return result("unknown", "Meta đã nhận DELETE nhưng chưa xác minh video đã bị xóa. Bấm kiểm tra hủy lại sau.",
+                          before=before, attempt=attempt, after=after)
+        except (requests.RequestException, ValueError, TypeError):
+            return result("unknown" if attempt else "unverified",
+                          "Kết nối Meta chưa rõ kết quả; giữ bài và kiểm tra lại, không tự đăng lại.",
+                          **({"attempt": attempt} if attempt else {}))
+
     def finish_existing_reel(self, page_id, page_token, video_id, description, *, schedule_time=None, token_id=None):
         """Finish an existing upload only; never initialize or transfer another video."""
         from web.meta_diagnostics import safe_error

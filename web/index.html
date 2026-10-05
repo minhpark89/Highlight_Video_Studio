@@ -1072,6 +1072,7 @@
               <label style="color:#cbd5e1;font-size:12px;display:flex;align-items:center;gap:8px;white-space:nowrap;"><input id="posts-select-all" type="checkbox" onchange="selectVisibleMetaPosts(this.checked)"> Chọn bài đủ điều kiện đang hiển thị</label>
               <button id="posts-handoff-selected" class="btn btn-primary btn-sm" onclick="handoffMetaPosts(false)" disabled><i class="bi bi-cloud-arrow-up"></i> Đưa bài đã chọn lên Meta chờ</button>
               <button id="posts-handoff-all" class="btn btn-outline btn-sm" onclick="handoffMetaPosts(true)" disabled>Đưa tất cả bài đủ điều kiện lên Meta</button>
+              <button id="posts-cancel-meta-all" class="btn btn-outline btn-sm" onclick="cancelMetaPosts()" disabled style="color:#fca5a5;border-color:rgba(239,68,68,.55);"><i class="bi bi-cloud-slash"></i> Hủy lịch Meta đang hiển thị</button>
             </div>
             <div id="posts-handoff-result" role="status" style="font-size:12px;color:#cbd5e1;white-space:pre-line;margin-top:8px;"></div>
           </div>
@@ -6108,6 +6109,10 @@
     const all = document.getElementById('posts-handoff-all');
     all.disabled = metaHandoffBusy || !eligible.length;
     all.textContent = `Đưa tất cả ${eligible.length} bài đủ điều kiện lên Meta`;
+    const metaScheduled = postsSnapshot.filter(p => p.status === 'meta_scheduled' && postsMatchScheduleFilter(p));
+    const cancelAll = document.getElementById('posts-cancel-meta-all');
+    cancelAll.disabled = metaHandoffBusy || !metaScheduled.length;
+    cancelAll.innerHTML = `<i class="bi bi-cloud-slash"></i> Hủy ${metaScheduled.length} lịch Meta đang hiển thị`;
     const visible = eligible.filter(postsMatchScheduleFilter);
     const selectAll = document.getElementById('posts-select-all');
     selectAll.disabled = metaHandoffBusy || !visible.length;
@@ -6146,6 +6151,45 @@
     } catch (e) {
       result.textContent = e.message;
       showToast(e.message, 'error');
+    } finally { metaHandoffBusy = false; await loadPostsTable({quiet:true}); updateMetaHandoffControls(); }
+  }
+  async function cancelMetaPosts(singleId = null) {
+    if (metaHandoffBusy) return;
+    const rows = postsSnapshot.filter(p => p.status === 'meta_scheduled' && (singleId ? p.id === singleId : postsMatchScheduleFilter(p)))
+      .map(p => ({id:p.id, page_name:p.page_name || p.page_id, page_id:p.page_id,
+                  video_id:String(p.meta_upload_video_id || p.meta_video_id || ''), token_name:p.token_name || p.token_id}));
+    if (!rows.length) return;
+    const tokenNames = [...new Set(rows.map(p => p.token_name || 'chưa lưu'))].join(', ');
+    if (!confirm(`Hủy ${rows.length} lịch Meta và xóa bài khỏi app?\nToken gốc: ${tokenNames}\n\nApp kiểm tra đúng Page và video trước khi hủy. Bài đã đăng sẽ được giữ lại. Bài lỗi vẫn còn trong app; việc thử đăng lại và First Comment sẽ tạm dừng. Các video local và bài website được giữ nguyên.`)) return;
+    metaHandoffBusy = true;
+    updateMetaHandoffControls();
+    const result = document.getElementById('posts-handoff-result');
+    const outcomes = [];
+    function renderResults(active = '') {
+      const removed = outcomes.filter(item => item.local_removed).length;
+      result.textContent = `Đã hủy Meta và xóa app: ${removed}/${rows.length} bài.` + (active ? '\n' + active : '') +
+        outcomes.map(item => `\n${item.page_name || item.page_id || item.post_id} · Meta ${item.video_id || 'chưa lưu'}: ` +
+          (item.local_removed ? 'Đã hủy và xóa khỏi app' : item.error || 'Chưa xác nhận hủy; giữ bài trong app')).join('');
+    }
+    try {
+      // Process each row independently, showing progress and preserving each
+      // result even if another Page rejects deletion or the connection fails.
+      for (let index = 0; index < rows.length; index++) {
+        const row = rows[index];
+        renderResults(`Đang xử lý ${index + 1}/${rows.length}: ${row.page_name} · Meta ${row.video_id}…`);
+        try {
+          const response = await fetch(`/api/posts/${encodeURIComponent(row.id)}/cancel-meta`, {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({video_id:row.video_id, confirm_cancel_meta:true})});
+          const data = await response.json();
+          outcomes.push({...row, ...data});
+        } catch (e) {
+          outcomes.push({...row, local_removed:false, error:'Chưa nhận được kết quả từ app. Làm mới và kiểm tra hủy lại.'});
+        }
+        renderResults();
+      }
+      const removed = outcomes.filter(item => item.local_removed).length;
+      showToast(`Đã hủy Meta và xóa ${removed}/${rows.length} bài khỏi app.`, removed === rows.length ? 'success' : 'error');
     } finally { metaHandoffBusy = false; await loadPostsTable({quiet:true}); updateMetaHandoffControls(); }
   }
   const postsOverdue = new Map();
@@ -6372,6 +6416,8 @@
           `;
         } else if (p.status === 'meta_scheduled') {
           statusBadge = `<span style="background:rgba(56,189,248,0.15);color:#38bdf8;border:1px solid #0ea5e9;padding:3px 8px;border-radius:6px;font-size:11px;">Meta giữ lịch · chờ đăng</span><div style="color:#94a3b8;font-size:11px;margin-top:5px;">Video tự đăng dù tắt app</div>`;
+          if (p.meta_cancel_requested) statusBadge += `<div style="color:#fbbf24;font-size:11px;white-space:normal;max-width:240px;margin-top:5px;">${p.meta_cancel_verified ? 'Đã hủy Meta · chờ xóa bản ghi app' : 'Đã yêu cầu hủy · app tạm dừng thử đăng và comment. Lịch Meta chưa xác nhận hủy.'}<br>${escapeHtml(p.meta_cancel_result?.error || '')}</div>`;
+          statusBadge += `<div style="color:#94a3b8;font-size:10px;margin-top:4px;">Meta ID: ${escapeHtml(String(p.meta_upload_video_id || p.meta_video_id || 'chưa lưu'))}</div>`;
         } else if (p.status === 'meta_handoff') {
           statusBadge = '<span style="color:#38bdf8;font-size:12px;"><i class="bi bi-cloud-arrow-up"></i> Chờ gửi lên Meta</span><div style="color:#94a3b8;font-size:11px;">Để app chạy đến khi Meta nhận lịch</div>';
         } else if (p.status === 'scheduled' && p.requested_publish_mode === 'meta_scheduled') {
@@ -6420,7 +6466,9 @@
           if (['verification_pending', 'queue_failed', 'failed', 'pending_retry', 'credential_missing'].includes(p.first_comment_status)) {
             commentSnippet += `<div style="color:#fca5a5;font-size:10px;white-space:normal;">${p.first_comment_status === 'credential_missing' ? 'Comment chờ khôi phục credential' : (p.first_comment_status === 'verification_pending' ? 'Chờ xác minh comment trên Meta' : (p.first_comment_status === 'pending_retry' ? 'Comment chờ thử lại' : 'Lỗi đăng comment'))} · ${escapeHtml(p.first_comment_error || '')}</div>`;
           }
-          if (p.status === 'meta_scheduled' && ['pending', 'pending_retry'].includes(p.first_comment_status)) {
+          if (p.meta_cancel_requested) {
+            commentSnippet += '<div style="color:#fbbf24;font-size:10px;white-space:normal;">First Comment tạm dừng theo yêu cầu hủy Meta</div>';
+          } else if (p.status === 'meta_scheduled' && ['pending', 'pending_retry'].includes(p.first_comment_status)) {
             commentSnippet += '<div style="color:#f59e0b;font-size:10px;white-space:normal;">Comment chờ sau giờ đăng · cần app chạy</div>';
           } else if (p.status === 'published' && p.first_comment_status === 'posted') {
             commentSnippet += '<div style="color:#22c55e;font-size:10px;">First Comment đã đăng</div>';
@@ -6488,9 +6536,11 @@
             <td style="padding: 12px 14px; text-align: right;">
               ${p.status === 'processing' ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="openMetaDiagnosis(this.dataset.postId)" style="margin-bottom:6px;white-space:nowrap;">Kiểm tra Meta</button>` : ''}
               ${p.can_handoff_meta ? `<button class="btn btn-primary btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="handoffMetaPosts(false,this.dataset.postId)" style="white-space:nowrap;margin-bottom:6px;" ${metaHandoffBusy ? 'disabled' : ''}><i class="bi bi-cloud-arrow-up"></i> Đưa lên Meta chờ</button>` : ''}
+              ${p.status === 'meta_scheduled' ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="cancelMetaPosts(this.dataset.postId)" style="white-space:nowrap;margin-bottom:6px;color:#fca5a5;border-color:rgba(239,68,68,.4);" ${metaHandoffBusy ? 'disabled' : ''} title="Đọc đúng trạng thái Meta rồi hủy lịch; chỉ xóa app sau khi Meta xác nhận"><i class="bi bi-cloud-slash"></i> ${p.meta_cancel_requested ? 'Kiểm tra hủy & xóa app' : 'Hủy Meta & xóa app'}</button>` : `
               <button class="btn btn-outline btn-sm" onclick="deletePostItem('${p.id}')" ${['meta_handoff','publishing','processing','meta_scheduled'].includes(p.status) ? 'disabled' : ''} style="color: #ef4444; border-color: rgba(239,68,68,0.3); padding: 4px 8px;" title="Xóa khỏi hàng đợi local; không hủy lịch Meta">
                 <i class="bi bi-trash"></i>
               </button>
+              `}
             </td>
           </tr>
         `;
