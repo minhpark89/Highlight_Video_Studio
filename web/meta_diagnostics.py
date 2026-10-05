@@ -48,6 +48,10 @@ def diagnose(post, seen=None):
         return result
     publishing = seen.get("publishing_status")
     processing = seen.get("processing_status")
+    if publishing != "published" and post.get("auto_finish_state") in ("sending", "accepted", "unknown"):
+        result.update(state="auto_recovery", message="App đang tự hoàn tất upload cũ",
+                      detail="Giữ nguyên Meta ID và đối soát kết quả; app sẽ tiếp tục phục hồi khi Meta xác nhận video còn chờ.")
+        return result
     if publishing == "published":
         result.update(state="published", message="Meta báo đã đăng", detail="Worker sẽ xác minh permalink trước khi cập nhật lịch sử và First Comment.")
     elif publishing == "scheduled":

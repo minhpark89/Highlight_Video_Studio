@@ -29,6 +29,11 @@ _active_posts_lock = threading.Lock()
 CLAIM_STALE_AFTER_SECONDS = 300
 OVERDUE_GRACE_SECONDS = 120
 
+# A failed local publish is safe to retry only while no Meta object was created.
+# Once an upload ID exists, the reconciliation path below is the only authority.
+SAFE_RETRY_STAGES = {"facebook_publish", "meta_preflight", "local_video", "website_content"}
+RETRY_BACKOFF_SECONDS = (30, 90, 300, 900)
+
 # Workers sharing one loop (Flask dev server vs packaged waitress) must not double-claim.
 _worker_lock = threading.Lock()
 _worker_started = False
@@ -119,6 +124,174 @@ def save_posts(posts):
     save_posts_file(POSTS_FILE, posts)
 
 
+def _post_public_text_is_english(post):
+    """Return whether the public fields sent to Meta pass the English gate."""
+    from src.english_text import assert_english
+
+    try:
+        for key in ("title", "content", "first_comment", "first_comment_snapshot"):
+            assert_english(post.get(key, ""), key)
+    except ValueError:
+        return False
+    return True
+
+
+def _repair_non_english_post(post, posts):
+    """Replace legacy public text with a deterministic English package.
+
+    Old queue rows can contain a foreign source title even though their scheduled
+    post is ready to publish. Keep that source title in a private audit field and
+    use a generic English viewing package for Meta. This path never uploads a
+    second video and is deliberately deterministic when the text provider is
+    unavailable.
+    """
+    if _post_public_text_is_english(post):
+        return False
+    from src.content_packages import QUEUE_FILE, _LOCK, _read, _write, fallback_package
+    from src.first_comment_profiles import load_profile_store
+
+    original = str(post.get("title") or "Original Video")
+    article_url = str(post.get("article_url") or "").strip()
+    profile_store = dict(post.get("first_comment_profile_store") or
+                         load_profile_store(POSTS_FILE.parent / "data" / "first_comment_profiles.json"))
+    profile_id = str(post.get("first_comment_profile_id") or profile_store.get("default_profile_id") or "builtin_general")
+    fallback = fallback_package(
+        "Original Video Highlight",
+        "Watch the complete source video and follow the key moments in this original clip.",
+        article_url,
+        profile_id,
+        profile_store,
+        "general",
+    )
+    post["legacy_source_title"] = original
+    post.update({
+        "title": fallback["hero_title"],
+        "content": fallback["caption"],
+        "first_comment": fallback.get("first_comment", ""),
+        "first_comment_snapshot": fallback.get("first_comment", ""),
+        "content_package_language": "en",
+        "content_package_status": "ready",
+        "content_package_error": "",
+        "english_repair": "deterministic_fallback",
+    })
+    # Keep the local Content Package consistent so a later retry cannot restore
+    # the rejected foreign text. The existing CMS URL/ID is never replaced here.
+    package_id = str(post.get("content_package_id") or "")
+    if package_id:
+        with _LOCK:
+            items = _read(QUEUE_FILE, [])
+            package = next((item for item in items if str(item.get("id")) == package_id), None)
+            if package is not None:
+                result = dict(package.get("result") or {})
+                result.update({key: fallback.get(key) for key in ("hero_title", "first_comment", "caption", "hashtags")})
+                result.update({"source": "auto_english_social_fallback", "legacy_source_title": original})
+                package["result"] = result
+                package["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                _write(QUEUE_FILE, items)
+    if not _post_public_text_is_english(post):
+        raise ValueError("English fallback failed validation")
+    return True
+
+
+def _requeue_safe_failures(posts, now_ts, current_dt):
+    """Return retryable local failures to the scheduler without touching Meta."""
+    changed = False
+    for post in posts:
+        if post.get("status") != "failed" or not post.get("retryable"):
+            continue
+        if any(post.get(key) for key in ("meta_upload_video_id", "meta_video_id", "meta_post_id", "post_fb_id", "outcome_unknown")):
+            continue
+        if post.get("retry_stage") not in SAFE_RETRY_STAGES:
+            continue
+        try:
+            retry_at = float(post.get("next_retry_at") or 0)
+        except (TypeError, ValueError):
+            retry_at = 0
+        if retry_at > now_ts:
+            continue
+        attempts = int(post.get("publish_retry_attempts") or 0)
+        if post.get("retry_stage") == "website_content" and post.get("content_package_id"):
+            from src.content_packages import get_package, retry_package
+            package = get_package(post["content_package_id"])
+            message = str((package or {}).get("website_error") or (package or {}).get("error") or "")
+            if package and package.get("status") in ("failed", "retryable") and re.search(
+                    r"429|5\d\d|timeout|timed out|connection|temporar|lookup failed", message, re.I):
+                retry_package(post["content_package_id"])
+        post.update({"status": "scheduled", "publish_retry_attempts": attempts + 1,
+                     "recovered_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                     "error": "", "schedule_error": ""})
+        changed = True
+    return changed
+
+
+def _resume_complete_upload(post, seen, poster, credential, posts, current_dt):
+    """Finish a remotely confirmed idle upload after its app due time.
+
+    The same ID is used throughout. Persist a write-ahead marker before Finish;
+    accepted/ambiguous responses remain read-only reconciliation and are never
+    re-uploaded or blindly replayed after a restart.
+    """
+    upload_id = str(post.get("meta_upload_video_id") or "")
+    now_ts = current_dt.timestamp()
+    due = _parse_scheduled_time(post.get("scheduled_time"))
+    if not upload_id or due is None or due > current_dt:
+        return False
+    idle_upload = (seen.get("video_status") == "upload_complete"
+                   and seen.get("processing_status") == "not_started"
+                   and seen.get("publishing_status") == "not_started")
+    overdue_native = (seen.get("video_status") == "ready" and seen.get("processing_status") == "complete"
+                      and seen.get("publishing_status") == "scheduled"
+                      and now_ts - due.timestamp() >= 300)
+    if (seen.get("http_status") != 200 or seen.get("id") != upload_id or seen.get("error")
+            or seen.get("copyright_matches") or seen.get("uploading_status") != "complete"
+            or not (idle_upload or overdue_native)):
+        return False
+    state = post.get("auto_finish_state")
+    if state in ("sending", "accepted", "unknown"):
+        # A later GET proving the same object is still idle is needed twice,
+        # after a long grace period, before another same-ID attempt is safe.
+        post["auto_finish_idle_checks"] = int(post.get("auto_finish_idle_checks") or 0) + 1
+        started = _parse_scheduled_time(post.get("auto_finish_started_at"))
+        if started is None or now_ts - started.timestamp() < 900 or post["auto_finish_idle_checks"] < 2:
+            return False
+    if post.get("meta_finish_recovery_attempts") and state is None:
+        return False
+    if now_ts < float(post.get("auto_finish_retry_at") or 0):
+        return False
+    _repair_non_english_post(post, posts)
+    attempts = int(post.get("auto_finish_attempts") or 0) + 1
+    post.update({"auto_finish_state": "sending", "auto_finish_attempts": attempts,
+                 "auto_finish_idle_checks": 0,
+                 "auto_finish_started_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                 "outcome_unknown": True, "retryable": False,
+                 "meta_next_check_at": now_ts + 60})
+    save_posts(posts)
+    try:
+        if overdue_native:
+            result = poster.publish_existing_scheduled_reel(upload_id, credential["token"], credential["token_id"])
+        else:
+            result = poster.finish_existing_reel(
+                post["page_id"], credential["token"], upload_id,
+                f"{post.get('title', '')}\n\n{post.get('content', '')}".strip(),
+                token_id=credential["token_id"],
+            )
+    except Exception:
+        result = {"state": "unknown", "error": "Finish outcome unknown; reconciling the existing upload."}
+    state = result.get("state") or "unknown"
+    post.update({"status": "processing", "publish_mode": "app_queue", "auto_finish_state": state,
+                 "auto_finish_error": sanitize_error(result.get("error")),
+                 "outcome_unknown": state != "rejected", "meta_next_check_at": now_ts + 60,
+                 "meta_schedule_status": "verification_pending", "retry_stage": "meta_processing",
+                 "error": "Existing upload Finish sent; waiting for verified Meta publication."})
+    post.pop("meta_scheduled_publish_time", None)
+    if state == "rejected":
+        delay = RETRY_BACKOFF_SECONDS[min(attempts - 1, len(RETRY_BACKOFF_SECONDS) - 1)]
+        post["auto_finish_retry_at"] = now_ts + delay
+        post["error"] = post["auto_finish_error"]
+    save_posts(posts)
+    return True
+
+
 def _record_posted_clip(clip_filename):
     with _FILE_LOCK:
         posted_list = []
@@ -203,6 +376,7 @@ def _process_scheduled_posts_once(
     now_ts = current_dt.timestamp()
 
     posts = load_posts()
+    _requeue_safe_failures(posts, now_ts, current_dt)
     posts_by_id = {post.get("id"): post for post in posts}
     def prepare_first_comment(item):
         linked_post = posts_by_id.get(item.get("post_id"))
@@ -216,7 +390,7 @@ def _process_scheduled_posts_once(
             if not verdict.get("ok"):
                 return {"ready": False, "error": "Exact First Comment credential unavailable; restore and Sync Page."}
             page_token = verdict["ready"][0]["token"]
-        if linked_post and linked_post.get("publish_mode") == "meta_scheduled":
+        if linked_post and (linked_post.get("publish_mode") == "meta_scheduled" or linked_post.get("status") != "published"):
             check = MetaReelPoster(token_vault=token_vault).check_processing_reel(
                 item.get("meta_video_id") or item.get("object_id"), page_token, exact_token_id or None,
             )
@@ -276,6 +450,10 @@ def _process_scheduled_posts_once(
             from web.meta_diagnostics import diagnose
             post["meta_observation"] = check["meta_observation"]
             post["meta_diagnosis"] = diagnose(post)
+            if _resume_complete_upload(
+                    post, check["meta_observation"], poster_for_check, credential, posts, current_dt):
+                reconciled += 1
+                continue
         reconciled += 1
         if check.get("verified"):
             post["post_fb_id"] = check["video_id"]
@@ -307,9 +485,9 @@ def _process_scheduled_posts_once(
             # Ledger and post state must agree before displaying confirmed success.
             try:
                 _record_posted_clip(post.get("media_file") or post.get("clip_filename"))
-                post.update({"status": "published", "published_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"), "meta_schedule_status": "published" if meta_scheduled else post.get("meta_schedule_status", ""), "error": ""})
             except Exception as exc:
                 post["ledger_error"] = sanitize_error(exc)
+            post.update({"status": "published", "published_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"), "meta_schedule_status": "published", "error": "", "retryable": False, "outcome_unknown": False})
             if post.get("first_comment") and post.get("first_comment_status") not in ("posted", "pending"):
                 try:
                     queued = enqueue_first_comment(
@@ -386,6 +564,13 @@ def _process_scheduled_posts_once(
         try:
             parse_meta_schedule_time(pending.get("scheduled_time"), now_ts=now_ts)
         except MetaScheduleTimeError as exc:
+            if exc.code == "meta_schedule_too_soon":
+                pending.update({"original_requested_publish_mode": "meta_scheduled",
+                                "requested_publish_mode": "app_queue", "publish_mode": "app_queue",
+                                "meta_schedule_status": "handoff_blocked",
+                                "meta_handoff_error": "Meta scheduling window elapsed; app will publish at the original due time.",
+                                "meta_schedule_fallback": "app_queue", "retryable": True})
+                continue
             pending.update({"status": "failed", "retryable": False,
                             "retry_stage": "meta_schedule_not_ready", "meta_schedule_status": "handoff_blocked",
                             "error": "Chưa giao được lịch cho Meta trong cửa sổ cho phép. Chọn giờ mới hoặc chế độ App giữ lịch. " + str(exc)})
@@ -455,6 +640,12 @@ def _process_scheduled_posts_once(
                 _active_posts.add(local_post["id"])
             try:
                 result = _publish_claimed_post(local_post, local_posts, poster, current_dt, token_vault, page_manager)
+                if (result.get("status") == "failed" and result.get("retryable")
+                        and result.get("retry_stage") in SAFE_RETRY_STAGES
+                        and not result.get("outcome_unknown")
+                        and not any(result.get(key) for key in ("meta_upload_video_id", "meta_video_id", "meta_post_id"))):
+                    attempts = int(result.get("publish_retry_attempts") or 0)
+                    result["next_retry_at"] = now_ts + RETRY_BACKOFF_SECONDS[min(attempts, len(RETRY_BACKOFF_SECONDS) - 1)]
                 save_posts(local_posts)
                 return result
             finally:
@@ -524,6 +715,7 @@ def _publish_claimed_post(post, posts, poster, current_dt, token_vault, page_man
     from src.content_packages import scheduled_video_path
     from src.publisher.meta_preflight import preflight_pages
     from src.publisher.first_comment_queue import enqueue_first_comment
+    _repair_non_english_post(post, posts)
     now_ts = current_dt.timestamp()
     post_id = post.get("id")
     page_id = post.get("page_id")

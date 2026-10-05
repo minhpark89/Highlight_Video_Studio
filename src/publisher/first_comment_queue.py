@@ -102,13 +102,11 @@ def process_due_first_comments(poster, now=None, prepare=None):
             elif result.get("outcome_unknown"):
                 item["status"] = "verification_pending"
                 item["last_error"] = "Comment request outcome is unknown; verify on Meta before retrying."
-            elif item["attempts"] >= 8:
-                item["status"] = "failed"
-                item["last_error"] = result.get("error", "Unknown error")
-                item["page_token"] = ""
             else:
                 item["last_error"] = result.get("error", "Unknown error")
-                delay = min(900, 30 * (2 ** (item["attempts"] - 1)))
+                # Definite rejections can recover after provider cooldowns or
+                # credential restoration. Do not abandon them after eight tries.
+                delay = min(900, 30 * (2 ** min(item["attempts"] - 1, 5)))
                 item["due_at"] = current + delay
             outcomes.append({
                 "queue_id": item.get("id"),

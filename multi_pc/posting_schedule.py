@@ -83,6 +83,11 @@ def next_paced_due_post(posts, now, *, global_seconds=90, token_seconds=900):
             last_by_token[token_id] = max(last_by_token.get(token_id, started), started)
         scheduled = parsed(post.get("scheduled_time"))
         if post.get("status") == "scheduled" and scheduled is not None and scheduled <= now:
+            try:
+                if float(post.get("next_retry_at") or 0) > now.timestamp():
+                    continue
+            except (TypeError, ValueError):
+                pass
             if post.get("auto_first_comment") or post.get("type") == "reel":
                 url = str(post.get("article_url") or "").strip()
                 comment = str(post.get("first_comment") or "").strip()

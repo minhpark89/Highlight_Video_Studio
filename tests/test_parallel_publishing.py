@@ -233,7 +233,7 @@ def test_native_handoffs_ignore_publish_gap_and_remote_processing_reservations(t
     assert saved["same-batch"]["status"] == "meta_handoff"
 
 
-def test_requested_meta_schedule_never_silently_becomes_app_publish(tmp_path):
+def test_expired_meta_handoff_falls_back_to_original_app_due_time(tmp_path):
     from web import scheduled_publisher as worker
     path = tmp_path / "posts.json"
     save_posts_file(path, [{"id": "late-meta", "status": "scheduled", "page_id": "fixture",
@@ -241,11 +241,14 @@ def test_requested_meta_schedule_never_silently_becomes_app_publish(tmp_path):
     with mock.patch.object(worker, "POSTS_FILE", path), \
          mock.patch("src.publisher.first_comment_queue.process_due_first_comments", return_value={}), \
          mock.patch("src.publisher.token_vault.TokenVault"), mock.patch("src.publisher.page_manager.PageManager"), \
-         mock.patch.object(worker, "_publish_claimed_post") as publish:
+         mock.patch.object(worker, "_publish_claimed_post", side_effect=lambda post, *args: post) as publish:
         result = worker.process_scheduled_posts_once(now=datetime(2026, 10, 1, 11))
-    assert result["posts"][0]["status"] == "failed"
-    assert result["posts"][0]["retry_stage"] == "meta_schedule_not_ready"
-    publish.assert_not_called()
+    row = result["posts"][0]
+    assert row["publish_mode"] == row["requested_publish_mode"] == "app_queue"
+    assert row["original_requested_publish_mode"] == "meta_scheduled"
+    assert row["meta_schedule_fallback"] == "app_queue"
+    assert row["scheduled_time"] == "2026-10-01 10:00:00"
+    publish.assert_called_once()
 
 
 def test_processing_reel_is_still_verified_after_six_attempts_without_reupload(tmp_path):

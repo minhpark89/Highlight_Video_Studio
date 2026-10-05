@@ -151,6 +151,26 @@ class MetaReelPoster:
         except (requests.RequestException, ValueError, TypeError):
             return {"verified": False, "status": "unverified", "meta_observation": observation({}, 503)}
 
+    def publish_existing_scheduled_reel(self, video_id, page_token, token_id=None):
+        """Publish an overdue, independently observed scheduled video in place."""
+        from web.meta_diagnostics import safe_error
+        if not re.fullmatch(r"[0-9]+", str(video_id or "")) or not page_token:
+            return {"accepted": False, "state": "rejected", "error": "Missing existing Meta video or credential"}
+        try:
+            response = requests.post(f"{self.base_url}/{video_id}",
+                                     data={"access_token": page_token, "published": "true"}, timeout=35)
+            self._track_headers(token_id or page_token, response)
+            data = response.json()
+            if response.status_code >= 500 or not isinstance(data, dict):
+                return {"accepted": False, "state": "unknown", "error": "Publish-existing outcome unknown; reconcile the same video"}
+            if not response.ok or data.get("error") or data.get("success") is False:
+                return {"accepted": False, "state": "rejected", "error": safe_error(self._meta_error(data)).replace(page_token, "[redacted]")}
+            if data.get("success") is True:
+                return {"accepted": True, "state": "accepted", "error": ""}
+        except (requests.RequestException, ValueError, TypeError):
+            pass
+        return {"accepted": False, "state": "unknown", "error": "Publish-existing outcome unknown; reconcile the same video"}
+
     def publish_reel(self, page_id, page_token, video_path, description="", first_comment="", schedule_time=None, token_id=None, reconcile_seconds=0, post_id=None, on_upload_initialized=None):
         try:
             assert_english(description, "Reel description")
