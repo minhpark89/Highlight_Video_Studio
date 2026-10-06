@@ -1,0 +1,25 @@
+{
+  "tag": "v1.2.5",
+  "source_commit": "1bed062ae03f67fbedcfda468cbc818878830ba6",
+  "meta_graph_api_version": "v24.0",
+  "assets": [
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.2.5.exe",
+      "size": 705077760,
+      "sha256": "8194509413b225e4217231bc9441be406e2f18132c3b1b0f7395c3c3b53f53b0"
+    },
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.2.5.sha256",
+      "size": 107,
+      "sha256": "91aa1c6ed56fb65b50cdefe1423d80ce4f1fb7d5b1ef1f35e4de04c11b5af0e1"
+    },
+    {
+      "name": "CODEX_CHECKPOINT_v1.2.5.md",
+      "size": 25183,
+      "sha256": "788ef0330a4ea58e84437fb3a0da2d56349df13a3f7390494e4f1bfcba84374b"
+    }
+  ],
+  "application_tests_run": false,
+  "installer_payload_inspected": true,
+  "live_runtime_upgraded": false
+}

@@ -41,4 +41,4 @@ Snapshot tài liệu: `E:\OPENCLAW\BOB\support\meta-v24-docs-20261006`, metadata
 
 Mẫu MXH đã được đọc IL, không chạy mẫu: cùng luồng Start/upload/Finish, mặc định v24, gọi `/me/accounts` trước publish, semaphore theo KeyId. GET theo header/UA/version giống MXH vẫn trả `API access blocked` với các credential đang lỗi trong phiên rà soát. Không xác nhận MXH đăng được đúng cùng Page/token/thời điểm bằng một receipt POST; không hứa đổi v24 sẽ bỏ hạn chế.
 
-Không chạy test chức năng/hồi quy hoặc đăng bài thật trong lượt đóng gói. Chỉ rà soát source/cú pháp, build bằng `-SkipTests`, rồi đọc payload và đối chiếu hash/identity/state. Chưa cài bộ mới vào app đang chạy và chưa phát hành GitHub.
+Không chạy test chức năng/hồi quy hoặc đăng bài thật trong lượt đóng gói. Chỉ rà soát source/cú pháp, build bằng `-SkipTests`, rồi đọc payload và đối chiếu hash/identity/state. Tại mốc đóng gói chưa cài bộ mới vào app đang chạy và chưa phát hành GitHub. Sau đó người dùng đã yêu cầu deploy v1.2.5 để tự tải/cài; trạng thái phát hành và tải công khai được ghi trong checkpoint/evidence trên nhánh release/v1.2.5.

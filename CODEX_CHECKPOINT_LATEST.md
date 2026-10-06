@@ -4,7 +4,9 @@ Ngày 2026-10-06, Asia/Saigon. Nhánh `release/v1.2.5`. Đọc [CHECKPOINT_V1_2_
 
 Theo yêu cầu người dùng, chuyển các luồng Meta của app từ Graph API v22.0 sang **v24.0**, rồi cập nhật backend theo tài liệu Meta về Page token/System User/NPE. Bản mới v1.2.5: refresh exact binding trước Init, cache 300 giây/lock theo credential, kiểm tra CREATE_CONTENT/MODERATE và scopes riêng, Bearer Graph/cursor pagination/OAuth rupload, pause 60 giây khi API access blocked và sanitized receipts. Giữ upload IDs/outcome_unknown và tránh đăng lại khi comment lỗi. Chưa thay scheduler/pacing hay live queue. Chưa cài app mới hoặc phát hành GitHub; không chạy test chức năng/hồi quy.
 
-Đã build và inspect payload local: `release/Highlight_Desktop_Test_Setup_v1.2.5.exe`, **705077760 bytes**, SHA256 `8194509413b225e4217231bc9441be406e2f18132c3b1b0f7395c3c3b53f53b0`. Tag v1.2.5/source commit `1bed062ae03f67fbedcfda468cbc818878830ba6`, identity sạch, Graph v24.0, khớp 19 source file, không có runtime state/credential. Evidence `checkpoints/evidence/v1.2.5/installer_payload.json`. Không chạy test hồi quy/chức năng, chưa tự cài hoặc phát hành GitHub.
+Đã build và inspect payload local: `release/Highlight_Desktop_Test_Setup_v1.2.5.exe`, **705077760 bytes**, SHA256 `8194509413b225e4217231bc9441be406e2f18132c3b1b0f7395c3c3b53f53b0`. Tag v1.2.5/source commit `1bed062ae03f67fbedcfda468cbc818878830ba6`, identity sạch, Graph v24.0, khớp 19 source file, không có runtime state/credential. Evidence `checkpoints/evidence/v1.2.5/installer_payload.json`. Không chạy test hồi quy/chức năng, chưa tự cài vào runtime thật.
+
+Người dùng đã yêu cầu phát hành v1.2.5 lên GitHub và xác nhận credential nhóm đang dùng để post đã hoạt động lại; nhóm token còn lại trong snapshot cũ không dùng để post, không cần xử lý trong đợt này. Đang chuẩn bị phát hành 3 asset; không coi snapshot lỗi cũ là restriction còn cần mở khóa. Đọc checkpoint v1.2.5 để lấy full symptom/source map, bước thu thập lỗi, các guard cần giữ, official Meta docs và thứ tự tối ưu chưa triển khai.
 
 ## Bản phát hành trước — v1.2.3
 
