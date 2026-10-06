@@ -12,6 +12,8 @@ Source backup offline: `E:\OPENCLAW\BOB\support\v1.2.2\Highlight_Source_v1.2.2.b
 
 Session sau đọc checkpoint v1.2.2 để lấy lệnh build/publish và cách xử lý từng loại lỗi; kiểm tra identity/PID/port, backup local trước nâng cấp, giữ Meta IDs/comment receipts/ledger. Bài `post_1791183298_90ab26` đã published; không đăng lại. Lỗi `368/4854002` vẫn cần xác minh Facebook.
 
+Đối chiếu bổ sung 10:35–10:39: replay bản sao dữ liệu thật giúp 273 bài tiếp tục chuẩn bị, cách ly 10 gói non-English; 100 cặp Page–Token qua preflight binding đã lưu và 300 MP4 Daily qua ffprobe. Runtime thật chưa thay đổi. Đã render MP4 thay thế 55 giây cho clip 262 bytes ở ảnh 1, đặt ngoài output intake tại `support/v1.2.2/media-recovery/`; chưa gửi Meta. Đọc phần bổ sung trong checkpoint chi tiết và các report `*_verify.json` trước khi import/thay thế. Source backup mới: `support/v1.2.2/Highlight_Source_v1.2.2_runtime-audit.bundle`.
+
 ## Bản phát hành trước — v1.2.1
 
 Ngày: 2026-10-06 (Asia/Saigon). Nhánh phát hành: `release/v1.2.1`. Tag source: `v1.2.1` tại `edfdd753800c0171e5758b25b9da8a3b96766df3`.

@@ -1,0 +1,33 @@
+{
+  "observed_at": "2026-10-06T10:36:41.681512+07:00",
+  "post_id": "post_1791183244_b98215",
+  "existing_meta_video_id": "1456548559709071",
+  "old_clip": "job_1790748353_7c7164_clip_2.mp4",
+  "old_bytes": 262,
+  "old_sha256": "f5c0374d61906a4097bc8d93b73bf9e5d7948bd7ba4ecb12c089b2fbc4e90d50",
+  "source_video_duration": 129.613787,
+  "invalid_original_bounds": [
+    210,
+    268
+  ],
+  "recovered_bounds": [
+    37.31,
+    92.31
+  ],
+  "replacement": "E:\\OPENCLAW\\BOB\\support\\v1.2.2\\media-recovery\\job_1790748353_7c7164_clip_2_recovered.mp4",
+  "replacement_probe": {
+    "duration": 55.033008,
+    "size": 30265431,
+    "width": 1080,
+    "height": 1920
+  },
+  "replacement_sha256": "2c3d057faeeae5104f240212473d3d47f801380ce3b68a75ff25b4d12abae252",
+  "aspect_ratio": "9:16",
+  "reframe_mode": "blur_bg",
+  "subtitles": "none; original trailer audio retained",
+  "old_clip_unchanged": true,
+  "live_queue_changed": false,
+  "meta_actions_sent": false,
+  "in_live_output_intake": false,
+  "next_step": "After fresh Meta terminal diagnosis, explicitly import/use this MP4 through the replacement workflow; preserve old Meta IDs and receipts."
+}

@@ -1,0 +1,184 @@
+{
+  "observed_at": "2026-10-06T10:35:38.272520+07:00",
+  "source_commit": "e5fa37306e2c9214f0012ff36784bd8c629f44e7",
+  "runtime_version": "1.2.1",
+  "mode": "isolated runtime-state replay, no content/CMS/Meta worker started",
+  "live_queues_written": false,
+  "network_calls_allowed": false,
+  "before_counts": {
+    "published": 580,
+    "processing": 8,
+    "meta_scheduled": 15,
+    "preparing": 738,
+    "draft": 90
+  },
+  "after_counts": {
+    "published": 580,
+    "processing": 8,
+    "meta_scheduled": 15,
+    "preparing": 465,
+    "scheduled": 273,
+    "draft": 90
+  },
+  "cycles": [
+    {
+      "imported": 0,
+      "assigned": 0,
+      "paused": false,
+      "reason": "",
+      "backlog": 0,
+      "free_gb": 257.63,
+      "max_backlog": 200
+    },
+    {
+      "imported": 0,
+      "assigned": 0,
+      "paused": false,
+      "reason": "",
+      "backlog": 0,
+      "free_gb": 257.63,
+      "max_backlog": 200
+    }
+  ],
+  "changed_posts": 284,
+  "quarantined_cached_packages": [
+    {
+      "id": "content_1790751768_4b3b6700",
+      "error": "article_html contains a non-English paragraph",
+      "kept_existing_article_url": true
+    },
+    {
+      "id": "content_1791015596_9f61b9da",
+      "error": "article_html contains a non-English paragraph",
+      "kept_existing_article_url": true
+    },
+    {
+      "id": "content_1791015706_1d7ffb45",
+      "error": "article_html contains a non-English paragraph",
+      "kept_existing_article_url": true
+    },
+    {
+      "id": "content_1791015793_54c472cd",
+      "error": "article_html contains a non-English paragraph",
+      "kept_existing_article_url": true
+    },
+    {
+      "id": "content_1791015823_d9a3fccf",
+      "error": "article_html contains a non-English paragraph",
+      "kept_existing_article_url": true
+    },
+    {
+      "id": "content_1791015858_4ca62065",
+      "error": "article_html contains a non-English paragraph",
+      "kept_existing_article_url": true
+    },
+    {
+      "id": "content_1791015864_b197575b",
+      "error": "article_html contains a non-English paragraph",
+      "kept_existing_article_url": true
+    },
+    {
+      "id": "content_1791015882_a88e79a4",
+      "error": "article_html contains a non-English paragraph",
+      "kept_existing_article_url": true
+    },
+    {
+      "id": "content_1791016000_5b0c7d0a",
+      "error": "article_html contains a non-English paragraph",
+      "kept_existing_article_url": true
+    },
+    {
+      "id": "content_1791016017_1081bf20",
+      "error": "article_html contains a non-English paragraph",
+      "kept_existing_article_url": true
+    }
+  ],
+  "selected_screenshot_posts": [
+    {
+      "post_id": "post_1791183244_b98215",
+      "status": "processing",
+      "video_id": "1456548559709071",
+      "diagnosis_state": "rejected",
+      "can_retry_without_upload": false,
+      "can_replace_failed_video_from_saved_observation": true,
+      "first_comment_status": "ready",
+      "observation_checked_at": "2026-10-06T10:28:47.669711+07:00",
+      "observation_http": 200,
+      "observation_error": ""
+    },
+    {
+      "post_id": "post_1791183298_90ab26",
+      "status": "published",
+      "video_id": "2459387687888190",
+      "diagnosis_state": "published",
+      "can_retry_without_upload": false,
+      "can_replace_failed_video_from_saved_observation": false,
+      "first_comment_status": "posted",
+      "observation_checked_at": "2026-10-06T09:52:54.746107+07:00",
+      "observation_http": 200,
+      "observation_error": ""
+    },
+    {
+      "post_id": "post_1791183332_83cabf",
+      "status": "meta_scheduled",
+      "video_id": "1778638966517308",
+      "diagnosis_state": "schedule_overdue",
+      "can_retry_without_upload": false,
+      "can_replace_failed_video_from_saved_observation": false,
+      "first_comment_status": "pending",
+      "observation_checked_at": "2026-10-06T10:29:01.916866+07:00",
+      "observation_http": 400,
+      "observation_error": "API access blocked."
+    },
+    {
+      "post_id": "post_1791183333_3acce6",
+      "status": "meta_scheduled",
+      "video_id": "844950208675218",
+      "diagnosis_state": "schedule_overdue",
+      "can_retry_without_upload": false,
+      "can_replace_failed_video_from_saved_observation": false,
+      "first_comment_status": "pending",
+      "observation_checked_at": "2026-10-06T10:29:03.707851+07:00",
+      "observation_http": 400,
+      "observation_error": "API access blocked."
+    },
+    {
+      "post_id": "post_1791183333_2b2c9e",
+      "status": "meta_scheduled",
+      "video_id": "1419917729556034",
+      "diagnosis_state": "schedule_overdue",
+      "can_retry_without_upload": false,
+      "can_replace_failed_video_from_saved_observation": false,
+      "first_comment_status": "pending",
+      "observation_checked_at": "2026-10-06T10:29:04.783860+07:00",
+      "observation_http": 400,
+      "observation_error": "API access blocked."
+    }
+  ],
+  "daily_plan_audits": [
+    {
+      "plan_id": "group:grp_1791020096_3",
+      "groups": [
+        "grp_1791020096_3"
+      ],
+      "slots": [
+        "04:00",
+        "10:50"
+      ],
+      "approval_mode": "automatic",
+      "publish_mode": "meta_scheduled",
+      "reserved_posts": 300,
+      "status_counts": {
+        "meta_scheduled": 3,
+        "preparing": 24,
+        "scheduled": 273
+      },
+      "assignments_complete": true,
+      "assigned_token_groups": [
+        ""
+      ]
+    }
+  ],
+  "shadow_output_media_copied": false,
+  "pressure_scope": "Shadow output is empty; cycle backlog values do not represent the live warehouse."
+}

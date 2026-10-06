@@ -34,6 +34,20 @@ App tại `E:\OPENCLAW\BOB\Highlight destop test` đang chạy v1.2.1, commit `e
 
 ## Session sau tiếp tục sửa lỗi
 
+### Đối chiếu runtime và MP4 bổ sung, 2026-10-06 10:35–10:39
+
+Ứng dụng vẫn chạy v1.2.1. Snapshot mới có 580 published, 8 processing, 15 meta_scheduled, 738 preparing và 90 draft. Không dùng số đếm trước đó như trạng thái hiện tại; worker thật vẫn hoạt động.
+
+Đã replay hai chu kỳ v1.2.2 trên bản sao riêng, chặn mọi request mạng và giữ queue thật nguyên trạng. 273 bài preparing chuyển sang scheduled trong bản sao; 10 package ready có paragraph non-English được cách ly failed và giữ Website URL cũ. 300 bài của Daily plan có đủ Page/Token/giờ, đều thuộc nhóm đã chọn. Đọc riêng binding thật đã lưu: 100/100 cặp Page–Token qua preflight. Đọc riêng MP4 thật bằng ffprobe: 300/300 file hợp lệ. Đây là bằng chứng về phân bổ và áp dụng cache; không chứng minh đã xuất bản Meta hoặc đã nâng cấp runtime. Bản sao không có media output nên pressure/backlog của replay không đại diện backlog thật. Xem `runtime_replay_verify.json`, `daily_bindings_verify.json`, `daily_media_verify.json`.
+
+Ảnh 1: source thật `downloads/job_1790748353_7c7164.mp4` dài **129.613787s**; clip cũ cắt **210–268s** nên file `job_1790748353_7c7164_clip_2.mp4` chỉ **262 bytes**. Saved Meta observation HTTP 200 xác nhận video error, processing complete, publishing not_started. Đã render MP4 thay thế local bằng renderer đã sửa, mốc **37.31–92.31s**, 9:16, 1080×1920, nền mờ giữ toàn khung game, audio gốc, không thêm subtitle. File dài **55.033008s**, 30265431 bytes, SHA256 `2c3d057faeeae5104f240212473d3d47f801380ce3b68a75ff25b4d12abae252`.
+
+Asset local: `E:\OPENCLAW\BOB\support\v1.2.2\media-recovery\job_1790748353_7c7164_clip_2_recovered.mp4`. Giữ nguyên hash/file 262 bytes, post và Video ID `1456548559709071`; MP4 mới nằm ngoài output intake, chưa được import vào queue hoặc gửi Meta. Xem receipt `replacement_verify.json` trong evidence và thư mục media-recovery. Khi nhập asset để tạo lịch thay thế, tạm dừng intake trước để tránh worker Daily nhận file trước thao tác thay thế; fresh diagnosis phải vẫn xác nhận terminal đúng ID. UI dùng tên file MP4 trong output, nên cần import/copy có kiểm soát rồi dùng **Tạo lịch lại bằng video đã sửa**, chọn giờ mới và tiếp tục giữ bài/receipt cũ.
+
+Ảnh 2: đã xác nhận post `post_1791183298_90ab26` là published và First Comment **posted**. Ảnh 3: ba Video IDs `1778638966517308`, `844950208675218`, `1419917729556034` còn meta_scheduled và observation HTTP 400 `API access blocked`. Bản mới xác định schedule_overdue; cần Sync đúng Token/Page và fresh read. Saved binding hợp lệ không chứng minh Graph API hiện có quyền đọc/xuất bản đối tượng.
+
+Source backup bổ sung chứa checkpoint/evidence mới: `E:\OPENCLAW\BOB\support\v1.2.2\Highlight_Source_v1.2.2_runtime-audit.bundle`. Bộ cài/tag ứng dụng vẫn giữ nguyên commit đã kiểm chứng; commit bổ sung chỉ là bằng chứng và hướng dẫn phục hồi.
+
 1. Đọc `CODEX_CHECKPOINT_LATEST.md` rồi checkpoint này. Đối chiếu `git status`, nhánh, tag và `build_identity.json`; evidence `installer_verify.json` chứa commit source chính xác của bộ cài. Không di chuyển tag cũ hoặc force-push.
 2. Xác định runtime theo `%LOCALAPPDATA%\HighlightVideoStudio\run\runtime.json`, chỉ đọc host/port/pid/started_at/url ra báo cáo. Không in session token. Đối chiếu PID và listening port, không mặc định 5080/62711.
 3. Trước nâng cấp hoặc sửa dữ liệu, đóng app đúng cách rồi backup local: thư mục cài/data, posts/jobs/config, Page/Token/group mappings, output, ledger SQLite và sidecars. Không chỉnh queue khi worker chạy; không đưa backup/credential lên GitHub.

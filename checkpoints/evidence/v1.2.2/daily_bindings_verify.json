@@ -1,0 +1,10 @@
+{
+  "observed_at": "2026-10-06T10:37:32.735608+07:00",
+  "mode": "read-only saved binding preflight; no Meta call",
+  "reserved_posts": 300,
+  "unique_page_token_pairs": 100,
+  "ready_pairs": 100,
+  "blocked_codes": {},
+  "blocked_pairs": [],
+  "all_assigned_pages_in_opted_in_group": true
+}
