@@ -2,6 +2,8 @@
 
 Ngày 2026-10-06, Asia/Saigon, nhánh `release/v1.2.7`, Graph v24.0. Đọc [CHECKPOINT_V1_2_7_MEDIA_CMS_RECOVERY_20261006.md](CHECKPOINT_V1_2_7_MEDIA_CMS_RECOVERY_20261006.md). Sửa false positive English headings còn tồn tại sau cài v126. Ưu tiên chọn clip đã FFprobe/hash/claim/source kiểm tra trong kho; fallback render nền nguồn gốc, progress/preview. Replacement preparing và chỉ đăng khi Content/Website/embed/First Comment ready. Giữ IDs/audit/claims, chống bấm lặp và restart. Chưa tự cài/sửa runtime thật hoặc publish/delete Meta/CMS thật. Evidence/tools mới tại checkpoints/{evidence,tools}/v1.2.7. Trạng thái phát hành cuối xem checkpoint chi tiết.
 
+Build v127: 705445376 bytes, SHA256 95ad9365a65eaa88fdad20b83034a2d90c0733edaf2efeda2ea0d1480f55170d, tag/source 06ad9f5328e16f3b5794ae8478adfe753a5f7ca3, clean identity/Graph v24/31 files khớp. Offline 537 passed, 4 skipped, 29 subtests; Chromium 5 checks/0 JS error. Đang chuẩn bị phát hành; trạng thái cuối được bổ sung sau public download verification.
+
 ## Checkpoint trước
 
 # Latest checkpoint — v1.2.6 Content recovery

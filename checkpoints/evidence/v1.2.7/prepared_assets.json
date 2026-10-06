@@ -1,0 +1,22 @@
+{
+  "success": true,
+  "source_commit": "06ad9f5328e16f3b5794ae8478adfe753a5f7ca3",
+  "prepared_at_utc": "2026-10-06T09:58:35.462575+00:00",
+  "assets": [
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.2.7.exe",
+      "size": 705445376,
+      "sha256": "95ad9365a65eaa88fdad20b83034a2d90c0733edaf2efeda2ea0d1480f55170d"
+    },
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.2.7.sha256",
+      "size": 107,
+      "sha256": "09768e8a196cbaa6cfb2d62206c77949299049df8193f9410a8bea49ec14118e"
+    },
+    {
+      "name": "CODEX_CHECKPOINT_v1.2.7.md",
+      "size": 24968,
+      "sha256": "2e6da25975260398c25d2ac9d02e889a0e2f474e07436fa61aa72e3e39aa46a1"
+    }
+  ]
+}

@@ -82,7 +82,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build_release.ps1 -Version 1
 
 ### Deployment
 
-Chưa build/public tại thời điểm tạo checkpoint đầu. Sẽ bổ sung source/tag/hash/asset/release ID và anonymous verification sau khi hoàn tất. Tag source và branch evidence có thể khác commit, tag phải khớp installer build_identity.
+Build và inspect hoàn tất: tag/source `06ad9f5328e16f3b5794ae8478adfe753a5f7ca3`, clean identity, Graph v24.0, 31 source/lexicon/license files khớp; không có state/credential thật. Installer `Highlight_Desktop_Test_Setup_v1.2.7.exe`, **705445376 bytes**, SHA256 `95ad9365a65eaa88fdad20b83034a2d90c0733edaf2efeda2ea0d1480f55170d`. Offline cuối **537 passed, 4 skipped, 29 subtests passed**; JS 4 inline + 3 external, templates identical; Chromium 5 checks/0 errors.
+
+Chưa public tại thời điểm chuẩn bị asset checkpoint. Release ID/link/anonymous full-download verification sẽ được bổ sung trên nhánh release sau phát hành. Asset checkpoint được chuẩn bị trước public và giữ nguyên khi đã upload. Tag source và branch evidence có thể khác commit, tag phải khớp installer build_identity.
 
 ## Session sau
 
