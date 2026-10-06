@@ -50,3 +50,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File checkpoints/tools/v1.2.3/ver
 ```
 
 Source phải sạch trước build. Credential GitHub chỉ đọc trong memory từ file đã có ở workspace; không in/commit credential. Helper giữ Git config kế thừa rồi thêm auth header trong memory. Khi có mạng, lần lượt chạy `python checkpoints/tools/v1.2.3/github_release.py inspect`, `push`, `draft`, `upload`, `publish`, `verify`. Ba asset: installer, SHA256, `CODEX_CHECKPOINT_v1.2.3.md`. Chỉ báo deploy thành công khi verify xác nhận tag/branch/digest và link tải công khai. Không bỏ qua hạn chế mạng của môi trường.
+
+## Tiếp tục deploy bằng đúng token đã chỉ định
+
+Token được đọc từ **`E:\OPENCLAW\BOB\token github.txt`** bằng helper ngay từ lần deploy trước; không cần thay token vào source hoặc URL remote. Lần kiểm tra lại sau yêu cầu dùng token xác nhận đọc file/nhận dạng token thành công. DNS cả `github.com` và `api.github.com` hoạt động. Tạo TCP socket đến port 443 của cả hai trả `PermissionError`, errno=13, **WinError 10013**. Request `/user` có Bearer token cũng dừng ở cùng lỗi socket, chưa nhận HTTP response. Vì vậy chưa thể kết luận token hết hạn/thiếu quyền; chưa xảy ra kiểm tra xác thực ở phía GitHub. Không mô tả đây là GitHub ban tài khoản. Evidence: `network_diagnosis.json` và `deployment_status.json`.
+
+Session trước thực sự đã phát hành v1.2.1: Release ID `404026464`, kiểm tra public asset lúc `2026-10-06T02:06:56+07:00`; `checkpoints/evidence/v1.2.1/release.json` có URL và digest đã xác minh. Điều đó không chứng minh quyền kết nối của phiên hiện tại giống phiên cũ. Phiên hiện tại có mạng hạn chế và không cho nâng quyền; không đổi proxy/TLS, mở background process ngoài sandbox hoặc dùng runtime khác để lách chặn.
+
+Chạy lệnh sau **khi môi trường cho phép kết nối GitHub**, tại repo `E:\OPENCLAW\BOB\source-worktree`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File checkpoints/tools/v1.2.3/deploy_github.ps1
+```
+
+Helper `deploy` thực hiện các bước theo thứ tự, dừng ngay khi lỗi:
+
+1. `inspect`: gọi `/user` bằng đúng token, đọc quyền push repo và tình trạng release v1.2.3. Nếu HTTP 401/403 thật sự được trả về thì lúc đó mới xử lý token/quyền.
+2. `push`: kiểm tra source sạch, hash/size installer khớp proof, tag local đúng commit đóng gói; push atomic nhánh `release/v1.2.3` và tag `v1.2.3`, không force. Tag app cố định ở `8a5f77f0f5be55a8839e13b1542763b7d936438d`; HEAD nhánh có thể là commit checkpoint mới hơn.
+3. Nếu chưa có release: tạo draft. Nếu có: `resume` kiểm tra tag remote khớp packaged commit, từng asset hiện có khớp tên/size/digest local rồi phục hồi metadata local. Không thay asset khác nội dung. Nếu release đã public, đi thẳng verify sau resume.
+4. Với draft, upload đủ 3 asset rồi kiểm tra **cả 3** size/digest/state trước publish. `release/CODEX_CHECKPOINT_v1.2.3.md` đã chuẩn bị; không chỉnh lại asset sau khi upload nếu muốn resume không đổi digest. Checkpoint trong source có thể cập nhật riêng sau đó.
+5. `verify`: kiểm tra release public, đúng 3 tên asset, tag/branch, digest và HTTP HEAD tải công khai không đăng nhập. Chỉ sau bước này cập nhật checkpoint thành deploy thành công và đưa link tải cho người dùng.
+
+Các action lẻ vẫn chạy được để chẩn đoán: `python checkpoints/tools/v1.2.3/github_release.py <action>` với action `inspect`, `push`, `draft`, `resume`, `upload`, `publish`, `verify`. Metadata ignored tại `release/v1.2.3_release.json`; không có metadata không có nghĩa release chưa tồn tại, phải inspect/resume trước. Không tạo release khác để che lần dở dang.
+
+Kiểm thử tooling bổ sung: `python -m pytest tests/test_github_deploy.py -q --no-header` → **5 passed**. App installer/source/tag đã kiểm chứng giữ nguyên; không cần build lại vì chỉ sửa công cụ deploy ngoài payload. Source backup bundle được cập nhật cùng nhánh checkpoint mới. Chưa nâng cấp runtime, chưa dời lịch thật hoặc gửi Meta/CMS trong lần thử deploy này.

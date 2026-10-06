@@ -10,6 +10,10 @@ Bộ cài đã kiểm chứng: `release/Highlight_Desktop_Test_Setup_v1.2.3.exe`
 
 **GitHub hiện không kết nối được**, chưa có release công khai v1.2.3. Session sau dùng checkpoint chi tiết để tiếp tục deploy và nâng cấp đúng runtime. Không dùng link download dự đoán như link đã hoạt động. Source backup offline ở `E:\OPENCLAW\BOB\support\v1.2.3\Highlight_Source_v1.2.3.bundle` (nhánh/tag/checkpoint); installer và các asset nằm ở `source-worktree/release/`.
 
+Kiểm tra lại bằng đúng `E:\OPENCLAW\BOB\token github.txt`: file đọc được, nhận dạng token được; DNS github.com/api.github.com thành công, cả hai kết nối TCP 443 trả **PermissionError/WinError 10013**, chưa nhận HTTP từ GitHub nên chưa kiểm tra được quyền token. Đây là hạn chế kết nối của phiên, không có bằng chứng GitHub từ chối token. Bằng chứng v1.2.1 phát hành trước vẫn có Release ID `404026464`, ngày 06/10 lúc 02:06 +07.
+
+Lệnh tiếp tục trong môi trường có kết nối GitHub: `powershell -NoProfile -ExecutionPolicy Bypass -File checkpoints/tools/v1.2.3/deploy_github.ps1`. Helper đọc token trong memory, thực hiện inspect → push → draft hoặc resume → upload → publish → verify; không sửa tag/source/asset đã phát hành. 5 kiểm thử mới xác minh dừng khi push lỗi, thiếu quyền và không publish lại release công khai. Đọc `checkpoints/evidence/v1.2.3/network_diagnosis.json` và phần tiếp tục deploy trong checkpoint chi tiết.
+
 ## Checkpoint trước — v1.2.2
 
 Ngày: 2026-10-06, Asia/Saigon. Xem [CHECKPOINT_V1_2_2_META_RECOVERY_20261006.md](CHECKPOINT_V1_2_2_META_RECOVERY_20261006.md).

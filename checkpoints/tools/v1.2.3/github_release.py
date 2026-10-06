@@ -19,6 +19,22 @@ META = RELEASE / "v1.2.3_release.json"
 sys.stdout.reconfigure(encoding="utf-8")
 import requests
 
+
+def connection_failure(exc):
+    """Report only error codes, never requests, headers or credential values."""
+    seen = set()
+    def denied(error):
+        if not isinstance(error, BaseException) or id(error) in seen:
+            return False
+        seen.add(id(error))
+        if getattr(error, "winerror", None) == 10013:
+            return True
+        return any(denied(child) for child in (getattr(error, "__cause__", None),
+                   getattr(error, "__context__", None), getattr(error, "reason", None), *error.args))
+    if denied(exc):
+        return "Windows denied the TCP connection (WinError 10013); no GitHub authentication response was received"
+    return "GitHub connection unavailable; credential-bearing network details withheld"
+
 raw = (ROOT / "token github.txt").read_text(encoding="utf-8-sig")
 match = re.search(r"\b(?:ghp_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+)\b", raw)
 if not match:
@@ -33,8 +49,8 @@ api_base = "https://api.github.com/repos/" + REPO
 def request(method, suffix, *, expected=(200,), **kwargs):
     try:
         response = session.request(method, api_base + suffix, timeout=45, **kwargs)
-    except requests.RequestException:
-        raise RuntimeError("GitHub request failed; network details withheld") from None
+    except requests.RequestException as exc:
+        raise RuntimeError(connection_failure(exc)) from None
     if response.status_code not in expected:
         raise RuntimeError(f"GitHub {method} {suffix} returned HTTP {response.status_code}; response body withheld")
     return None if response.status_code == 404 else (response.json() if response.content else None)
@@ -53,6 +69,8 @@ def git(*arguments):
     result = subprocess.run(["git", *arguments], cwd=SOURCE, env=env, capture_output=True, text=True,
         creationflags=subprocess.CREATE_NO_WINDOW)
     if result.returncode:
+        if "Failed to connect" in result.stderr or "Could not resolve host" in result.stderr:
+            raise RuntimeError("Git could not connect to GitHub; credential-bearing details withheld")
         raise RuntimeError("Git operation failed; credential-bearing details withheld")
     return result.stdout.strip()
 
@@ -77,14 +95,28 @@ def packaged_commit():
     return proof['source_identity']['source_commit']
 
 parser = argparse.ArgumentParser()
-parser.add_argument("action", choices=["inspect", "status", "push", "draft", "upload", "publish", "verify"])
+parser.add_argument("action", choices=["deploy", "inspect", "status", "push", "draft", "resume", "upload", "publish", "verify"])
 args = parser.parse_args()
 
-if args.action == "inspect":
+if args.action == "deploy":
+    from github_deploy import deploy
+    def invoke(action):
+        print(json.dumps({"deployment_step": action}), flush=True)
+        completed = subprocess.run([sys.executable, str(pathlib.Path(__file__).resolve()), action],
+                                  cwd=SOURCE, capture_output=True, text=True, encoding="utf-8",
+                                  creationflags=subprocess.CREATE_NO_WINDOW)
+        if completed.stdout:
+            print(completed.stdout.strip(), flush=True)
+        if completed.returncode:
+            reason = "Windows denied TCP (WinError 10013) before GitHub authentication" if "WinError 10013" in completed.stderr else "action failed; run this action directly for sanitized diagnostics"
+            raise RuntimeError(f"Deployment stopped at {action}: {reason}")
+        return json.loads(completed.stdout.strip().splitlines()[-1]) if completed.stdout.strip() else {}
+    deploy(invoke)
+elif args.action == "inspect":
     try:
         who = session.get("https://api.github.com/user", timeout=30)
-    except requests.RequestException:
-        raise RuntimeError("GitHub connection blocked or unavailable; credential withheld") from None
+    except requests.RequestException as exc:
+        raise RuntimeError(connection_failure(exc)) from None
     if who.status_code != 200:
         raise RuntimeError(f"GitHub authentication returned HTTP {who.status_code}; credential withheld")
     repo = request("GET", "")
@@ -117,6 +149,22 @@ elif args.action == "draft":
     metadata.update(source_commit=commit,branch_commit=branch_commit,installer_sha256=digest,installer_size=size,assets=[])
     save(metadata)
     print(json.dumps({k:metadata[k] for k in ("id","tag_name","source_commit","draft","prerelease")},ensure_ascii=False))
+elif args.action == "resume":
+    commit = packaged_commit()
+    existing = request("GET", "/releases/tags/" + TAG)
+    remote = git("ls-remote", "--tags", "origin", TAG + "^{}")
+    assert remote.split()[0] == commit, "Existing remote tag differs from the verified installer source"
+    expected = {"Highlight_Desktop_Test_Setup_v1.2.3.exe", "Highlight_Desktop_Test_Setup_v1.2.3.sha256", "CODEX_CHECKPOINT_v1.2.3.md"}
+    for asset in existing["assets"]:
+        assert asset["name"] in expected, "Unexpected existing asset; inspect before continuing"
+        path = RELEASE / asset["name"]
+        assert asset.get("digest") == "sha256:" + file_digest(path) and asset["size"] == path.stat().st_size, "Existing asset differs; refusing to replace it"
+    metadata = {k: existing[k] for k in ("id", "tag_name", "html_url", "upload_url", "draft", "prerelease")}
+    file, digest, size = installer_info()
+    metadata.update(source_commit=commit, branch_commit=clean_commit(), installer_sha256=digest,
+                    installer_size=size, assets=existing["assets"])
+    save(metadata)
+    print(json.dumps({k:metadata[k] for k in ("id","tag_name","source_commit","draft","prerelease")},ensure_ascii=False))
 elif args.action == "upload":
     metadata = json.loads(META.read_text(encoding="utf-8"))
     assert metadata["draft"], "Upload must finish while the release is a draft"
@@ -146,9 +194,11 @@ elif args.action == "publish":
     metadata = json.loads(META.read_text(encoding="utf-8"))
     current = request("GET", "/releases/" + str(metadata["id"]))
     assert current["draft"] and len(current["assets"]) == 3
-    _, digest, size = installer_info()
-    installer = next(a for a in current["assets"] if a["name"].endswith(".exe"))
-    assert installer["digest"] == "sha256:" + digest and installer["size"] == size
+    expected = {"Highlight_Desktop_Test_Setup_v1.2.3.exe", "Highlight_Desktop_Test_Setup_v1.2.3.sha256", "CODEX_CHECKPOINT_v1.2.3.md"}
+    assert {a["name"] for a in current["assets"]} == expected
+    for asset in current["assets"]:
+        path = RELEASE / asset["name"]
+        assert asset["state"] == "uploaded" and asset["digest"] == "sha256:" + file_digest(path) and asset["size"] == path.stat().st_size
     body = (RELEASE / "v1.2.3_release_notes.md").read_text(encoding="utf-8")
     result = request("PATCH", "/releases/" + str(metadata["id"]), json={"draft":False,"prerelease":True,"make_latest":"false","body":body})
     metadata.update({k:result[k] for k in ("html_url","draft","prerelease")})
@@ -164,6 +214,8 @@ else:
     assert remote.split()[0] == commit == metadata["source_commit"]
     branch = git("ls-remote", "--heads", "origin", "release/v1.2.3")
     assert branch.split()[0] == branch_commit
+    expected = {"Highlight_Desktop_Test_Setup_v1.2.3.exe", "Highlight_Desktop_Test_Setup_v1.2.3.sha256", "CODEX_CHECKPOINT_v1.2.3.md"}
+    assert {a["name"] for a in result["assets"]} == expected, "Published release is missing an expected download asset"
     assets = []
     for item in result["assets"]:
         path = RELEASE / item["name"]
