@@ -37,6 +37,23 @@ Không thêm/chạy test chức năng hoặc hồi quy. Rà soát source/cú ph�
 
 Các commit cập nhật checkpoint/evidence sau build có thể nằm sau tag v1.2.5; không đổi tag hoặc code đã đóng gói. Root `CODEX_CHECKPOINT_LATEST.md` trỏ tới checkpoint này.
 
+## Phát hành hoàn tất — 2026-10-06
+
+**Đã công khai GitHub v1.2.5**, Release ID `404429104`, `draft=false`, `prerelease=true`. Xác minh xong lúc `2026-10-06T07:42:54.794420+00:00` (**14:42:54 +07**): tag remote đúng source đóng gói, nhánh release đúng commit đã push, cả 3 asset đã tải toàn bộ không đăng nhập và khớp kích thước/SHA256 local cùng digest GitHub.
+
+- [Trang release](https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.2.5)
+- [Bộ cài v1.2.5](https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.5/Highlight_Desktop_Test_Setup_v1.2.5.exe)
+- [SHA256](https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.5/Highlight_Desktop_Test_Setup_v1.2.5.sha256)
+- [Checkpoint độc lập kèm docs Meta](https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.5/CODEX_CHECKPOINT_v1.2.5.md)
+
+Evidence: `checkpoints/evidence/v1.2.5/release.json`, `deployment_status.json`, `public_download_verify.json`, `prepared_assets.json`, `installer_payload.json`. Nhánh tại mốc công khai là `2a1bb775aa882f9386a4bce262a7f05a7e4d4cc8`; các commit checkpoint/evidence sau đó không đổi source/tag/installer `1bed062ae03f67fbedcfda468cbc818878830ba6`.
+
+Checkpoint asset được viết trước publish và giữ nguyên **25183 bytes**, SHA256 `788ef0330a4ea58e84437fb3a0da2d56349df13a3f7390494e4f1bfcba84374b`. Các bước deploy/resume trong asset là hướng dẫn; trạng thái hoàn tất ở phần này và evidence trên nhánh release. Không thay asset đã công bố bằng bản checkpoint khác.
+
+Offline source bundle: `E:\OPENCLAW\BOB\support\v1.2.5\Highlight_Source_v1.2.5_published.bundle`, gồm nhánh `release/v1.2.5` và tag `v1.2.5`; không chứa installer ignored hoặc runtime private. Session sau đọc checkpoint này/`CODEX_CHECKPOINT_LATEST.md`, clone source nhánh release hoặc bundle vào thư mục mới, kiểm tra build identity thực tế rồi chẩn đoán theo bảng dưới. Bộ cài/checkpoint độc lập cũng có bản tiện dùng ở BOB root.
+
+Phiên phát hành chỉ kiểm tra artifact và tải công khai. **Không chạy test chức năng/hồi quy, không tự cài/nâng cấp runtime hoặc đăng Meta thật**. Runtime v1.2.3 là lần đọc gần nhất trước phát hành; không suy rằng máy người dùng đã chuyển v1.2.5. Sau khi người dùng cài, xác nhận System Info/identity v1.2.5 và Graph v24.0 trước khi phân tích lỗi.
+
 ## Tình trạng hạn chế và lịch trễ
 
 Rà soát trước đó thấy 7/41 credential code200 API access blocked ngay cả GET root/Page; header/UA/v24 như MXH cũng lỗi. Chưa có receipt MXH cùng token/Page/thời điểm để kết luận khác biệt POST là nguyên nhân. Thêm personal account vào app role có thể liên quan tới access level, chưa xác minh cấu hình app của từng token lỗi.
@@ -54,7 +71,7 @@ Lịch trễ trước đó có worker tiến triển nhưng batch pool/đối so
 - Tool deploy: `powershell -NoProfile -ExecutionPolicy Bypass -File checkpoints/tools/v1.2.5/deploy_github.ps1`. Dùng credential GitHub đã có trên máy, chỉ trong memory; không in credential. `github_release.py` có inspect/push/draft/resume/upload/publish/verify. Tạo draft, kiểm tra cả 3 asset digest/size/state trước publish; release đã có thì resume đúng nội dung, không tự thay asset khác.
 - Tool public download: `python checkpoints/tools/v1.2.5/verify_public_download.py`, tải toàn bộ cả 3 asset không authentication, đối chiếu SHA256/size với local và digest GitHub.
 - Evidence sau deploy ở `checkpoints/evidence/v1.2.5/release.json`, `deployment_status.json`, `public_download_verify.json`. Không coi việc tạo draft/upload là phát hành thành công. Chỉ giao link sau khi release public và tải/hash được xác minh.
-- Installer ignored ở `release/`; source clone/bundle không chứa installer hoặc dữ liệu người dùng. Offline source bundle kế hoạch: `E:\OPENCLAW\BOB\support\v1.2.5\Highlight_Source_v1.2.5_published.bundle`.
+- Installer ignored ở `release/`; source clone/bundle không chứa installer hoặc dữ liệu người dùng. Offline source bundle: `E:\OPENCLAW\BOB\support\v1.2.5\Highlight_Source_v1.2.5_published.bundle`.
 
 ## Nâng cấp và chẩn đoán ở máy người dùng
 
