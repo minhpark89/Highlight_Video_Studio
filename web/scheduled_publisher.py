@@ -642,6 +642,14 @@ def _process_scheduled_posts_once(
     # their Website and comment become ready. Existing app schedules stay put.
     from web.meta_handoff import handoff_eligibility, queue_handoffs
     for pending in posts:
+        if (pending.get("status") == "scheduled" and pending.get("schedule_day")
+                and pending["schedule_day"] < current_dt.date().isoformat()
+                and not any(pending.get(k) for k in ("meta_upload_video_id", "meta_video_id", "meta_post_id", "post_fb_id", "reel_id", "outcome_unknown", "publish_started_at", "claimed_at"))):
+            pending.update(status="draft", approval_mode="manual",
+                           schedule_error="Đã hết ngày đã chọn; chọn Lên lịch hôm nay để hẹn lại.")
+            for field in ("content_frozen_at", "approved_at", "first_comment_snapshot"):
+                pending.pop(field, None)
+    for pending in posts:
         if pending.get("status") != "scheduled" or pending.get("requested_publish_mode") != "meta_scheduled":
             continue
         from multi_pc.meta_scheduling import parse_meta_schedule_time, MetaScheduleTimeError

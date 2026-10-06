@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.2.2",
+    [string]$Version = "1.2.3",
     [string]$PreviewRevision = "",
     [string]$BuildChannel = "desktop-test",
     [switch]$SkipTests,
@@ -11,7 +11,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 if ($BuildChannel -ne "desktop-test") { throw "Phase 1.5 permits only BUILD_CHANNEL=desktop-test" }
-if ($Version -notin @("1.0.19", "1.1.6", "1.1.7", "1.1.8", "1.1.9", "1.2.0", "1.2.1", "1.2.2")) { throw "Unsupported desktop-test APP_VERSION: $Version" }
+if ($Version -notin @("1.0.19", "1.1.6", "1.1.7", "1.1.8", "1.1.9", "1.2.0", "1.2.1", "1.2.2", "1.2.3")) { throw "Unsupported desktop-test APP_VERSION: $Version" }
 if ($Version -eq "1.0.19" -and -not $PreviewRevision) { throw "Legacy v1.0.19 builds require PreviewRevision" }
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -44,7 +44,7 @@ if (-not $SkipTests) {
             @("tests/test_meta_native_handoff.py", "tests/test_meta_queue_handoff.py", "tests/test_meta_scheduling_profiles.py", "tests/test_fallback_comments.py", "tests/test_preview26_source_metadata.py", "tests/test_preview28_long_article_fallback.py"),
             @("tests/test_first_comment_audit.py", "tests/test_whisper_lazy_fallback.py", "tests/test_installer_data_preservation.py", "tests/test_preview23_image_sources.py"),
             @("tests/test_content_studio_pipeline.py", "tests/test_website_ui_regression.py", "tests/test_output_pipeline.py"),
-            @("tests/test_video_recovery.py", "tests/test_website_repair.py", "tests/test_english_public_content.py", "tests/test_group_review.py")
+            @("tests/test_video_recovery.py", "tests/test_website_repair.py", "tests/test_english_public_content.py", "tests/test_group_review.py", "tests/test_schedule_today.py")
             @("tests/test_post_retry.py", "tests/test_meta_credential_recovery.py")
         )
         foreach ($group in $testGroups) {

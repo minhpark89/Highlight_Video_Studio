@@ -247,6 +247,10 @@ def _assignment_candidates(plans, pages, groups, now, token_groups):
     for plan in plans:
         if not plan.get("enabled") or not plan.get("daily"):
             continue
+        if plan.get("allocation_override_date") == now.date().isoformat():
+            # An explicit group allocation for today owns this day's intake.
+            # Do not refill the slots it freed with tomorrow's assignments.
+            continue
         selected = set(plan.get("explicit_page_ids", plan["page_ids"]))
         for gid in plan["group_ids"]:
             if gid in group_map:
@@ -409,7 +413,12 @@ def process_once(*, root=None, pages=None, groups=None, token_groups=None, now=N
         # Publish source claims before touching other queues. An interruption
         # after this point is repaired from deterministic post/slot identities.
         db.commit()
-        for allocation in _assignment_candidates(cfg["plans"], pages or [], groups or [], now, token_groups or []):
+        override_groups = {str(p.get("group_id")) for p in posts if p.get("schedule_origin") == "today"
+                           and p.get("schedule_scope") in ("group", "stock") and p.get("schedule_day") == now.date().isoformat()}
+        # Derive the override from committed intents too, if the process stopped
+        # before writing the plan's allocation_override_date setting.
+        daily_plans = [p for p in cfg["plans"] if not override_groups.intersection(str(g) for g in p.get("group_ids", []))]
+        for allocation in _assignment_candidates(daily_plans, pages or [], groups or [], now, token_groups or []):
             if db.execute("SELECT 1 FROM slots WHERE page_id=? AND scheduled_time=?",
                           (allocation["page_id"], allocation["scheduled_time"])).fetchone():
                 continue

@@ -1,0 +1,22 @@
+{
+  "success": true,
+  "snapshot_at": "2026-10-06T11:00:37.937148",
+  "live_runtime_unchanged": true,
+  "network_calls": false,
+  "replay_root": "E:\\OPENCLAW\\BOB\\support\\v1.2.3\\replay-20261006-110037",
+  "group_id": "grp_1791020096_3",
+  "group_before_dates": {
+    "2026-10-06": 96,
+    "2026-10-07": 198
+  },
+  "reserved_today": 294,
+  "overflow": 0,
+  "skipped": 0,
+  "first_time": "2026-10-06 11:31:00",
+  "last_time": "2026-10-06 14:16:00",
+  "preview_seconds": 0.1472,
+  "content_and_status_preserved": true,
+  "unselected_and_remote_posts_unchanged": true,
+  "stock_preview_count": 20,
+  "stock_preview_last_time": "2026-10-06 14:16:00"
+}

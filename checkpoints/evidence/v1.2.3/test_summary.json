@@ -1,0 +1,10 @@
+{
+  "success": true,
+  "command": "python -m pytest -q --no-header",
+  "passed": 631,
+  "skipped": 4,
+  "subtests_passed": 29,
+  "seconds": 15.41,
+  "scheduling_regressions": 23,
+  "live_meta_or_cms_mutations": false
+}

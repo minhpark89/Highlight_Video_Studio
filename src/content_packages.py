@@ -691,7 +691,10 @@ def _apply_to_posts(item):
                           (post.get("website_media_mode") == "youtube" and post.get("website_video_status") == "youtube_embed_verified")))
             if valid:
                 post["status"] = "draft"
-                if post.get("approval_mode") == "automatic" and post.get("page_id") and post.get("scheduled_time"):
+                today_expired = bool(post.get("schedule_day") and post["schedule_day"] < datetime.now().date().isoformat())
+                if today_expired:
+                    post["schedule_error"] = "Đã hết ngày đã chọn; chọn Lên lịch hôm nay để hẹn lại."
+                if not today_expired and post.get("approval_mode") == "automatic" and post.get("page_id") and post.get("scheduled_time"):
                     post["status"] = "scheduled"
                     post["approved_at"] = _now()
                     post["content_frozen_at"] = _now()

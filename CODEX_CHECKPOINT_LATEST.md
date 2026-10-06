@@ -1,4 +1,14 @@
-# Checkpoint mới nhất — Highlight Desktop Test v1.2.2
+# Checkpoint mới nhất — Highlight Desktop Test v1.2.3
+
+Ngày 2026-10-06, Asia/Saigon. Nhánh `release/v1.2.3`. Đọc [CHECKPOINT_V1_2_3_TODAY_SCHEDULE_20261006.md](CHECKPOINT_V1_2_3_TODAY_SCHEDULE_20261006.md).
+
+Thêm chọn preparing/Draft và xem trước/áp dụng lịch hôm nay cho bài chọn, cả nhóm, hoặc lấy kho vào nhóm Page. Giữ claim/Page–Token/nội dung, báo overflow trong ngày, không tràn ngày; Daily không tự lấp lịch ngày mai sau khi đã áp dụng cả nhóm hôm nay. Bài chưa sẵn sàng tiếp tục làm Website/First Comment; hết ngày phải hẹn lại. Bao gồm các sửa v1.2.2.
+
+Kiểm thử **631 passed, 4 skipped, 29 subtests passed**. Browser offline **9 checks, không có JavaScript error**. Replay snapshot thật ở bản sao riêng: **294** bài NEW có lịch 06/10, **11:31–14:16**, giữ nội dung/trạng thái/binding/remote posts; xem trước lấy thêm 20 video từ kho. Preview cả nhóm mất khoảng 0.15 giây. Đây là replay, app thật vẫn chạy bản cũ, chưa thay queue hoặc gửi Meta/CMS.
+
+Bộ cài v1.2.3 đang được đóng gói; xem `checkpoints/evidence/v1.2.3/installer_verify.json` sau khi build. **GitHub hiện không kết nối được**, chưa có release công khai v1.2.3. Session sau dùng checkpoint chi tiết để tiếp tục deploy và nâng cấp đúng runtime. Không dùng link download dự đoán như link đã hoạt động.
+
+## Checkpoint trước — v1.2.2
 
 Ngày: 2026-10-06, Asia/Saigon. Xem [CHECKPOINT_V1_2_2_META_RECOVERY_20261006.md](CHECKPOINT_V1_2_2_META_RECOVERY_20261006.md).
 

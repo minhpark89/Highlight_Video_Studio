@@ -1,0 +1,178 @@
+"""Publish this approved release; keep the GitHub credential in memory only."""
+import argparse
+import base64
+import hashlib
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+from urllib.parse import quote
+
+SOURCE = pathlib.Path(__file__).resolve().parents[3]
+ROOT = SOURCE.parent
+RELEASE = SOURCE / "release"
+REPO = "minhpark89/Highlight_Video_Studio"
+TAG = "v1.2.3"
+META = RELEASE / "v1.2.3_release.json"
+sys.stdout.reconfigure(encoding="utf-8")
+import requests
+
+raw = (ROOT / "token github.txt").read_text(encoding="utf-8-sig")
+match = re.search(r"\b(?:ghp_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+)\b", raw)
+if not match:
+    raise RuntimeError("No supported GitHub credential found in the existing local credential file")
+credential = match.group(0)
+del raw, match
+session = requests.Session()
+session.headers.update({"Authorization": "Bearer " + credential, "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28"})
+api_base = "https://api.github.com/repos/" + REPO
+
+def request(method, suffix, *, expected=(200,), **kwargs):
+    try:
+        response = session.request(method, api_base + suffix, timeout=45, **kwargs)
+    except requests.RequestException:
+        raise RuntimeError("GitHub request failed; network details withheld") from None
+    if response.status_code not in expected:
+        raise RuntimeError(f"GitHub {method} {suffix} returned HTTP {response.status_code}; response body withheld")
+    return None if response.status_code == 404 else (response.json() if response.content else None)
+
+def save(metadata):
+    META.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+
+def git(*arguments):
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "Never"
+    index = int(env.get("GIT_CONFIG_COUNT", "0"))
+    env["GIT_CONFIG_COUNT"] = str(index + 1)
+    env[f"GIT_CONFIG_KEY_{index}"] = "http.https://github.com/.extraheader"
+    env[f"GIT_CONFIG_VALUE_{index}"] = "AUTHORIZATION: basic " + base64.b64encode(("x-access-token:" + credential).encode()).decode()
+    result = subprocess.run(["git", *arguments], cwd=SOURCE, env=env, capture_output=True, text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW)
+    if result.returncode:
+        raise RuntimeError("Git operation failed; credential-bearing details withheld")
+    return result.stdout.strip()
+
+def clean_commit():
+    if git("status", "--porcelain", "--untracked-files=normal"):
+        raise RuntimeError("Source is dirty; commit the approved fixes before publishing")
+    return git("rev-parse", "HEAD")
+
+def file_digest(path):
+    with path.open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+def installer_info():
+    file = RELEASE / "Highlight_Desktop_Test_Setup_v1.2.3.exe"
+    return file, file_digest(file), file.stat().st_size
+
+def packaged_commit():
+    proof = json.loads((SOURCE / 'checkpoints/evidence/v1.2.3/installer_verify.json').read_text(encoding='utf-8-sig'))
+    _, digest, size = installer_info()
+    assert proof['success'] and not proof['source_identity']['source_dirty']
+    assert proof['sha256'] == digest and proof['size'] == size
+    return proof['source_identity']['source_commit']
+
+parser = argparse.ArgumentParser()
+parser.add_argument("action", choices=["inspect", "status", "push", "draft", "upload", "publish", "verify"])
+args = parser.parse_args()
+
+if args.action == "inspect":
+    try:
+        who = session.get("https://api.github.com/user", timeout=30)
+    except requests.RequestException:
+        raise RuntimeError("GitHub connection blocked or unavailable; credential withheld") from None
+    if who.status_code != 200:
+        raise RuntimeError(f"GitHub authentication returned HTTP {who.status_code}; credential withheld")
+    repo = request("GET", "")
+    existing = request("GET", "/releases/tags/" + TAG, expected=(200,404))
+    print(json.dumps({"authenticated_as":who.json()["login"], "push_permission":repo.get("permissions",{}).get("push"),
+        "release_exists":bool(existing and existing.get("id")), "existing_release":{k:existing.get(k) for k in ("id","draft","prerelease","html_url")} if existing and existing.get("id") else None,
+        "latest_releases":[{k:r.get(k) for k in ("tag_name","draft","prerelease")} for r in request("GET","/releases?per_page=5")]}, ensure_ascii=False))
+elif args.action == "status":
+    metadata = json.loads(META.read_text(encoding="utf-8"))
+    result = request("GET", "/releases/" + str(metadata["id"]))
+    print(json.dumps({"draft":result["draft"], "assets":[{k:a.get(k) for k in ("name","size","state")} for a in result["assets"]]}))
+elif args.action == "push":
+    commit = clean_commit()
+    if git("rev-parse", TAG + "^{commit}") != packaged_commit():
+        raise RuntimeError("Local release tag does not match the packaged source")
+    git("push", "--atomic", "origin", "HEAD:refs/heads/release/v1.2.3", "refs/tags/" + TAG)
+    remote = git("ls-remote", "--heads", "origin", "release/v1.2.3")
+    assert remote.split()[0] == commit, "Remote branch does not match the committed fixes"
+    print(json.dumps({"source_commit":commit,"branch_pushed":True}))
+elif args.action == "draft":
+    branch_commit = clean_commit()
+    commit = packaged_commit()
+    file, digest, size = installer_info()
+    existing = request("GET", "/releases/tags/" + TAG, expected=(200,404))
+    assert not (existing and existing.get("id")), "Release already exists; refusing to overwrite a published revision"
+    body = (RELEASE / "v1.2.3_release_notes.md").read_text(encoding="utf-8")
+    result = request("POST", "/releases", expected=(201,), json={"tag_name":TAG,"target_commitish":commit,
+        "name":"Highlight Desktop Test v1.2.3 - Schedule preparing posts today", "body":body,"draft":True,"prerelease":True})
+    metadata = {k:result[k] for k in ("id","tag_name","html_url","upload_url","draft","prerelease")}
+    metadata.update(source_commit=commit,branch_commit=branch_commit,installer_sha256=digest,installer_size=size,assets=[])
+    save(metadata)
+    print(json.dumps({k:metadata[k] for k in ("id","tag_name","source_commit","draft","prerelease")},ensure_ascii=False))
+elif args.action == "upload":
+    metadata = json.loads(META.read_text(encoding="utf-8"))
+    assert metadata["draft"], "Upload must finish while the release is a draft"
+    current = request("GET", "/releases/" + str(metadata["id"]))
+    assert current["draft"] and current["tag_name"] == TAG
+    files = [RELEASE / name for name in ("Highlight_Desktop_Test_Setup_v1.2.3.exe",
+        "Highlight_Desktop_Test_Setup_v1.2.3.sha256","CODEX_CHECKPOINT_v1.2.3.md")]
+    by_name = {a["name"]:a for a in current["assets"]}
+    for path in files:
+        digest = "sha256:" + file_digest(path)
+        if path.name in by_name:
+            asset = by_name[path.name]
+            assert asset.get("digest") == digest and asset.get("size") == path.stat().st_size, "Existing draft asset differs; inspect before replacing"
+        else:
+            endpoint = metadata["upload_url"].split("{",1)[0] + "?name=" + quote(path.name)
+            print(json.dumps({"uploading":path.name,"bytes":path.stat().st_size}),flush=True)
+            with path.open("rb") as handle:
+                response = session.post(endpoint, data=handle, headers={"Content-Type":"application/octet-stream"}, timeout=(30,1200))
+            if response.status_code != 201:
+                raise RuntimeError(f"Asset upload returned HTTP {response.status_code}; response withheld")
+            asset = response.json()
+            assert asset.get("state") == "uploaded" and asset.get("digest") == digest and asset.get("size") == path.stat().st_size, "Uploaded asset verification failed"
+        print(json.dumps({"asset":path.name,"state":asset.get("state"),"size":asset.get("size"),"digest":asset.get("digest")}),flush=True)
+    metadata["assets"] = [{k:a.get(k) for k in ("name","size","digest","state","browser_download_url")} for a in request("GET", "/releases/" + str(metadata["id"]))["assets"]]
+    save(metadata)
+elif args.action == "publish":
+    metadata = json.loads(META.read_text(encoding="utf-8"))
+    current = request("GET", "/releases/" + str(metadata["id"]))
+    assert current["draft"] and len(current["assets"]) == 3
+    _, digest, size = installer_info()
+    installer = next(a for a in current["assets"] if a["name"].endswith(".exe"))
+    assert installer["digest"] == "sha256:" + digest and installer["size"] == size
+    body = (RELEASE / "v1.2.3_release_notes.md").read_text(encoding="utf-8")
+    result = request("PATCH", "/releases/" + str(metadata["id"]), json={"draft":False,"prerelease":True,"make_latest":"false","body":body})
+    metadata.update({k:result[k] for k in ("html_url","draft","prerelease")})
+    save(metadata)
+    print(json.dumps({k:metadata[k] for k in ("id","tag_name","html_url","draft","prerelease")},ensure_ascii=False))
+else:
+    metadata = json.loads(META.read_text(encoding="utf-8"))
+    result = request("GET", "/releases/tags/" + TAG)
+    assert result["id"] == metadata["id"] and not result["draft"] and result["prerelease"]
+    branch_commit = git("rev-parse", "HEAD")
+    commit = packaged_commit()
+    remote = git("ls-remote", "--tags", "origin", TAG + "^{}")
+    assert remote.split()[0] == commit == metadata["source_commit"]
+    branch = git("ls-remote", "--heads", "origin", "release/v1.2.3")
+    assert branch.split()[0] == branch_commit
+    assets = []
+    for item in result["assets"]:
+        path = RELEASE / item["name"]
+        assert item["state"] == "uploaded" and path.stat().st_size == item["size"]
+        assert item["digest"] == "sha256:" + file_digest(path)
+        public = requests.head(item["browser_download_url"], allow_redirects=True, timeout=40)
+        assert public.status_code == 200, "Published asset is not publicly downloadable"
+        assets.append({k:item.get(k) for k in ("name","size","digest","state","browser_download_url")})
+    metadata.update(assets=assets, draft=False, prerelease=True, public_downloads_verified=True, source_tag_verified=True,
+                    branch_commit=branch_commit, branch_verified=True)
+    save(metadata)
+    print(json.dumps(metadata,ensure_ascii=False))

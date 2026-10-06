@@ -105,7 +105,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.3"
 
 @app.after_request
 def add_header(response):
@@ -3534,7 +3534,19 @@ def api_get_post(post_id):
 def api_group_post_summary():
     from web.post_queries import group_summary
     from src.output_pipeline import settings
-    return jsonify({"success": True, **group_summary(load_posts(), page_manager.list_groups(), settings().get("plans", []))})
+    return jsonify({"success": True, "server_now": datetime.now().isoformat(timespec="seconds"),
+                    **group_summary(load_posts(), page_manager.list_groups(), settings().get("plans", []))})
+
+
+@app.route("/api/posts/schedule-today", methods=["POST"])
+def api_schedule_today():
+    from src.output_scheduling import schedule_today
+    try:
+        result = schedule_today(request.get_json(silent=True), page_manager.list_pages(),
+                                page_manager.list_groups(), load_token_groups())
+        return jsonify({"success": True, **result})
+    except (ValueError, sqlite3.IntegrityError) as exc:
+        return jsonify({"success": False, "error": str(exc)}), 409
 
 
 @app.route("/api/posts/review-batch", methods=["POST"])
