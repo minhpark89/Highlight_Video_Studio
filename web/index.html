@@ -4677,6 +4677,16 @@
     const date = new Date(Date.now() + 25 * 60 * 1000);
     return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0,16);
   }
+  function groupDailySchedule(group, plan) {
+    const normalize = values => [...new Set((values || []).filter(t => /^\d{1,2}:\d{2}$/.test(String(t)))
+      .map(t => String(t).padStart(5,'0')).filter(t => Number(t.slice(0,2)) < 24 && Number(t.slice(3)) < 60))].sort();
+    const configured = normalize(group?.schedule_config?.times);
+    const times = configured.length ? configured : normalize(plan?.group_schedule_times || plan?.slots || ['11:30','19:30']);
+    const saved = normalize(plan?.group_schedule_times || plan?.slots);
+    const sameConfig = saved.join('|') === times.join('|');
+    const count = plan && sameConfig ? Math.min(times.length, Math.max(1, Number(plan.posts_per_day) || times.length)) : times.length;
+    return {times, count, stagger: group?.schedule_config?.stagger_minutes || plan?.stagger_minutes || 15};
+  }
   async function loadGroupDailyModalPlan(groupId, kind) {
     const state = {groupId:String(groupId), plan:null, loading:true};
     groupDailyModalState[kind] = state;
@@ -4693,29 +4703,30 @@
       if (groupDailyModalState[kind] !== state) return;
       const plan = (data.plans || []).find(p => String(p.id) === `group:${groupId}`) || null;
       state.plan = plan;
+      const group = (window.allGroupsCached || []).find(g => String(g.id) === String(groupId));
+      state.schedule = groupDailySchedule(group, plan);
       check.checked = !!(plan?.enabled && plan?.daily);
       mode.value = plan?.approval_mode || 'manual';
       if (isDist) {
         document.querySelector(`input[name="modal-dist-mode"][value="${plan?.publish_mode || 'meta_scheduled'}"]`).checked = true;
         document.getElementById('modal-dist-token-group').value = plan?.token_group_id || '';
         const stagger = document.getElementById('modal-dist-stagger');
-        const gap = String(plan?.stagger_minutes || 15);
+        const gap = String(state.schedule.stagger);
         if (![...stagger.options].some(o => o.value === gap)) stagger.add(new Option(`Giãn cách ${gap} phút`, gap));
         stagger.value = gap;
-        document.getElementById('modal-dist-starttime').value = plan ? `${[plan.start_date, new Date().toLocaleDateString('sv-SE')].sort().pop()}T${plan.slots[0]}` : nextLocalScheduleTime();
+        document.getElementById('modal-dist-starttime').value = plan ? `${[plan.start_date, new Date().toLocaleDateString('sv-SE')].sort().pop()}T${state.schedule.times[0]}` : nextLocalScheduleTime();
       } else {
         document.getElementById('sched-conf-publish-mode').value = plan?.publish_mode || 'meta_scheduled';
         document.getElementById('sched-conf-use-llm').checked = plan?.use_llm !== false;
-        const group = (window.allGroupsCached || []).find(g => String(g.id) === String(groupId));
-        const times = plan?.slots || group?.schedule_config?.times || ['11:30','19:30'];
+        const times = state.schedule.times;
         const picker = document.getElementById('sched-conf-posts-per-page');
         picker.dataset.slots = JSON.stringify(times);
-        picker.innerHTML = times.slice(0,6).map((_,i)=>`<option value="${i+1}">${i+1} bài / ngày / page (Khung giờ: ${escapeHtml(times.slice(0,i+1).join(', '))})</option>`).join('');
-        picker.value = String(plan?.posts_per_day || Math.min(times.length,2));
-        document.getElementById('sched-conf-times-preview').textContent = `Khung giờ: ${times.join(' | ')} · Giãn cách: ${plan?.stagger_minutes || group?.schedule_config?.stagger_minutes || 15} phút/page`;
+        picker.innerHTML = times.map((_,i)=>`<option value="${i+1}">${i+1} bài / ngày / page (Khung giờ: ${escapeHtml(times.slice(0,i+1).join(', '))})</option>`).join('');
+        picker.value = String(state.schedule.count);
+        document.getElementById('sched-conf-times-preview').textContent = `Khung giờ: ${times.join(' | ')} · Giãn cách: ${state.schedule.stagger} phút/page`;
       }
       state.loading = false; check.disabled = false; button.disabled = false;
-    } catch(error) { showToast(error.message); }
+    } catch(error) { if (groupDailyModalState[kind] === state) showToast(error.message); }
   }
   async function stopUncheckedGroupDailyPlan(kind, checked) {
     const state = groupDailyModalState[kind];
@@ -4790,8 +4801,8 @@
           group_id: groupId,
           token_group_id: document.getElementById('modal-dist-token-group')?.value || '',
           start_time: startTime,
-          daily_slots: startTime.slice(11,16) === groupDailyModalState.dist?.plan?.slots?.[0] ? groupDailyModalState.dist.plan.slots : undefined,
-          posts_per_page: startTime.slice(11,16) === groupDailyModalState.dist?.plan?.slots?.[0] ? groupDailyModalState.dist.plan.posts_per_day : undefined,
+          daily_slots: startTime.slice(11,16) === groupDailyModalState.dist?.schedule?.times?.[0] ? groupDailyModalState.dist.schedule.times : undefined,
+          posts_per_page: startTime.slice(11,16) === groupDailyModalState.dist?.schedule?.times?.[0] ? groupDailyModalState.dist.schedule.count : undefined,
           stagger_minutes: stagger,
           posting_threads: postingThreads,
           publish_mode: document.getElementById('modal-dist-mode-meta')?.checked ? 'meta_scheduled' : 'app_queue',
@@ -5984,6 +5995,10 @@
       });
       const data = await res.json();
       if (data.success) {
+        // Make an immediate reopen see the saved config, even during a refresh.
+        lohaGroupsGeneration++;
+        lohaGroupsController?.abort();
+        window.allGroupsCached = (window.allGroupsCached || []).map(g => String(g.id) === String(data.group.id) ? data.group : g);
         alert('Đã cập nhật cấu hình nhóm thành công!');
         closeEditGroupModal();
         loadLoHaGroups();
@@ -6005,16 +6020,13 @@
     const selectElem = document.getElementById('sched-conf-posts-per-page');
     const noteElem = document.getElementById('sched-conf-times-preview');
 
-    let groupTimes = ['11:30', '19:30'];
-    if (grp && grp.schedule_config && grp.schedule_config.times && grp.schedule_config.times.length) {
-      groupTimes = grp.schedule_config.times;
-    }
+    const groupTimes = groupDailySchedule(grp, null).times;
 
     if (selectElem) {
       let optionsHtml = '';
       const totalSlots = groupTimes.length;
-      for (let i = 1; i <= Math.min(totalSlots, 6); i++) {
-        const selected = (i === totalSlots || i === 2) ? 'selected' : '';
+      for (let i = 1; i <= totalSlots; i++) {
+        const selected = i === totalSlots ? 'selected' : '';
         const slotText = groupTimes.slice(0, i).join(', ');
         optionsHtml += `<option value="${i}" ${selected}>${i} bài / ngày / page (Khung giờ: ${slotText})</option>`;
       }
@@ -6063,7 +6075,7 @@
           publish_mode: document.getElementById('sched-conf-daily')?.checked ? document.getElementById('sched-conf-publish-mode').value : 'app_queue',
           daily_slots: JSON.parse(document.getElementById('sched-conf-posts-per-page').dataset.slots || 'null'),
           token_group_id: groupDailyModalState.schedule?.plan?.token_group_id || '',
-          stagger_minutes: groupDailyModalState.schedule?.plan?.stagger_minutes,
+          stagger_minutes: groupDailyModalState.schedule?.schedule?.stagger,
           auto_first_comment: true,
           use_llm_comment: useLlm,
           english_mode: true
@@ -6091,30 +6103,32 @@
   }
 
 
+  let lohaGroupsGeneration = 0;
+  let lohaGroupsController = null;
   async function loadLoHaGroups() {
     const tbody = document.getElementById('loha-groups-table-body');
     if (!tbody) return;
+    const generation = ++lohaGroupsGeneration;
+    lohaGroupsController?.abort();
+    const controller = new AbortController();
+    lohaGroupsController = controller;
 
-    tbody.innerHTML = `
+    if (!tbody.querySelector('[data-group-id]')) tbody.innerHTML = `
       <tr>
         <td colspan="7" style="text-align: center; padding: 40px; color: #94a3b8;">
           <i class="bi bi-arrow-repeat spin" style="font-size: 24px; display: inline-block;"></i>
-          <div style="margin-top: 8px;">Đang tải danh sách Nhóm Trang & Kho Video...</div>
+          <div style="margin-top: 8px;">Đang tải danh sách Nhóm Trang...</div>
         </td>
       </tr>
     `;
 
     try {
-      const [resG, resC] = await Promise.all([
-        fetch('/api/groups'),
-        fetch('/api/clips')
-      ]);
+      const resG = await fetch('/api/groups', {signal:controller.signal});
       const groupsData = await resG.json();
+      if (generation !== lohaGroupsGeneration) return;
+      if (!resG.ok || groupsData.success === false) throw new Error(groupsData.error || 'Không tải được nhóm');
       const groups = Array.isArray(groupsData) ? groupsData : (groupsData.groups || []);
       window.allGroupsCached = groups;
-      const clipsData = await resC.json();
-      const clips = Array.isArray(clipsData) ? clipsData : (clipsData.clips || []);
-      const unpostedClips = clips.filter(c => !c.is_posted);
 
       if (!groups || groups.length === 0) {
         tbody.innerHTML = `
@@ -6131,7 +6145,6 @@
       let rows = '';
       groups.forEach((g, idx) => {
         const pageCount = (g.page_ids || []).length;
-        const availableCount = unpostedClips.length;
         const folder = g.folder_path || g.folder_binding || 'D:\\Highlight_Video_Studio\\output';
         const stagger = (g.schedule_config && g.schedule_config.stagger_minutes) ? g.schedule_config.stagger_minutes : 15;
         const times = (g.schedule_config && g.schedule_config.times && g.schedule_config.times.length) ? g.schedule_config.times.join(', ') : '11:30, 19:30';
@@ -6142,16 +6155,16 @@
             <td style="padding: 12px 16px;">
               <div style="font-weight: 800; font-size: 14px; color: #fff; display: flex; align-items: center; gap: 8px;">
                 <i class="bi bi-collection-fill" style="color: #ec4899;"></i>
-                <span>${g.name}</span>
+                <span>${escapeHtml(g.name)}</span>
               </div>
-              <div style="font-size: 11px; color: #64748b; margin-top: 2px;">ID: ${g.id}</div>
+              <div style="font-size: 11px; color: #64748b; margin-top: 2px;">ID: ${escapeHtml(g.id)}</div>
             </td>
             <td style="padding: 12px 16px;">
-              <div style="font-family: monospace; font-size: 11.5px; color: #cbd5e1; background: #0f172a; padding: 4px 8px; border-radius: 6px; display: inline-block; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${folder}">
-                <i class="bi bi-folder-fill" style="color: #f59e0b;"></i> ${folder}
+              <div style="font-family: monospace; font-size: 11.5px; color: #cbd5e1; background: #0f172a; padding: 4px 8px; border-radius: 6px; display: inline-block; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(folder)}">
+                <i class="bi bi-folder-fill" style="color: #f59e0b;"></i> ${escapeHtml(folder)}
               </div>
               <div style="font-size: 11px; color: #10b981; margin-top: 3px; font-weight: 600;">
-                <i class="bi bi-film"></i> ${availableCount} clip khả dụng
+                <i class="bi bi-film"></i> <span data-group-video-count="${escapeHtml(g.id)}">Đang đếm video...</span>
               </div>
             </td>
             <td style="padding: 12px 16px;">
@@ -6166,7 +6179,7 @@
             </td>
             <td style="padding: 12px 16px;">
               <div style="font-size: 12px; font-weight: 700; color: #e2e8f0; font-family: monospace;">
-                <i class="bi bi-clock-history" style="color: #38bdf8;"></i> ${times}
+                <i class="bi bi-clock-history" style="color: #38bdf8;"></i> ${escapeHtml(times)}
               </div>
               <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">
                 Giãn cách: <strong>${stagger} phút</strong>
@@ -6175,13 +6188,13 @@
             <td style="padding: 12px 16px; text-align: right;">
               <div style="display: flex; gap: 6px; justify-content: flex-end; align-items: center;">
                 <button class="btn btn-outline btn-sm" data-group-id="${escapeHtml(g.id)}" onclick="openGroupReview(this.dataset.groupId)">Chuẩn bị / Draft</button>
-                <button class="btn btn-primary btn-sm" onclick="runLoHaBatchSchedule('${g.id}', '${g.name}')" style="background: linear-gradient(135deg, #8b5cf6, #ec4899); border: none; font-weight: 700; padding: 5px 12px; font-size: 12px;" title="Quét kho video và lên lịch ngay cho nhóm này">
+                <button class="btn btn-primary btn-sm" data-group-id="${escapeHtml(g.id)}" data-group-name="${escapeHtml(g.name)}" onclick="runLoHaBatchSchedule(this.dataset.groupId, this.dataset.groupName)" style="background: linear-gradient(135deg, #8b5cf6, #ec4899); border: none; font-weight: 700; padding: 5px 12px; font-size: 12px;" title="Quét kho video và lên lịch ngay cho nhóm này">
                   <i class="bi bi-send-check-fill"></i> Lên lịch
                 </button>
-                <button class="btn btn-outline btn-sm" onclick="editGroupModal('${g.id}')" style="padding: 5px 10px; font-size: 12px;" title="Chỉnh sửa cấu hình nhóm">
+                <button class="btn btn-outline btn-sm" data-group-id="${escapeHtml(g.id)}" onclick="editGroupModal(this.dataset.groupId)" style="padding: 5px 10px; font-size: 12px;" title="Chỉnh sửa cấu hình nhóm">
                   <i class="bi bi-gear-fill"></i> Sửa
                 </button>
-                <button class="btn btn-outline btn-sm" onclick="deleteGroup('${g.id}', '${g.name}')" style="color: #ef4444; border-color: rgba(239,68,68,0.3); padding: 5px 8px; font-size: 12px;" title="Xóa nhóm">
+                <button class="btn btn-outline btn-sm" data-group-id="${escapeHtml(g.id)}" data-group-name="${escapeHtml(g.name)}" onclick="deleteGroup(this.dataset.groupId, this.dataset.groupName)" style="color: #ef4444; border-color: rgba(239,68,68,0.3); padding: 5px 8px; font-size: 12px;" title="Xóa nhóm">
                   <i class="bi bi-trash"></i>
                 </button>
               </div>
@@ -6191,9 +6204,24 @@
       });
 
       tbody.innerHTML = rows;
+      // Render first; folder counts are optional background information.
+      fetch('/api/groups/video-counts', {signal:controller.signal}).then(async response => {
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error('Không đọc được kho video');
+        if (generation !== lohaGroupsGeneration) return;
+        const counts = new Map(data.groups.map(g => [String(g.id), g.file_count]));
+        tbody.querySelectorAll('[data-group-video-count]').forEach(cell => {
+          const count = counts.get(cell.dataset.groupVideoCount);
+          cell.textContent = Number.isInteger(count) ? `${count} video trong thư mục` : 'Không đọc được kho video';
+        });
+      }).catch(error => {
+        if (error.name === 'AbortError' || generation !== lohaGroupsGeneration) return;
+        tbody.querySelectorAll('[data-group-video-count]').forEach(cell => cell.textContent = 'Chưa đếm được video');
+      });
     } catch (e) {
+      if (e.name === 'AbortError' || generation !== lohaGroupsGeneration) return;
       console.error(e);
-      tbody.innerHTML = `<tr><td colspan="7" style="color: #ef4444; padding: 20px; text-align: center;">Lỗi tải danh sách nhóm: ${e.message}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" style="color: #ef4444; padding: 20px; text-align: center;">Lỗi tải danh sách nhóm: ${escapeHtml(e.message)}</td></tr>`;
     }
   }
 
@@ -6246,7 +6274,8 @@
 
   // ================= SCHEDULER WORKER HEALTH & AUTO REFRESH =================
   let postsAutoRefreshTimer = null;
-  let postsTableLoading = false;
+  let postsTableRequest = null;
+  let postsTableGeneration = 0;
   let postsSnapshot = [];
   let postsScheduleFilter = 'all';
   let postsPage = 1;
@@ -6490,7 +6519,8 @@
     postsAutoRefreshTimer = setInterval(() => {
       const pane = document.getElementById('pane-posts');
       if (pane && pane.classList.contains('active')) {
-        refreshSchedulerStatus().then(() => loadPostsTable({quiet: true}));
+        refreshSchedulerStatus();
+        loadPostsTable({quiet: true});
       }
     }, 15000);
   }
@@ -6507,20 +6537,25 @@
       showToast(`Meta báo lỗi trên ${failures.length} bài. Mở Quản lý Bài Đăng để xem chi tiết.`);
     }
   }
+  let postsAlertsLoading = false;
+  let postsHealthCheckedAt = 0;
   async function pollMetaPostErrors() {
+    if (postsAlertsLoading || !document.getElementById('pane-posts')?.classList.contains('active')) return;
+    postsAlertsLoading = true;
     try {
-      const res = await fetch('/api/posts/list?view=posts&bucket=attention&page_size=100');
+      const res = await fetch('/api/posts/alerts');
       if (!res.ok) return;
       const posts = (await res.json()).items || [];
       if (Array.isArray(posts)) showNewMetaPostErrors(posts);
-      if (!postLedgerWarningShown) {
+      if (!postLedgerWarningShown && Date.now() - postsHealthCheckedAt >= 60000) {
+        postsHealthCheckedAt = Date.now();
         const health = await (await fetch('/api/posts/health')).json();
         if (health.ledger_incomplete_suspected) {
           postLedgerWarningShown = true;
           if (document.getElementById('pane-posts')?.classList.contains('active')) showToast(health.message);
         }
       }
-    } catch (_) {}
+    } catch (_) {} finally { postsAlertsLoading = false; }
   }
   document.addEventListener('DOMContentLoaded', () => {
     pollMetaPostErrors();
@@ -6542,8 +6577,13 @@
   }
   async function loadPostsTable({quiet = false} = {}) {
     const tbody = document.getElementById('posts-table-body');
-    if (!tbody || postsTableLoading) return;
-    postsTableLoading = true;
+    if (!tbody) return;
+    const token = document.getElementById('posts-token-filter')?.value || '';
+    const requestKey = JSON.stringify([postsScheduleFilter, token, postsPage]);
+    if (quiet && postsTableRequest?.key === requestKey) return;
+    postsTableRequest?.controller.abort();
+    const request = {key:requestKey, controller:new AbortController(), generation:++postsTableGeneration};
+    postsTableRequest = request;
 
     if (!quiet && !tbody.querySelector('tr[data-post-id]')) tbody.innerHTML = `
       <tr>
@@ -6555,9 +6595,9 @@
     `;
 
     try {
-      const token = document.getElementById('posts-token-filter')?.value || '';
-      const res = await fetch(`/api/posts/list?view=posts&bucket=${encodeURIComponent(postsScheduleFilter)}&token_id=${encodeURIComponent(token)}&page=${postsPage}&page_size=50`);
+      const res = await fetch(`/api/posts/list?view=posts&bucket=${encodeURIComponent(postsScheduleFilter)}&token_id=${encodeURIComponent(token)}&page=${postsPage}&page_size=50`, {signal:request.controller.signal});
       const payload = await res.json();
+      if (postsTableRequest !== request) return;
       const posts = payload.items || [];
       if (!res.ok || !Array.isArray(posts)) throw new Error(payload.error || 'Không tải được bài đăng');
       postsPage = payload.page || 1;
@@ -6571,14 +6611,15 @@
       showNewMetaPostErrors(posts);
 
       if (!posts || posts.length === 0) {
-        if (!postLedgerWarningShown) {
-          try {
-            const health = await (await fetch('/api/posts/health')).json();
-            if (health.ledger_empty_suspected) {
+        if (!postLedgerWarningShown && Date.now() - postsHealthCheckedAt >= 60000) {
+          postsHealthCheckedAt = Date.now();
+          fetch('/api/posts/health').then(response => response.json()).then(health => {
+            if (postsTableRequest !== request && postsTableGeneration !== request.generation) return;
+            if (health.ledger_empty_suspected && !postLedgerWarningShown) {
               postLedgerWarningShown = true;
               showToast(health.message);
             }
-          } catch (_) {}
+          }).catch(() => {});
         }
         tbody.innerHTML = `
           <tr>
@@ -6796,10 +6837,11 @@
         for (const old of current.values()) old.remove();
       } else tbody.innerHTML = html;
     } catch (e) {
+      if (e.name === 'AbortError' || postsTableRequest !== request) return;
       console.error(e);
-      if (!quiet) tbody.innerHTML = `<tr><td colspan="8" style="color: #ef4444; padding: 20px; text-align: center;">Lỗi tải bài đăng: ${e.message}</td></tr>`;
+      if (!quiet) tbody.innerHTML = `<tr><td colspan="8" style="color: #ef4444; padding: 20px; text-align: center;">Lỗi tải bài đăng: ${escapeHtml(e.message)}</td></tr>`;
     } finally {
-      postsTableLoading = false;
+      if (postsTableRequest === request) postsTableRequest = null;
     }
   }
 

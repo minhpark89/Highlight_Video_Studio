@@ -7,6 +7,7 @@ import os
 import threading
 import uuid
 import copy
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from multi_pc.json_io import replace_with_retry
@@ -18,6 +19,50 @@ class PostsStoreError(RuntimeError):
 
 _LOCK = threading.RLock()
 _READS = threading.local()
+_VIEW_LOCK = threading.RLock()
+_VIEWS = OrderedDict()
+
+
+def _revision(stat):
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def posts_snapshot(path: str | Path):
+    """Borrow a read-only revision for views; copy selected rows before editing.
+
+    There is no TTL. Stat on every request detects writes and atomic replacement.
+    This cache never carries writable baselines and never takes the writer lock
+    on the healthy read path. Corruption still uses the store's backup recovery.
+    """
+    primary = resolve_posts_file(path)
+    key = str(primary.resolve())
+    with _VIEW_LOCK:
+        for _ in range(3):
+            try:
+                revision = _revision(primary.stat())
+                cached = _VIEWS.get(key)
+                if cached and cached[0] == revision:
+                    _VIEWS.move_to_end(key)
+                    return cached[1]
+                with primary.open("rb") as handle:
+                    before = _revision(os.fstat(handle.fileno()))
+                    payload = handle.read()
+                    after = _revision(os.fstat(handle.fileno()))
+                if before != after or after != _revision(primary.stat()):
+                    continue
+                rows = json.loads(payload)
+                if not isinstance(rows, list):
+                    raise ValueError("posts queue root must be a JSON array")
+                _VIEWS[key] = (after, rows)
+                _VIEWS.move_to_end(key)
+                while len(_VIEWS) > 4:
+                    _VIEWS.popitem(last=False)
+                return rows
+            except (OSError, ValueError):
+                break
+        _VIEWS.pop(key, None)
+        # Recovery and fail-closed behavior remain identical to writable reads.
+        return list(load_posts_file(primary))
 
 
 class PostsList(list):

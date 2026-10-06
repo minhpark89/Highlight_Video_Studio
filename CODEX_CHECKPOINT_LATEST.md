@@ -1,3 +1,11 @@
+# Latest checkpoint — v1.2.8 Group slots and loading
+
+Ngày 2026-10-06, Asia/Saigon. Nhánh `release/v1.2.8`, Graph v24.0. Đọc [CHECKPOINT_V1_2_8_GROUP_SLOTS_LOADING_20261006.md](CHECKPOINT_V1_2_8_GROUP_SLOTS_LOADING_20261006.md). Sửa legacy Daily hai giờ che ba giờ vừa sửa nhóm. Modal đủ mọi khung giờ; explicit cap được lưu riêng với snapshot config. Sửa group đồng bộ plan tương lai, giữ lịch đã assigned/Meta và không tự opt-in. Groups render trước count per folder. Posts read-only revision cache (không TTL), annotate selected copies, abort/generation chống response cũ, alerts nhẹ chỉ khi pane active.
+
+Offline và build/publication evidence cuối tại `checkpoints/evidence/v1.2.8/`; tools tại `checkpoints/tools/v1.2.8/`. Offline **557 passed, 4 skipped, 29 subtests passed**; Chromium 7 checks / 0 JS errors, recovery UI 5 checks / 0 errors. Benchmark queue ẩn 1.431 bài: backend list median 220,78→11,68 ms (~18,9x), cold 32,77 ms; không phải đo UI/media thật. Kế thừa đầy đủ v127 Content/CMS/fallback/MP4/source/claim/Meta safeguards. Chưa cài/sửa runtime hoặc gọi publish/delete Meta/CMS thật. Đang chuẩn bị bộ cài; cập nhật publication state sau xác minh.
+
+## Checkpoint trước
+
 # Latest checkpoint — v1.2.7 CMS and video recovery
 
 Ngày 2026-10-06, Asia/Saigon, nhánh `release/v1.2.7`, Graph v24.0. Đọc [CHECKPOINT_V1_2_7_MEDIA_CMS_RECOVERY_20261006.md](CHECKPOINT_V1_2_7_MEDIA_CMS_RECOVERY_20261006.md). Sửa false positive English headings còn tồn tại sau cài v126. Ưu tiên chọn clip đã FFprobe/hash/claim/source kiểm tra trong kho; fallback render nền nguồn gốc, progress/preview. Replacement preparing và chỉ đăng khi Content/Website/embed/First Comment ready. Giữ IDs/audit/claims, chống bấm lặp và restart. Chưa tự cài/sửa runtime thật hoặc publish/delete Meta/CMS thật. Evidence/tools mới tại checkpoints/{evidence,tools}/v1.2.7. Trạng thái phát hành cuối xem checkpoint chi tiết.

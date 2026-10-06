@@ -9,15 +9,15 @@ from src.english_text import assert_english
 
 
 def handoff_eligibility(post, output_dir, *, now_ts=None):
+    if post.get("status") != "scheduled" or post.get("publish_mode") == "meta_scheduled":
+        return False, "Chỉ chuyển bài đang do app giữ lịch."
+    if any(post.get(key) for key in ("meta_video_id", "meta_upload_video_id", "meta_post_id", "post_fb_id", "publish_started_at", "outcome_unknown")):
+        return False, "Bài đã gửi lên Meta; cần đối soát trước."
     try:
         for key in ("title", "content", "first_comment", "first_comment_snapshot"):
             assert_english(post.get(key, ""), key)
     except ValueError:
         return False, "Nội dung phải là tiếng Anh. Sửa Content Studio trước khi giao lịch Meta."
-    if post.get("status") != "scheduled" or post.get("publish_mode") == "meta_scheduled":
-        return False, "Chỉ chuyển bài đang do app giữ lịch."
-    if any(post.get(key) for key in ("meta_video_id", "meta_upload_video_id", "meta_post_id", "post_fb_id", "publish_started_at", "outcome_unknown")):
-        return False, "Bài đã gửi lên Meta; cần đối soát trước."
     try:
         parse_meta_schedule_time(post.get("scheduled_time"), now_ts=now_ts)
     except MetaScheduleTimeError as exc:

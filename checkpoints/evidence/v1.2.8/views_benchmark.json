@@ -1,0 +1,38 @@
+{
+  "success": true,
+  "queue_rows": 1431,
+  "source_bytes": 4819925,
+  "anonymized_bytes": 3983908,
+  "selected_rows": 50,
+  "tokens": 31,
+  "pages": 100,
+  "v127_list_response": {
+    "median_ms": 220.78,
+    "min_ms": 164.8,
+    "max_ms": 276.42,
+    "runs": 7
+  },
+  "v128_list_response": {
+    "median_ms": 11.68,
+    "min_ms": 10.58,
+    "max_ms": 12.07,
+    "runs": 7
+  },
+  "v128_cold_ms": 32.77,
+  "v127_writable_read": {
+    "median_ms": 216.01,
+    "min_ms": 144.7,
+    "max_ms": 303.43,
+    "runs": 7
+  },
+  "v128_revision_read": {
+    "median_ms": 0.12,
+    "min_ms": 0.12,
+    "max_ms": 0.3,
+    "runs": 7
+  },
+  "list_speedup": 18.9,
+  "scope": "Local backend with anonymized current queue; no real media, network or browser paint timing",
+  "live_state_modified": false,
+  "live_http": false
+}

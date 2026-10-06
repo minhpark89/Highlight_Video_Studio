@@ -79,6 +79,48 @@ def save_settings(value, root=None):
         return saved
 
 
+def normalize_daily_slots(slots):
+    if not isinstance(slots, list) or not slots:
+        raise ValueError("Daily slots must be a nonempty list of HH:MM times")
+    normalized = []
+    for slot in slots:
+        try:
+            parsed = datetime.strptime(str(slot).strip(), "%H:%M")
+        except ValueError as exc:
+            raise ValueError("Daily slots must use HH:MM") from exc
+        normalized.append(parsed.strftime("%H:%M"))
+    return sorted(set(normalized))
+
+
+def sync_group_daily_plan(previous, group, root=None):
+    """Apply edited group times to future allocations only; keep explicit caps.
+
+    Never opt a group in or modify global/multi-group plans or existing posts.
+    A plan using every old group slot continues to use every new group slot.
+    """
+    root = Path(root or ROOT)
+    gid = str(group["id"])
+    config = group.get("schedule_config") or {}
+    times = normalize_daily_slots(config.get("times") or ["11:30", "19:30"])
+    old_times = normalize_daily_slots((previous or {}).get("schedule_config", {}).get("times") or ["11:30", "19:30"])
+    if times == old_times and config.get("stagger_minutes", 15) == ((previous or {}).get("schedule_config") or {}).get("stagger_minutes", 15):
+        return None
+    with _LOCK:
+        saved = settings(root)
+        for plan in saved.get("plans", []):
+            if (str(plan.get("id")) != f"group:{gid}" or
+                    plan.get("group_ids") != [gid] or plan.get("explicit_page_ids")):
+                continue
+            count = int(plan.get("posts_per_day") or len(plan.get("slots") or old_times))
+            count = len(times) if count >= len(old_times) else min(count, len(times))
+            plan.update(slots=times[:count], posts_per_day=count, group_schedule_times=times,
+                        stagger_minutes=int(config.get("stagger_minutes") or 15),
+                        updated_at=datetime.now().isoformat(timespec="seconds"))
+            _write(root / "config" / "output_pipeline.json", saved)
+            return plan
+    return None
+
+
 def save_plan(plan, pages, groups, root=None):
     """Store explicit Page scope; old schedules/groups never imply opt-in."""
     root = Path(root or ROOT)
@@ -99,13 +141,7 @@ def save_plan(plan, pages, groups, root=None):
     if not selected or selected - page_map.keys():
         raise ValueError("Select existing Pages or Page groups for daily posting")
     slots = plan.get("slots") or ["11:30", "19:30"]
-    normalized = []
-    for slot in slots:
-        try:
-            parsed = datetime.strptime(str(slot).strip(), "%H:%M")
-        except ValueError as exc:
-            raise ValueError("Daily slots must use HH:MM") from exc
-        normalized.append(parsed.strftime("%H:%M"))
+    normalized = normalize_daily_slots(slots)
     limit = plan.get("posts_per_day", len(normalized))
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= len(set(normalized)):
         raise ValueError("Posts per day must fit the selected daily slots")
@@ -128,6 +164,9 @@ def save_plan(plan, pages, groups, root=None):
               "token_group_id": str(plan.get("token_group_id") or ""),
               "use_llm": plan.get("use_llm", True) is not False,
               "updated_at": datetime.now().isoformat(timespec="seconds")}
+    if len(group_ids) == 1 and stored["id"] == f"group:{group_ids[0]}":
+        stored["group_schedule_times"] = normalize_daily_slots(
+            (group_map[group_ids[0]].get("schedule_config") or {}).get("times") or ["11:30", "19:30"])
     with _LOCK:
         saved = settings(root)
         saved["plans"] = [p for p in saved["plans"] if p["id"] != stored["id"]] + [stored]

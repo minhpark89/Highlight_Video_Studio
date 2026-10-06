@@ -1,0 +1,14 @@
+{
+  "success": true,
+  "checks": [
+    "Group rows and scheduling buttons appear before inventory finishes",
+    "Background count updates the correct bound group",
+    "Legacy two-slot plan cannot hide the third saved group slot",
+    "Confirm sends all three slots, count and edited stagger",
+    "Intentional two-post cap persists; more than six slots remain selectable",
+    "Filter changes abort old fetch and reject a late response, including its page counter",
+    "Identical quiet refreshes share the pending request"
+  ],
+  "errors": [],
+  "live_http": false
+}

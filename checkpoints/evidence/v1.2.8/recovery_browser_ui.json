@@ -1,0 +1,50 @@
+{
+  "success": true,
+  "checks": [
+    "Only verified, unreserved stock videos are selectable",
+    "Selecting a candidate opens preview and enables replacement",
+    "Paged inventory retains explicit selection",
+    "Render polls progress and does not select or schedule by itself",
+    "A validated render can be previewed and selected, with adjusted bounds disclosed"
+  ],
+  "errors": [],
+  "requests": [
+    {
+      "path": "/",
+      "method": "GET"
+    },
+    {
+      "path": "/api/posts/bad/recovery-videos",
+      "method": "GET"
+    },
+    {
+      "path": "/api/posts/bad/recovery-preview",
+      "method": "GET"
+    },
+    {
+      "path": "/api/posts/bad/recovery-videos",
+      "method": "GET"
+    },
+    {
+      "path": "/api/posts/bad/recovery-preview",
+      "method": "GET"
+    },
+    {
+      "path": "/api/posts/bad/recovery-videos",
+      "method": "GET"
+    },
+    {
+      "path": "/api/posts/bad/render-recovery",
+      "method": "POST"
+    },
+    {
+      "path": "/api/posts/bad/render-recovery",
+      "method": "GET"
+    },
+    {
+      "path": "/api/posts/bad/recovery-preview",
+      "method": "GET"
+    }
+  ],
+  "live_http": false
+}

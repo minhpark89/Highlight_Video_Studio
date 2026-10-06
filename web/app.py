@@ -106,7 +106,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.2.7"
+APP_VERSION = "1.2.8"
 
 @app.after_request
 def add_header(response):
@@ -229,13 +229,17 @@ def save_crawled_videos(videos):
         print(f"Error saving crawled videos: {e}")
 
 try:
-    from web.posts_store import load_posts_file, save_posts_file
+    from web.posts_store import load_posts_file, save_posts_file, posts_snapshot
 except ImportError:
-    from posts_store import load_posts_file, save_posts_file
+    from posts_store import load_posts_file, save_posts_file, posts_snapshot
 
 
 def load_posts():
     return load_posts_file(POSTS_FILE)
+
+
+def read_posts_snapshot():
+    return posts_snapshot(POSTS_FILE)
 
 
 def save_posts(posts):
@@ -2138,7 +2142,7 @@ def api_list_pages():
     # queue is the authoritative source for work scheduled during the current
     # run. Expose both so the UI never shows a misleading zero during a batch.
     try:
-        posts = load_posts()
+        posts = read_posts_snapshot()
     except Exception:
         posts = []
     stats = {}
@@ -2195,6 +2199,24 @@ def api_list_groups():
     return jsonify({"success": True, "groups": groups})
 
 
+@app.route("/api/groups/video-counts", methods=["GET"])
+def api_group_video_counts():
+    """Count each bound folder once without loading jobs or probing media."""
+    counts = {}
+    rows = []
+    for group in page_manager.list_groups():
+        folder = Path(group.get("folder_binding") or group.get("folder_path") or OUTPUT_DIR).expanduser().resolve()
+        key = str(folder)
+        if key not in counts:
+            try:
+                with os.scandir(folder) as entries:
+                    counts[key] = sum(entry.name.lower().endswith(".mp4") and entry.is_file(follow_symlinks=False) for entry in entries)
+            except OSError:
+                counts[key] = None
+        rows.append({"id": str(group["id"]), "file_count": counts[key]})
+    return jsonify({"success": True, "groups": rows})
+
+
 @app.route("/api/folders", methods=["GET"])
 def api_folder_browser():
     """Browse local directories for the operator's Folder Binding selection."""
@@ -2228,7 +2250,22 @@ def api_save_group():
     if not name:
         return jsonify({"error": "Tên nhóm không được để trống"}), 400
     
-    group = page_manager.add_or_update_group(group_id, name, page_ids, folder_binding, schedule_config)
+    from src.output_pipeline import normalize_daily_slots, sync_group_daily_plan, _LOCK as plan_lock
+    if schedule_config is not None:
+        try:
+            if not isinstance(schedule_config, dict):
+                raise ValueError("Cấu hình lịch phải là một đối tượng")
+            times = normalize_daily_slots(schedule_config.get("times") or ["11:30", "19:30"])
+            gap = schedule_config.get("stagger_minutes", 15)
+            if isinstance(gap, bool) or not isinstance(gap, int) or not 1 <= gap <= 1440:
+                raise ValueError("Giãn cách phải từ 1 đến 1440 phút")
+            schedule_config = {**schedule_config, "times": times, "stagger_minutes": gap}
+        except (ValueError, TypeError) as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+    with plan_lock:
+        previous = next((g for g in page_manager.list_groups() if str(g.get("id")) == str(group_id)), None)
+        group = page_manager.add_or_update_group(group_id, name, page_ids, folder_binding, schedule_config)
+        daily_plan = sync_group_daily_plan(previous, group) if previous and schedule_config is not None else None
     gid = group.get("id")
 
     # Đồng bộ tên nhóm trực tiếp vào từng page trong pages.json để hiển thị tức thì
@@ -2250,7 +2287,7 @@ def api_save_group():
     except Exception as ex:
         print("[Error syncing group to pages]", ex)
 
-    return jsonify({"success": True, "group": group})
+    return jsonify({"success": True, "group": group, "daily_plan": daily_plan})
 
 @app.route("/api/groups/<group_id>", methods=["DELETE"])
 def api_delete_group(group_id):
@@ -3534,15 +3571,15 @@ def api_get_posts():
     return jsonify(_enrich_post_rows(load_posts()))
 
 
-def _enrich_post_rows(posts, *, audit_posts=None):
+def _enrich_post_rows(posts, *, audit_posts=None, catalog=None):
     from web.meta_handoff import handoff_eligibility
     from web.dashboard import post_bucket
     from web.meta_diagnostics import diagnose
     from web.post_retry import can_retry_without_upload
     from web.token_audit import token_audit
-    catalog = token_vault.list_tokens(mask=True)
+    catalog = token_vault.list_tokens(mask=True) if catalog is None else catalog
     audited = audit_posts if audit_posts is not None else posts
-    token_audit(audited, page_manager.list_pages(), catalog, load_token_groups())
+    token_audit(audited, page_manager.list_pages(), catalog, load_token_groups(), annotate_posts=posts)
     token_catalog = {str(item.get("id")): item for item in catalog if item.get("id")}
     for post in posts:
         from web.video_recovery import can_replace_failed_video
@@ -3605,8 +3642,9 @@ def _enrich_post_rows(posts, *, audit_posts=None):
 
 @app.route("/api/posts/list", methods=["GET"])
 def api_list_posts():
+    import copy
     from web.post_queries import select_posts
-    posts = load_posts()
+    posts = read_posts_snapshot()
     try:
         result = select_posts(posts, view=request.args.get("view", "posts"), bucket=request.args.get("bucket", "all"),
                               group_id=request.args.get("group_id", ""), page_id=request.args.get("page_id", ""),
@@ -3614,20 +3652,31 @@ def api_list_posts():
                               page_size=int(request.args.get("page_size", 50)))
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
-    result["items"] = _enrich_post_rows(result["items"], audit_posts=posts)
+    catalog = token_vault.list_tokens(mask=True)
+    result["items"] = _enrich_post_rows(copy.deepcopy(result["items"]), audit_posts=posts, catalog=catalog)
     # Picker data has no secrets and does not require a second queue read.
     result["tokens"] = [{"id": t["id"], "name": t.get("name") or t["id"]}
-                        for t in token_vault.list_tokens(mask=True)]
+                        for t in catalog]
     return jsonify({"success": True, **result})
+
+
+@app.route("/api/posts/alerts", methods=["GET"])
+def api_post_alerts():
+    from web.meta_diagnostics import safe_error
+    rows = [{"id": p.get("id"), "status": "failed", "retry_stage": p.get("retry_stage"),
+             "error": safe_error(p.get("error"))} for p in read_posts_snapshot()
+            if p.get("status") == "failed" and p.get("retry_stage") in ("facebook_publish", "meta_preflight") and p.get("error")]
+    return jsonify({"success": True, "items": rows[-100:]})
 
 
 @app.route("/api/posts/<post_id>", methods=["GET"])
 def api_get_post(post_id):
-    posts = load_posts()
+    import copy
+    posts = read_posts_snapshot()
     post = next((p for p in posts if str(p.get("id")) == post_id), None)
     if post is None:
         return jsonify({"success": False, "error": "Không tìm thấy bài"}), 404
-    return jsonify({"success": True, "post": _enrich_post_rows([post], audit_posts=posts)[0]})
+    return jsonify({"success": True, "post": _enrich_post_rows([copy.deepcopy(post)], audit_posts=posts)[0]})
 
 
 @app.route("/api/groups/post-summary", methods=["GET"])
@@ -3635,7 +3684,7 @@ def api_group_post_summary():
     from web.post_queries import group_summary
     from src.output_pipeline import settings
     return jsonify({"success": True, "server_now": datetime.now().isoformat(timespec="seconds"),
-                    **group_summary(load_posts(), page_manager.list_groups(), settings().get("plans", []))})
+                    **group_summary(read_posts_snapshot(), page_manager.list_groups(), settings().get("plans", []))})
 
 
 @app.route("/api/posts/schedule-today", methods=["POST"])
@@ -3670,8 +3719,8 @@ def api_review_batch():
 @app.route("/api/posts/token-audit", methods=["GET"])
 def api_posts_token_audit():
     from web.token_audit import token_audit
-    return jsonify({"success": True, **token_audit(load_posts(), page_manager.list_pages(),
-                                                token_vault.list_tokens(mask=True), load_token_groups())})
+    return jsonify({"success": True, **token_audit(read_posts_snapshot(), page_manager.list_pages(),
+                                                token_vault.list_tokens(mask=True), load_token_groups(), annotate_posts=[])})
 
 
 @app.route("/api/posts/handoff-meta", methods=["POST"])
@@ -3702,7 +3751,7 @@ def api_posts_health():
     Content packages and posted_clips are retained after a queue wipe, so an empty
     /api/posts response must not look like a clean first run to the operator.
     """
-    posts = load_posts()
+    posts = read_posts_snapshot()
     posted_file = POSTS_FILE.parent / "posted_clips.json"
     posted_count = 0
     if posted_file.exists():

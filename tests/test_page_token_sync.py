@@ -672,7 +672,7 @@ class BackendApiTests(unittest.TestCase):
             {"page_id": "PAGE_A", "status": "published"},
             {"page_id": "PAGE_A", "status": "scheduled"},
         ]
-        with mock.patch.object(self.appmod, "load_posts", return_value=posts):
+        with mock.patch.object(self.appmod, "read_posts_snapshot", return_value=posts):
             response = self.client.get("/api/pages")
         page = response.get_json()["pages"][0]
         self.assertEqual(page["published_count"], 1)
