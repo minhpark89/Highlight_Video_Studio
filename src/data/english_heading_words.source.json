@@ -1,0 +1,8 @@
+{
+  "upstream": "https://github.com/cmusphinx/cmudict",
+  "commit": "74790861f652b15e4ac49015a90074ad62a27690",
+  "source_file": "cmudict.dict",
+  "purpose": "Offline lexical evidence for English headings only; prose retains language detection",
+  "words": 124082,
+  "sha256": "89134aa67bb30f22112eca1314260c9da5b80de5c3532b4a1d7347dfd2f00b1e"
+}

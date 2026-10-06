@@ -917,6 +917,13 @@ def _publish_claimed_post(post, posts, poster, current_dt, token_vault, page_man
         post["first_comment_status"] = post.get("first_comment_status") or "not_configured"
 
     try:
+        from src.video_recovery_media import verify_recovery_digest
+        verify_recovery_digest(post, video_path)
+    except (ValueError, OSError) as exc:
+        post.update(status="failed", retryable=False, retry_stage="invalid_media", error=sanitize_error(exc), outcome_unknown=False)
+        post.pop("claimed_at", None)
+        return post
+    try:
         # The worker publishes first, then comments. Passing an empty comment
         # prevents MetaReelPoster from making an implicit/out-of-order call.
         post["content_frozen_at"] = post.get("content_frozen_at") or current_dt.isoformat(timespec="seconds")

@@ -1,3 +1,9 @@
+# Latest checkpoint — v1.2.7 CMS and video recovery
+
+Ngày 2026-10-06, Asia/Saigon, nhánh `release/v1.2.7`, Graph v24.0. Đọc [CHECKPOINT_V1_2_7_MEDIA_CMS_RECOVERY_20261006.md](CHECKPOINT_V1_2_7_MEDIA_CMS_RECOVERY_20261006.md). Sửa false positive English headings còn tồn tại sau cài v126. Ưu tiên chọn clip đã FFprobe/hash/claim/source kiểm tra trong kho; fallback render nền nguồn gốc, progress/preview. Replacement preparing và chỉ đăng khi Content/Website/embed/First Comment ready. Giữ IDs/audit/claims, chống bấm lặp và restart. Chưa tự cài/sửa runtime thật hoặc publish/delete Meta/CMS thật. Evidence/tools mới tại checkpoints/{evidence,tools}/v1.2.7. Trạng thái phát hành cuối xem checkpoint chi tiết.
+
+## Checkpoint trước
+
 # Latest checkpoint — v1.2.6 Content recovery
 
 Ngày 2026-10-06. Đọc [CHECKPOINT_V1_2_6_CONTENT_RECOVERY_20261006.md](CHECKPOINT_V1_2_6_CONTENT_RECOVERY_20261006.md) trước khi sửa tiếp. Nhánh `release/v1.2.6`, Graph v24.0. Thumbnail ưu tiên model ảnh; hai ảnh body từ video dài gốc; text LLM có fallback; Website giữ URL, embed thật và comment đúng link; video lỗi terminal có phục hồi/xóa local qua fresh Meta check.

@@ -160,7 +160,7 @@ internal static class AppLauncher
     {
         internal LauncherForm()
         {
-            Text = "Highlight Desktop Test v1.2.6";
+            Text = "Highlight Desktop Test v1.2.7";
             Width = 410;
             Height = 175;
             StartPosition = FormStartPosition.CenterScreen;

@@ -8213,10 +8213,7 @@
       if(attempt.checked_at) extra.innerHTML+=`<br><b>Phản hồi đăng gần nhất:</b> ${escapeHtml(new Date(attempt.checked_at).toLocaleString('vi-VN'))} · HTTP ${Number(attempt.http_status || 0) || 'chưa nhận'}<br>${escapeHtml(attempt.method || '')} ${escapeHtml(attempt.endpoint || '')}<br>Token: ${escapeHtml(attempt.token_id || '')} · ${escapeHtml(attempt.state || '')}<br>Meta: ${escapeHtml(String(attempt.error_code ?? '—'))} / ${escapeHtml(String(attempt.error_subcode ?? '—'))} · Trace: ${escapeHtml(attempt.trace_id || '—')}`;
       body.appendChild(extra);
       if(diag.can_replace_failed_video){
-        const container=document.createElement('div');container.style='margin-top:16px;';
-        container.innerHTML='<div style="color:#fbbf24;margin-bottom:8px;">Meta đã xác nhận video lỗi và chưa đăng. Kiểm tra hoặc render lại MP4 từ video gốc. Có thể đăng lại bằng App ngay hoặc chọn giờ Meta; giữ Website, First Comment và ID lỗi cũ.</div><label for="meta-replacement-file">Tên file MP4 đã sửa</label><input id="meta-replacement-file" class="form-control"><label for="meta-replacement-mode">Cách đăng lại</label><select id="meta-replacement-mode" class="form-control"><option value="app_queue">Đăng lại bằng App ngay</option><option value="meta_scheduled">Meta giữ lịch</option></select><label for="meta-replacement-schedule">Giờ mới (App: có thể để trống; Meta: ít nhất 30 phút từ bây giờ)</label><input id="meta-replacement-schedule" type="datetime-local" class="form-control">';
-        body.appendChild(container);document.getElementById('meta-replacement-file').value=data.media_file || '';
-        document.getElementById('meta-replace-failed').style.display='';
+        await mountRecoveryVideos(body, postId);
       }
       if(diag.can_reschedule_existing){ const input=document.createElement('input'); input.type='datetime-local'; input.id='meta-replacement-time'; input.style='margin-top:16px;padding:8px;background:#0f172a;color:white;border:1px solid #475569;border-radius:6px;'; const label=document.createElement('label'); label.textContent='Giờ đăng mới (nên chọn ít nhất 30 phút từ bây giờ để có thời gian xử lý): '; label.appendChild(input); body.appendChild(label); }
       if(diag.can_retry_existing || diag.can_sync_existing){
@@ -8291,7 +8288,7 @@
     const schedule=document.getElementById('meta-replacement-schedule')?.value;
     const mode=document.getElementById('meta-replacement-mode')?.value || 'app_queue';
     if(!filename || (mode === 'meta_scheduled' && !schedule)){showToast('Chọn MP4 đã sửa và giờ đăng mới.');return;}
-    if(!confirm('Tạo lịch thay thế bằng MP4 đã sửa? Facebook sẽ nhận video mới; ID lỗi cũ vẫn được lưu trong lịch sử.')) return;
+    if(!confirm('Dùng clip đã chọn để thay bài lỗi? App chuẩn bị và xác minh Content, Website và First Comment đúng nguồn trước khi đăng; ID lỗi cũ được giữ trong lịch sử.')) return;
     metaFinishBusy=true;const button=document.getElementById('meta-replace-failed');button.disabled=true;
     const feedback=document.getElementById('meta-recovery-result');feedback.textContent='Đang xác minh Meta và MP4 đã sửa...';
     try{
@@ -8305,6 +8302,7 @@
   }
   document.addEventListener('DOMContentLoaded',()=>{loadDashboard();setInterval(()=>{if(document.getElementById('pane-dashboard')?.classList.contains('active')) loadDashboard();},30000);});
 </script>
+<script src="/static/video_recovery.js"></script>
 <script src="/static/group_review.js"></script>
 </body>
 </html>

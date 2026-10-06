@@ -1,0 +1,47 @@
+{
+  "success": true,
+  "snapshot_replay": true,
+  "articles": [
+    {
+      "snapshot": "content_1791274527_0971f01a.html",
+      "sha256": "55b5c42e68e8cca730e3e4adea7fd783b5b512f5331591745faa20f6d6c6def8",
+      "english_validation": "passed",
+      "original_embed_ids": [
+        "vacL8i-A4tk"
+      ],
+      "words": 988,
+      "live_cms_write": false
+    },
+    {
+      "snapshot": "content_1791274681_0427af31.html",
+      "sha256": "dfc081235d28148de27fd828519a48ecca26f8b6102a96cc2cd7e139756c87e5",
+      "english_validation": "passed",
+      "original_embed_ids": [
+        "9qoXM6P5u9Y"
+      ],
+      "words": 1201,
+      "live_cms_write": false
+    },
+    {
+      "snapshot": "content_1791274714_859f7fcc.html",
+      "sha256": "cc23990a30ad57bcf645b59c66ff047549510ae95e3bf1381ab5651246841dbc",
+      "english_validation": "passed",
+      "original_embed_ids": [
+        "Uj63XI_d7_A"
+      ],
+      "words": 1009,
+      "live_cms_write": false
+    },
+    {
+      "snapshot": "content_1791274719_e4b8c58d.html",
+      "sha256": "00b553ed74a7231dce8156e675e80b0c929ad5c3dda5e74418b289f54ade3b48",
+      "english_validation": "passed",
+      "original_embed_ids": [
+        "utVvVQF3Qmo"
+      ],
+      "words": 1147,
+      "live_cms_write": false
+    }
+  ],
+  "note": "Replayed public GET snapshots collected after v126 installation. No CMS update performed."
+}

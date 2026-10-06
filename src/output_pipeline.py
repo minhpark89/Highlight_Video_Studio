@@ -212,6 +212,76 @@ def finish_batch(root=None):
                 db.execute("UPDATE sources SET interface_written=1 WHERE sha256=?", (source["sha256"],))
 
 
+def reserve_recovery(replacement, original, posts, root=None):
+    """Transfer an unassigned source, or the rejected post's own source, once.
+
+    Caller holds _LOCK and POSTS_LOCK while saving posts. Durable intake lets
+    the existing worker recover an interruption before the JSON queue save.
+    """
+    root = Path(root or ROOT)
+    sha = replacement["source_sha256"]
+    with _LOCK, _connect(root) as db:
+        prior = db.execute("SELECT * FROM sources WHERE sha256=?", (sha,)).fetchone()
+        permitted = {original["id"], replacement["id"]}
+        if prior and prior["published"]:
+            raise ValueError("Video này đã được đăng; chọn clip khác trong kho.")
+        if prior and prior["assigned"] and prior["post_id"] not in permitted:
+            raise ValueError("Video đã được giữ cho bài/nhóm khác; chọn clip chưa được phân bổ.")
+        # Legacy rows may predate the hash ledger. Compare same-sized held
+        # files before claiming an alias with a different basename.
+        from src.content_packages import scheduled_video_path
+        selected = scheduled_video_path(root / "output", replacement["media_file"])
+        for other in posts:
+            if other.get("id") in permitted or other.get("source_sha256") or not other.get("page_id") or other.get("status") in ("superseded", "cancelled"):
+                continue
+            try:
+                path = scheduled_video_path(root / "output", other.get("media_file") or other.get("clip_filename"))
+            except (ValueError, OSError):
+                continue
+            if path.stat().st_size == selected.stat().st_size:
+                other["source_sha256"] = file_hash(path)
+        owners = [p for p in posts if p.get("id") not in permitted and p.get("source_sha256") == sha and
+                  p.get("status") not in ("superseded", "cancelled")]
+        if any(p.get("page_id") or p.get("content_frozen_at") or p.get("status") not in ("preparing", "draft") for p in owners):
+            raise ValueError("Video đã có bài hoặc lịch; chọn clip khác để tránh đăng trùng.")
+        if prior:
+            db.execute("DELETE FROM slots WHERE sha256=?", (sha,))
+            db.execute("UPDATE sources SET post_id=?,assigned=1,intake=?,interface_written=0 WHERE sha256=?",
+                       (replacement["id"], json.dumps(replacement), sha))
+        else:
+            db.execute("INSERT INTO sources(sha256,path,post_id,assigned,intake,created_at) VALUES(?,?,?,1,?,?)",
+                       (sha, str(root / "output" / replacement["media_file"]), replacement["id"],
+                        json.dumps(replacement), datetime.now().isoformat(timespec="seconds")))
+        db.execute("INSERT OR IGNORE INTO identities VALUES(?,?)", ("sha:" + sha, sha))
+        for owner in owners:
+            owner.update(status="superseded", superseded_by=replacement["id"], video_recovery_stock_claim=True)
+
+
+def restore_recovery_intents(root=None):
+    """Restore committed replacement intents even if Daily intake is disabled."""
+    root = Path(root or ROOT)
+    if not (root / "data" / "output_ledger.sqlite3").is_file():
+        return 0
+    restored = 0
+    with _LOCK, POSTS_LOCK, _connect(root) as db:
+        posts = load_posts_file(root / "posts.json")
+        for pending in db.execute("SELECT * FROM sources WHERE interface_written=0 AND intake!=''"):
+            intent = json.loads(pending["intake"])
+            if not intent.get("replaces_post_id"):
+                continue
+            if not any(p.get("id") == intent["id"] for p in posts):
+                posts.insert(0, intent)
+                restored += 1
+            for post in posts:
+                if post.get("id") == intent["replaces_post_id"]:
+                    post.update(status="superseded", replacement_post_id=intent["id"], retryable=False)
+                elif post.get("id") != intent["id"] and post.get("source_sha256") == intent.get("source_sha256") and not post.get("page_id"):
+                    post.update(status="superseded", superseded_by=intent["id"])
+            save_posts_file(root / "posts.json", posts)
+            db.execute("UPDATE sources SET interface_written=1 WHERE sha256=?", (pending["sha256"],))
+    return restored
+
+
 def valid_mp4(path):
     from src.media_validation import valid_video
     return valid_video(path)
@@ -323,6 +393,13 @@ def process_once(*, root=None, pages=None, groups=None, token_groups=None, now=N
         posts = load_posts_file(root / "posts.json")
         before_posts = json.dumps(posts, sort_keys=True)
         for pending in db.execute("SELECT * FROM sources WHERE interface_written=0 AND intake!=''"):
+            intent = json.loads(pending["intake"])
+            if intent.get("replaces_post_id"):
+                for row in posts:
+                    if row.get("id") == intent["replaces_post_id"]:
+                        row.update(status="superseded", replacement_post_id=intent["id"], retryable=False)
+                    elif row.get("id") != intent["id"] and row.get("source_sha256") == intent.get("source_sha256") and not row.get("page_id"):
+                        row.update(status="superseded", superseded_by=intent["id"])
             existing = next((p for p in posts if p.get("id") == pending["post_id"]), None)
             if not existing:
                 posts.append(json.loads(pending["intake"]))

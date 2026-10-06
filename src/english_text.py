@@ -6,6 +6,8 @@ import re
 import unicodedata
 from html.parser import HTMLParser
 from functools import lru_cache
+from pathlib import Path
+import threading
 
 from langdetect import DetectorFactory
 from langdetect.lang_detect_exception import LangDetectException
@@ -45,15 +47,43 @@ gameplay gaming graphics weapon build trailer breakdown overview summary
 highlights uncut watching player conclusion tips settings performance discipline
 """.split())
 
+_HEADING_LEXICON = None
+_HEADING_LEXICON_LOCK = threading.Lock()
+
+
+def _heading_lexicon():
+    """CMU's redistributable word list is bundled; no network/model is used."""
+    global _HEADING_LEXICON
+    if _HEADING_LEXICON is None:
+        with _HEADING_LEXICON_LOCK:
+            if _HEADING_LEXICON is None:
+                path = Path(__file__).resolve().parent / "data" / "english_heading_words.txt"
+                try:
+                    _HEADING_LEXICON = frozenset(path.read_text(encoding="utf-8").splitlines())
+                except OSError:
+                    _HEADING_LEXICON = frozenset()
+    return _HEADING_LEXICON
+
 
 def _english_heading(value):
-    """Short English headings have too little evidence for n-gram detection."""
+    """Use lexical evidence for headings that the n-gram model mislabels.
+
+    This exception is confined to heading tags. Prose and foreign scripts keep
+    their independent checks; proper names need several English title words.
+    """
     text = public_text(value)
     if any(char.isalpha() and ord(char) > 127 for char in text):
         return False
-    words = re.findall(r"[a-z]+", text.casefold())
-    return bool(2 <= len(words) <= 12 and not set(words) & _FOREIGN_MARKERS
-                and set(words) & _ENGLISH_HEADING_WORDS
+    words = re.findall(r"[a-z]+(?:'[a-z]+)?", text.casefold())
+    if not 2 <= len(words) <= 40 or set(words) & _FOREIGN_MARKERS:
+        return False
+    known = sum(word in _heading_lexicon() for word in words)
+    if len(words) <= 12 and known >= 3 and known / len(words) >= 0.9:
+        return True
+    title_terms = {"movie", "video", "full", "uncut", "breakdown", "scene", "analysis", "trailer", "footage", "recording"}
+    if known >= 6 and known / len(words) >= 0.6 and len(set(words) & title_terms) >= 2:
+        return True
+    return bool(len(words) <= 12 and set(words) & _ENGLISH_HEADING_WORDS
                 and set(words) & (_ENGLISH_MARKERS | {"a", "an", "in", "to", "at"}))
 
 
@@ -145,6 +175,12 @@ def assert_english(value, label="Content"):
     error = _english_error(str(value or ""))
     if error:
         raise ValueError(f"{label} {error}")
+
+
+def assert_english_title(value, label="Title"):
+    """CMS titles have the same limited lexical evidence as article headings."""
+    if not is_english(value) and not _english_heading(value):
+        raise ValueError(f"{label} must be in English; non-English output was rejected")
 
 
 @lru_cache(maxsize=4096)

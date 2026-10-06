@@ -721,7 +721,7 @@ def _apply_to_posts(item):
         if result.get("first_comment") and post.get("first_comment_status") != "posted" and not post.get("first_comment_snapshot") and not post.get("draft_edited_at"):
             previous_comment_status = post.get("first_comment_status")
             post["first_comment"] = result["first_comment"]
-            if not post.get("output_pipeline"):
+            if not post.get("output_pipeline") and not post.get("video_recovery_preparing"):
                 post["first_comment_snapshot"] = result["first_comment"]
             # A package may finish after Facebook published without a comment.
             # Do not suggest that an already-published post still has a pending
@@ -761,6 +761,29 @@ def _apply_to_posts(item):
                     post["approved_at"] = _now()
                     post["content_frozen_at"] = _now()
                     post["first_comment_snapshot"] = post["first_comment"]
+        if post.get("video_recovery_preparing") and post.get("status") == "preparing":
+            url = str(post.get("article_url") or "")
+            comment = str(post.get("first_comment") or "")
+            ready = (post.get("website_status") == "ready" and post.get("website_embed_status") == "ready"
+                     and post.get("website_video_status") == "youtube_embed_verified" and url
+                     and comment.count(url) == 1 and post.get("content"))
+            if ready:
+                assert_english(post["title"], "Title")
+                assert_english(post["content"], "Caption")
+                assert_english(comment, "First Comment")
+                if post.get("publish_mode") == "meta_scheduled":
+                    from multi_pc.meta_scheduling import parse_meta_schedule_time
+                    try:
+                        parse_meta_schedule_time(post.get("scheduled_time"))
+                    except ValueError:
+                        message = "Content đã sẵn sàng nhưng giờ Meta quá gần hoặc đã qua; có thể Đăng lại bằng App."
+                        post.update(status="failed", retryable=True, retry_stage="recovery_schedule", error=message,
+                                    schedule_error=message, video_recovery_preparing=False,
+                                    content_frozen_at=_now(), first_comment_snapshot=comment, first_comment_status="ready")
+                        continue
+                post.update(status="meta_handoff" if post.get("publish_mode") == "meta_scheduled" else "scheduled",
+                            video_recovery_preparing=False, content_frozen_at=_now(),
+                            first_comment_snapshot=comment, first_comment_status="ready", error="")
     save_posts_file(posts_file, posts)
     if comments_to_queue:
         try:
@@ -879,10 +902,11 @@ def retry_package(package_id, mode=None, *, repair_website=False, post_id=None):
             item["mode"] = mode
             if mode == "llm" and str((item.get("result") or {}).get("source") or "").startswith("no_llm"):
                 item["regenerate_text"] = True
-        if str((item.get("result") or {}).get("source") or "") in ("no_llm_error_fallback", "no_llm_quota_fallback"):
+        if not repair_website and str((item.get("result") or {}).get("source") or "") in ("no_llm_error_fallback", "no_llm_quota_fallback"):
             item["regenerate_text"] = True
         if repair_website:
-            item["regenerate_text"] = True
+            if not package_is_english(item.get("result") or {}) or not (item.get("result") or {}).get("article_html"):
+                item["regenerate_text"] = True
             item["website_error"] = ""
             item.pop("website_rate_limit_retries", None)
             item.pop("next_retry_at", None)

@@ -16,7 +16,7 @@ def can_retry_without_upload(post):
             or post.get("meta_cancel_requested") or any(post.get(k) for k in REMOTE_FIELDS)):
         return False
     stage = post.get("retry_stage")
-    if stage in ("meta_preflight", "local_video", "website_content", "invalid_media"):
+    if stage in ("meta_preflight", "local_video", "website_content", "invalid_media", "recovery_schedule"):
         return True
     # Historical rows did not store a structured Init receipt. A definitive
     # 4xx rejection is different from a timeout after starting an upload.

@@ -173,12 +173,15 @@ def test_replace_api_queues_once_without_uploading_or_deleting_meta(tmp_path, mo
     monkeypatch.setattr(api, "POSTS_FILE", path)
     monkeypatch.setattr(api, "OUTPUT_DIR", output)
     monkeypatch.setattr(api, "_inspect_post_meta", lambda _: (rejected_seen(), {"page_token": "fixture"}))
+    from src.publisher import website_publisher
+    monkeypatch.setattr(website_publisher, "get_clip_metadata", lambda _: {"video_title": "Original launch trailer",
+        "youtube_url": "https://youtu.be/2GdRyatht4E", "youtube_id": "2GdRyatht4E"})
     monkeypatch.setattr(first_comment_queue, "QUEUE_FILE", tmp_path / "comments.json")
-    body = {"confirm_replace_failed_video": True, "video_id": "9001", "filename": "fixed.mp4", "schedule_time": int(time.time()) + 3600}
+    body = {"confirm_replace_failed_video": True, "video_id": "9001", "filename": "fixed.mp4", "mode": "meta_scheduled", "schedule_time": int(time.time()) + 3600}
     with mock.patch.object(api.reel_poster, "publish_reel") as upload, mock.patch.object(api.reel_poster, "delete_reel") as delete:
         first = api.app.test_client().post("/api/posts/bad/replace-failed-video", json=body)
         second = api.app.test_client().post("/api/posts/bad/replace-failed-video", json=body)
-    assert first.status_code == second.status_code == 200
+    assert first.status_code == second.status_code == 200, (first.get_json(), second.get_json())
     assert second.get_json()["already_queued"] and len(load_posts_file(path)) == 2
     upload.assert_not_called()
     delete.assert_not_called()

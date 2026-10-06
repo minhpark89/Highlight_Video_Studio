@@ -106,7 +106,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.2.6"
+APP_VERSION = "1.2.7"
 
 @app.after_request
 def add_header(response):
@@ -3228,42 +3228,133 @@ def api_refresh_post_meta(post_id):
         return jsonify({"success": False, "error": safe_error(exc)}), 500
 
 
+@app.route("/api/posts/<post_id>/recovery-videos", methods=["GET"])
+def api_recovery_videos(post_id):
+    from src.video_recovery_media import inventory
+    from web.video_recovery_tasks import task_for
+    posts = load_posts()
+    post = next((p for p in posts if p.get("id") == post_id), None)
+    if not post:
+        return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+        result = inventory(OUTPUT_DIR, post, posts, offset=offset)
+        return jsonify({"success": True, **result, "render_task": task_for(OUTPUT_DIR.parent, post_id)})
+    except (ValueError, OSError) as exc:
+        return jsonify({"success": False, "error": sanitize_error(exc)}), 409
+
+
+@app.route("/api/posts/<post_id>/recovery-preview", methods=["GET"])
+def api_recovery_preview(post_id):
+    from src.video_recovery_media import checked_video, media_key
+    if not any(p.get("id") == post_id for p in load_posts()):
+        return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
+    try:
+        path, _ = checked_video(OUTPUT_DIR, request.args.get("filename"))
+        return send_from_directory(str(OUTPUT_DIR), media_key(OUTPUT_DIR, path), conditional=True)
+    except (ValueError, OSError):
+        return jsonify({"success": False, "error": "Video chưa hợp lệ hoặc không còn trong kho."}), 409
+
+
+@app.route("/api/posts/<post_id>/render-recovery", methods=["GET", "POST"])
+def api_render_recovery(post_id):
+    from web.video_recovery_tasks import task_for, start_task
+    from web.video_recovery import can_replace_failed_video
+    post = next((p for p in load_posts() if p.get("id") == post_id), None)
+    if not post:
+        return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
+    root = OUTPUT_DIR.parent
+    if request.method == "GET":
+        return jsonify({"success": True, "task": task_for(root, post_id)})
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or body.get("confirm_render") is not True:
+        return jsonify({"success": False, "error": "Cần xác nhận render lại từ video gốc."}), 400
+    if str(body.get("video_id") or "") != str(post.get("meta_upload_video_id") or post.get("meta_video_id") or ""):
+        return jsonify({"success": False, "error": "Meta ID đã thay đổi; kiểm tra lại bài."}), 409
+    try:
+        seen, mapping = _inspect_post_meta(post)
+        if not mapping or not can_replace_failed_video(post, seen):
+            return jsonify({"success": False, "error": "Meta chưa xác nhận video lỗi và chưa đăng; kiểm tra lại Meta."}), 409
+        task = start_task(root, post)
+        return jsonify({"success": True, "task": task}), 202
+    except (ValueError, OSError) as exc:
+        return jsonify({"success": False, "error": sanitize_error(exc)}), 409
+
+
 @app.route("/api/posts/<post_id>/replace-failed-video", methods=["POST"])
 def api_replace_failed_video(post_id):
     from web.scheduled_publisher import _cycle_lock
     from web.video_recovery import prepare_replacement
+    from src.video_recovery_media import checked_video
+    from src.publisher.website_publisher import get_clip_metadata
+    from src import output_pipeline, content_packages
+    from web.posts_store import _LOCK as posts_lock
     body = request.get_json(silent=True) or {}
     if not isinstance(body, dict) or body.get("confirm_replace_failed_video") is not True:
         return jsonify({"success": False, "error": "Cần xác nhận tạo lịch thay thế cho video lỗi."}), 400
     if not _cycle_lock.acquire(blocking=False):
         return jsonify({"success": False, "error": "App đang xử lý bài; thử lại sau ít giây."}), 409
     try:
-        posts = load_posts()
-        post = next((p for p in posts if p.get("id") == post_id), None)
-        if not post:
-            return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
-        video_id = str(post.get("meta_upload_video_id") or post.get("meta_video_id") or "")
-        if str(body.get("video_id") or "") != video_id:
-            return jsonify({"success": False, "error": "Meta ID đã thay đổi; kiểm tra lại bài."}), 409
-        existing = next((p for p in posts if p.get("id") == post.get("replacement_post_id")), None)
-        if existing:
-            return jsonify({"success": True, "already_queued": True, "post_id": existing["id"]})
-        seen, mapping = _inspect_post_meta(post)
-        if not mapping:
-            return jsonify({"success": False, "error": "Sync Token đúng Page trước khi tạo lịch thay thế."}), 409
-        replacement, created = prepare_replacement(posts, post, seen, OUTPUT_DIR,
-            filename=body.get("filename"), schedule_time=body.get("schedule_time"), mode=body.get("mode") or "meta_scheduled")
-        save_posts(posts)
+        with output_pipeline._LOCK, posts_lock:
+            posts = load_posts()
+            post = next((p for p in posts if p.get("id") == post_id), None)
+            if not post:
+                return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
+            video_id = str(post.get("meta_upload_video_id") or post.get("meta_video_id") or "")
+            if str(body.get("video_id") or "") != video_id:
+                return jsonify({"success": False, "error": "Meta ID đã thay đổi; kiểm tra lại bài."}), 409
+            existing = next((p for p in posts if p.get("id") == post.get("replacement_post_id")), None)
+            if existing:
+                if existing.get("video_recovery_preparing") and not existing.get("content_package_id"):
+                    _enqueue_recovery_content(existing)
+                return jsonify({"success": True, "already_queued": True, "post_id": existing["id"]})
+            seen, mapping = _inspect_post_meta(post)
+            if not mapping:
+                return jsonify({"success": False, "error": "Sync Token đúng Page trước khi tạo lịch thay thế."}), 409
+            checked_video(OUTPUT_DIR, body.get("filename"), refresh=True)
+            source = get_clip_metadata(body.get("filename"))
+            replacement, created = prepare_replacement(posts, post, seen, OUTPUT_DIR,
+                filename=body.get("filename"), schedule_time=body.get("schedule_time"), mode=body.get("mode") or "app_queue",
+                content_policy="regenerate", source_metadata=source)
+            # Reserve first, then enqueue Content after the durable queue exists.
+            # A restart can recover the intent from the same ledger.
+            output_pipeline.reserve_recovery(replacement, post, posts, root=OUTPUT_DIR.parent)
+            save_posts(posts)
+            output_pipeline.finish_batch(root=OUTPUT_DIR.parent)
         from src.publisher.first_comment_queue import cancel_first_comment
         cancel_first_comment(post_id=post_id, object_id=video_id)
+        _enqueue_recovery_content(replacement, source)
         return jsonify({"success": True, "queued": created, "post_id": replacement["id"],
-                        "message": "Đã đưa MP4 thay thế vào hàng chờ theo chế độ đã chọn; giữ Website và lịch sử Meta ID lỗi cũ."})
+                        "message": "Đã giữ clip thay thế. App chuẩn bị và xác minh Content, Website có embed nguồn và First Comment trước khi đăng theo chế độ đã chọn."})
     except (ValueError, FileNotFoundError) as exc:
         return jsonify({"success": False, "error": sanitize_error(exc)}), 409
     except Exception as exc:
         return jsonify({"success": False, "error": sanitize_error(exc)}), 500
     finally:
         _cycle_lock.release()
+
+
+def _enqueue_recovery_content(replacement, source=None):
+    """Idempotent preparation, also resumed for interrupted requests at startup."""
+    from src import content_packages as packages
+    from src.publisher.website_publisher import get_clip_metadata
+    source = source or get_clip_metadata(replacement["media_file"])
+    item = packages.ensure_content_package(clip_filename=replacement["media_file"], title=source.get("video_title") or replacement["title"],
+        summary=source.get("description") or "", video_url=replacement.get("video_url") or "", mode="auto",
+        post_ids=[replacement["id"]], create_website_article=True, article_url=replacement.get("article_url") or "",
+        source_job_id=source.get("job_id") or "", source_clip_id=str(source.get("clip_index") or ""),
+        source_sha256=replacement.get("source_sha256") or "", first_comment_profile_id=replacement.get("first_comment_profile_id") or "")
+    if item.get("article_url") and item.get("status") not in ("queued", "running"):
+        item = packages.retry_package(item["id"], repair_website=True, post_id=replacement["id"])
+    posts = load_posts()
+    row = next((p for p in posts if p.get("id") == replacement["id"]), None)
+    if row and row.get("status") == "preparing":
+        row.update(content_package_id=item["id"], content_package_status=item["status"])
+        save_posts(posts)
+    if item.get("status") == "ready":
+        with packages._POST_SYNC_LOCK:
+            packages._apply_to_posts(item)
+    start_content_package_worker()
 
 
 @app.route("/api/posts/<post_id>/retry-media", methods=["POST"])
@@ -3457,7 +3548,7 @@ def _enrich_post_rows(posts, *, audit_posts=None):
         from web.video_recovery import can_replace_failed_video
         post["can_replace_failed_video"] = can_replace_failed_video(post, post.get("meta_observation") or {})
         post["can_retry_publish"] = (can_retry_without_upload(post) and post.get("retry_stage") in
-                                     ("meta_preflight", "facebook_publish", "meta_schedule_rejected"))
+                                     ("meta_preflight", "facebook_publish", "meta_schedule_rejected", "recovery_schedule"))
         recovery_id = str(post.get("meta_recovery_token_id") or "")
         if recovery_id:
             recovery_token = token_catalog.get(recovery_id) or {}
@@ -5483,6 +5574,18 @@ def api_content_studio_process():
                     "message": "Hàng đợi tự xử lý các clip đang chờ; theo dõi video và từng bước tại Content Studio."}), 202
 
 
+def _resume_recovery_content():
+    from src.output_pipeline import restore_recovery_intents
+    restore_recovery_intents(OUTPUT_DIR.parent)
+    for post in load_posts():
+        if post.get("video_recovery_preparing") and post.get("status") == "preparing" and not post.get("content_package_id"):
+            try:
+                _enqueue_recovery_content(post)
+            except Exception as exc:
+                print("[Recovery] Preparation requires retry: " + sanitize_error(exc))
+
+
+threading.Thread(target=_resume_recovery_content, daemon=True).start()
 from src.output_pipeline import start_worker as start_output_pipeline_worker
 _output_pipeline_thread = start_output_pipeline_worker()
 

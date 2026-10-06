@@ -37,7 +37,9 @@ def handoff_eligibility(post, output_dir, *, now_ts=None):
             (post.get("website_media_mode") == "youtube" and post.get("website_video_status") == "youtube_embed_verified")):
         return False, "Chờ bài Website có video gốc đầy đủ và player đã xác minh."
     try:
-        scheduled_video_path(output_dir, post.get("media_file") or post.get("clip_filename"))
+        path = scheduled_video_path(output_dir, post.get("media_file") or post.get("clip_filename"))
+        from src.video_recovery_media import verify_recovery_digest
+        verify_recovery_digest(post, path)
     except (ValueError, FileNotFoundError, OSError):
         return False, "Không tìm thấy video local."
     return True, ""

@@ -12,6 +12,7 @@ def _start_test_thread(thread, *args, **kwargs):
     identity = (getattr(target, "__module__", ""), getattr(target, "__name__", ""))
     if identity in {
         ("web.app", "queue_worker_loop"),
+        ("web.app", "_resume_recovery_content"),
         ("web.scheduled_publisher", "scheduled_publisher_worker_loop"),
         ("src.content_packages", "_worker_loop"),
         ("src.output_pipeline", "_worker_loop"),

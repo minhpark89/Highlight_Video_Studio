@@ -232,6 +232,10 @@ def get_clip_metadata(clip_filename: str) -> dict:
     Tuyệt đối loại bỏ triệt để mọi chữ 'Clip 1', 'Clip 2', 'job_...', 'Video Highlight'.
     """
     data_root = _runtime_data_root()
+    from src.video_recovery_media import recovery_source
+    recovered = recovery_source(data_root, clip_filename)
+    if recovered is not None:
+        return recovered
     jobs_file = data_root / "jobs.json"
     crawled_file = data_root / "crawled_videos.json"
     foreign_source = _verified_foreign_source(clip_filename, data_root)
@@ -1192,7 +1196,8 @@ def repair_existing_website_article(article_url, clip_filename, *, content_facto
     cached = metadata.get("result") or {}
     from src.english_text import package_is_english
     try:
-        assert_english(str(article.get("title") or ""), "CMS title")
+        from src.english_text import assert_english_title
+        assert_english_title(str(article.get("title") or ""), "CMS title")
         assert_english(old_body, "CMS article")
         needs_repair = False
     except ValueError:

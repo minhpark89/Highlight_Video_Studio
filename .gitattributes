@@ -1,0 +1,2 @@
+# Preserve the pinned upstream-derived dictionary digest across Windows clones.
+src/data/english_heading_words.txt -text
