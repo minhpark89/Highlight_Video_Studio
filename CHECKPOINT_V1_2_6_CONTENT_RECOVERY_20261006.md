@@ -125,3 +125,22 @@ Không cài mới/khởi động app mới hoặc sửa lịch thật trong sess
 - Tool GitHub được bổ sung streaming progress/sanitized upload errors sau tag; tool này không nằm trong payload app. Các commit checkpoint/evidence/tool sau build không đổi source app đã đóng gói hoặc tag.
 
 Ở mốc này, **GitHub v1.2.6 chưa public**. Đọc evidence/publication bổ sung sau khi deploy; asset checkpoint được chuẩn bị trước public và giữ nguyên sau upload.
+
+## Phát hành hoàn tất — 2026-10-06
+
+**v1.2.6 đã public trên GitHub**, Release ID `404495170`, `draft=false`, `prerelease=true`. Tải lại toàn bộ ba asset không đăng nhập hoàn tất lúc `2026-10-06T08:59:43.057850+00:00` (**15:59:43 +07**); HTTP200, kích thước/SHA256 khớp local và digest GitHub.
+
+- [Release](https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.2.6)
+- [Installer](https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.6/Highlight_Desktop_Test_Setup_v1.2.6.exe)
+- [SHA256](https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.6/Highlight_Desktop_Test_Setup_v1.2.6.sha256)
+- [Checkpoint độc lập kèm docs Meta](https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.6/CODEX_CHECKPOINT_v1.2.6.md)
+
+Remote tag khớp source đóng gói `15d5157d3ab3bf05ec5c1c6a2c08645d9d9ed643`. Nhánh tại mốc publish là `89ff03a22a261c39a2e94853b73bdf3074f312a1`; commit checkpoint/evidence sau này không thay tag hoặc installer.
+
+Checkpoint asset giữ nguyên **25865 bytes**, SHA256 `1f7b1ee9fd284f6c5c9680862ea05a19efd0b59e1aaf8a7ff888cc4c69f480a9`. Các ghi chú chưa public trong asset là trạng thái lúc chuẩn bị; trạng thái hoàn tất được ghi ở mục này và evidence trên nhánh release. Không thay asset đã công bố.
+
+Evidence cuối: `checkpoints/evidence/v1.2.6/release.json`, `deployment_status.json`, `public_download_verify.json`, `prepared_assets.json`, `installer_payload.json`, `offline_tests.json` và `javascript_syntax.json`.
+
+Bản installer local và SHA256 được đặt thêm ở `E:\OPENCLAW\BOB\Highlight_Desktop_Test_Setup_v1.2.6.exe` / `.sha256`; khớp bytes release. Root latest và checkpoint chi tiết được cập nhật. Bundle source offline: `E:\OPENCLAW\BOB\support\v1.2.6\Highlight_Source_v1.2.6_published.bundle` (nhánh release/v1.2.6 và tag v1.2.6, không chứa runtime private/installer ignored). Xem `source_bundle.json` để xác nhận ref/hash/verify thực tế.
+
+Session sau dùng source mới hoặc clone bundle, đọc identity app đang chạy rồi kiểm tra lại các ID ở bảng lịch sử. **Chưa cài v1.2.6 vào runtime người dùng, chưa sửa lịch thật và chưa POST/DELETE Meta/CMS thật.** Người dùng tự cài rồi dùng Thử lại Website / Kiểm tra Meta theo từng bài.
