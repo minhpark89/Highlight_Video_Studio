@@ -1,0 +1,150 @@
+﻿{
+    "size":  705081856,
+    "source_identity":  {
+                            "build_channel":  "desktop-test",
+                            "product_name":  "Highlight Desktop Test",
+                            "built_at_utc":  "2026-10-06T08:42:04.4530109Z",
+                            "source_commit":  "15d5157d3ab3bf05ec5c1c6a2c08645d9d9ed643",
+                            "source_dirty":  false,
+                            "meta_graph_api_version":  "v24.0",
+                            "port":  "ephemeral-loopback-never-5080",
+                            "prerelease_build":  "1.2.6",
+                            "bind_host":  "127.0.0.1",
+                            "app_version":  "1.2.6"
+                        },
+    "runtime_state_absent":  true,
+    "offline_test_summary":  "507 passed, 4 skipped, 29 subtests passed in 12.71s",
+    "packaged_files":  [
+                           {
+                               "sha256":  "a71d55dfc2d63a13f19cbd5991c75c5c64ecaeb38ef823a91ae02a62dd81514e",
+                               "file":  "src/publisher/meta_api.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "ffed371e46c1ff5c7c1510077de0a42b135f3ec9457cdd2a44ccf56663e98aba",
+                               "file":  "src/publisher/meta_reel_poster.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "5d18cf1771f7f80ba3428b95dc61b18ebca54975efdfb3ed33ae020891636179",
+                               "file":  "src/publisher/token_vault.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "9bab9bfbfa111f0edf61984a4cb0bb54454e53da96d7b4b32135c2204f5e2e60",
+                               "file":  "src/publisher/meta_preflight.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "9f4f8906653f10da6ec01dc760434a0cde65fc2a22ae9b3b91d1e9c3f601ff42",
+                               "file":  "src/publisher/page_manager.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "172119d11daad98b5adebfc523881fd3d8497c1317be5e4914c84342e1f576e5",
+                               "file":  "src/publisher/first_comment_queue.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "717a9d13dc3c3bf5490676f676c00576a27103ace89cd0ac456728a584be315e",
+                               "file":  "src/output_pipeline.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "a1efedb1524152199a3b7a8d1fcca5bc6987785e2170bd2473271daf8442b1a5",
+                               "file":  "src/output_scheduling.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "f6e3f9f4a55572a140472823ff6847f4c6a41cb75a3e1f31ab531bb226979625",
+                               "file":  "src/content_packages.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "7d5dcaeb2d33dea9733aa0a06d70584673ff5c116b1cb573aeb7df1438172ac4",
+                               "file":  "web/app.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "31aeaf0bd544416b8abfd3e53d4373f6fb92f22ed8c6a0b961515d1e03985dd6",
+                               "file":  "web/page_insights.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "c8abaedda9c9a489407793272473d594425dbee3edd36d9a33e51e9a80684578",
+                               "file":  "web/index.html",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "c8abaedda9c9a489407793272473d594425dbee3edd36d9a33e51e9a80684578",
+                               "file":  "web/templates/index.html",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "c40e8c6dd132c16da63e08c514077b992dc3116697a659a2a5b3e6ce89c6174f",
+                               "file":  "web/full_script.js",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "e9b434525397d8181f09011d3d16d9b6bab6bafb90aaffb276f7ceaaa6d10cf3",
+                               "file":  "web/meta_handoff.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "2670d2e38e3684f15b3277beb94ee3a6ca11745e3030aa70721ad2350b1cafb4",
+                               "file":  "web/scheduled_publisher.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "415d892a32f7fff6013a51bbae2ea34a6b6c5463d90541c2207e48f462b7ac5b",
+                               "file":  "web/meta_recovery.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "681c392489207ff042cebe03c45c3fdf93a4ed60cecfc6092763289b0d9e362f",
+                               "file":  "web/meta_diagnostics.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "e7a509f1aff06ebf9d7e366adba305a407e78569e36b1cf31df4e8979af08f19",
+                               "file":  "web/posts_store.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "380934b0ce17fb53ef991c66955756a2f68f1163967a7c61b597e9f97c43be79",
+                               "file":  "core/website_article_service.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "cc741fd7552d35a03462d27ad5aabcf9f20a76bf4f6231fbaae763f8328d1bba",
+                               "file":  "src/english_text.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "cc262d6705fd9bfbb9c93f368709c87a7c4b898b595d8bbc59437966014d30fd",
+                               "file":  "src/article_format.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "d39fb081659f7f61d52ef9a8a08b37214adb3d60490982ca434cb6ba64311bcb",
+                               "file":  "src/publisher/website_publisher.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "7541c2017d8773b194ce9fc00874072596a269fbb690eba87cc2a31c1775a0f5",
+                               "file":  "web/video_recovery.py",
+                               "matches_source":  true
+                           }
+                       ],
+    "meta_graph_api_version":  "v24.0",
+    "live_meta_publish_test":  false,
+    "installed_in_active_runtime":  false,
+    "setup":  "E:\\OPENCLAW\\BOB\\source-worktree\\release\\Highlight_Desktop_Test_Setup_v1.2.6.exe",
+    "legacy_v22_references_absent":  true,
+    "success":  true,
+    "credential_seeds_empty":  true,
+    "application_started":  false,
+    "javascript_syntax_verified":  true,
+    "regression_tests_run":  true,
+    "sha256":  "d9720eca0e476a3ee0c160b1d1f3a8fef96445bd8d74c0ef3b494e2cba61df8d"
+}

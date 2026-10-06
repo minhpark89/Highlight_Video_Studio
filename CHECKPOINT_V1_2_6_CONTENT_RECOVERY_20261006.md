@@ -114,3 +114,14 @@ Không cài mới/khởi động app mới hoặc sửa lịch thật trong sess
 - `docs/META_V24_BACKEND.md`: nguồn chính thức Meta và contract v24 đã triển khai ở v1.2.5.
 - `CHECKPOINT_V1_2_5_META_BACKEND_20261006.md`: release trước, 705077760 bytes, SHA256 `8194509413b225e4217231bc9441be406e2f18132c3b1b0f7395c3c3b53f53b0`; giữ nguyên.
 - `CHECKPOINT_V1_2_2_META_RECOVERY_20261006.md`, `CHECKPOINT_V1_2_0_20261005.md`: media 262 bytes, giữ Meta ID, bảo toàn comment/ledger và source recovery trước đây.
+
+## Build/payload đã hoàn tất
+
+- Tag/source đóng gói: `15d5157d3ab3bf05ec5c1c6a2c08645d9d9ed643`, `source_dirty=false`.
+- Installer `Highlight_Desktop_Test_Setup_v1.2.6.exe`: **705081856 bytes**, SHA256 `d9720eca0e476a3ee0c160b1d1f3a8fef96445bd8d74c0ef3b494e2cba61df8d`.
+- Identity: app/prerelease 1.2.6, Graph v24.0, desktop-test, loopback/port riêng; payload 24 file khớp source, không có dữ liệu runtime/machine identity/credential, không còn production v22.
+- Kiểm tra cuối: **507 passed, 4 skipped, 29 subtests passed** trong 31 module; HTTP thật bị chặn. Bốn inline scripts và `web/full_script.js` qua Node syntax check, hai templates giống nhau. AST tất cả file production Python trong src/core/web hợp lệ, `git diff --check` không lỗi. Không thử tương tác browser hay cài/khởi động vào runtime thật.
+- Evidence: `installer_payload.json`, `offline_tests.json`, `offline_tests.txt`, `javascript_syntax.json` trong `checkpoints/evidence/v1.2.6/`.
+- Tool GitHub được bổ sung streaming progress/sanitized upload errors sau tag; tool này không nằm trong payload app. Các commit checkpoint/evidence/tool sau build không đổi source app đã đóng gói hoặc tag.
+
+Ở mốc này, **GitHub v1.2.6 chưa public**. Đọc evidence/publication bổ sung sau khi deploy; asset checkpoint được chuẩn bị trước public và giữ nguyên sau upload.

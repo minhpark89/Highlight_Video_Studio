@@ -2,7 +2,7 @@
 
 Ngày 2026-10-06. Đọc [CHECKPOINT_V1_2_6_CONTENT_RECOVERY_20261006.md](CHECKPOINT_V1_2_6_CONTENT_RECOVERY_20261006.md) trước khi sửa tiếp. Nhánh `release/v1.2.6`, Graph v24.0. Thumbnail ưu tiên model ảnh; hai ảnh body từ video dài gốc; text LLM có fallback; Website giữ URL, embed thật và comment đúng link; video lỗi terminal có phục hồi/xóa local qua fresh Meta check.
 
-Kiểm tra cuối: **507 passed, 4 skipped, 29 subtests passed**, JavaScript syntax (4 inline + 1 external), templates identical. HTTP thật bị chặn trong offline tests. Chưa thay runtime/lịch/token thật. Build/publish đang chuẩn bị tại mốc này; mục bổ sung/evidence trong checkpoint chi tiết sẽ ghi kết quả thực tế. Tool phát hành: `checkpoints/tools/v1.2.6/`. Không đổi tag/asset các release cũ.
+Kiểm tra cuối: **507 passed, 4 skipped, 29 subtests passed**, JavaScript syntax (4 inline + 1 external), templates identical. HTTP thật bị chặn trong offline tests. Chưa thay runtime/lịch/token thật. Build/payload hoàn tất: 705081856 bytes, SHA256 d9720eca0e476a3ee0c160b1d1f3a8fef96445bd8d74c0ef3b494e2cba61df8d, tag/source 15d5157d3ab3bf05ec5c1c6a2c08645d9d9ed643. GitHub đang chuẩn bị; xem mục publication bổ sung và evidence để xác nhận public. Tool phát hành: `checkpoints/tools/v1.2.6/`. Không đổi tag/asset các release cũ.
 
 ## Checkpoint trước
 

@@ -83,6 +83,24 @@ def file_digest(path):
     with path.open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
+class ProgressUpload:
+    def __init__(self, handle, path):
+        self.handle = handle
+        self.path = path
+        self.last_reported = 0
+
+    def __getattr__(self, name):
+        return getattr(self.handle, name)
+
+    def read(self, size=-1):
+        block = self.handle.read(size)
+        sent = self.handle.tell()
+        if sent - self.last_reported >= 64 * 1024 * 1024:
+            self.last_reported = sent
+            print(json.dumps({"uploading": self.path.name, "bytes_sent": sent,
+                              "total_bytes": self.path.stat().st_size}), flush=True)
+        return block
+
 def installer_info():
     file = RELEASE / "Highlight_Desktop_Test_Setup_v1.2.6.exe"
     return file, file_digest(file), file.stat().st_size
@@ -102,15 +120,19 @@ if args.action == "deploy":
     from github_deploy import deploy
     def invoke(action):
         print(json.dumps({"deployment_step": action}), flush=True)
-        completed = subprocess.run([sys.executable, str(pathlib.Path(__file__).resolve()), action],
-                                  cwd=SOURCE, capture_output=True, text=True, encoding="utf-8",
-                                  creationflags=subprocess.CREATE_NO_WINDOW)
-        if completed.stdout:
-            print(completed.stdout.strip(), flush=True)
+        completed = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()), action],
+                                  cwd=SOURCE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, encoding="utf-8", creationflags=subprocess.CREATE_NO_WINDOW)
+        output = []
+        for line in completed.stdout:
+            output.append(line)
+            print(line.rstrip(), flush=True)
+        stderr = completed.stderr.read()
+        completed.wait()
         if completed.returncode:
-            reason = "Windows denied TCP (WinError 10013) before GitHub authentication" if "WinError 10013" in completed.stderr else "action failed; run this action directly for sanitized diagnostics"
+            reason = "Windows denied TCP (WinError 10013) before GitHub authentication" if "WinError 10013" in stderr else "action failed; run this action directly for sanitized diagnostics"
             raise RuntimeError(f"Deployment stopped at {action}: {reason}")
-        return json.loads(completed.stdout.strip().splitlines()[-1]) if completed.stdout.strip() else {}
+        return json.loads(output[-1]) if output else {}
     deploy(invoke)
 elif args.action == "inspect":
     try:
@@ -182,7 +204,11 @@ elif args.action == "upload":
             endpoint = metadata["upload_url"].split("{",1)[0] + "?name=" + quote(path.name)
             print(json.dumps({"uploading":path.name,"bytes":path.stat().st_size}),flush=True)
             with path.open("rb") as handle:
-                response = session.post(endpoint, data=handle, headers={"Content-Type":"application/octet-stream"}, timeout=(30,1200))
+                try:
+                    response = session.post(endpoint, data=ProgressUpload(handle, path),
+                        headers={"Content-Type":"application/octet-stream"}, timeout=(30,1200))
+                except requests.RequestException as exc:
+                    raise RuntimeError(connection_failure(exc)) from None
             if response.status_code != 201:
                 raise RuntimeError(f"Asset upload returned HTTP {response.status_code}; response withheld")
             asset = response.json()
