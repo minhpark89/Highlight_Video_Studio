@@ -72,4 +72,6 @@ Nếu còn lỗi: recheck PID/port/build identity trước kết luận, không 
 
 ## Deployment
 
-Đang chuẩn bị bộ cài. Phần này được cập nhật sau payload inspection và sau xác minh tải công khai; checkpoint asset chuẩn bị trước publication ghi rõ trạng thái tại thời điểm upload.
+Bộ cài đã build/inspect: `release/Highlight_Desktop_Test_Setup_v1.2.8.exe`, **705449472 bytes**, SHA256 `f0135aa94fd3cbc74519bcd6fba0ae4ac8e8f45ecbf0f035af97b5ec006d33e2`. Tag/source immutable `v1.2.8` tại `3cddca44e74556f217f7cdd0d825e61153c148cd`. Packaged identity sạch, Graph v24.0, 33 source files khớp, empty queue/credential seeds và không runtime state. Xem `installer_payload.json`.
+
+Bộ cài/SHA256/checkpoint đang được chuẩn bị để upload GitHub. Chưa tuyên bố public ở thời điểm checkpoint asset được tạo. Sau publication đọc `public_download_verify.json` và trạng thái cuối trên branch. Không tự cài vào runtime đang dùng.

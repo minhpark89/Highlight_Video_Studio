@@ -166,7 +166,7 @@ elif args.action == "draft":
     assert not (existing and existing.get("id")), "Release already exists; refusing to overwrite a published revision"
     body = (RELEASE / "v1.2.8_release_notes.md").read_text(encoding="utf-8")
     result = request("POST", "/releases", expected=(201,), json={"tag_name":TAG,"target_commitish":commit,
-        "name":"Highlight Desktop Test v1.2.8 - CMS validation and verified MP4 recovery", "body":body,"draft":True,"prerelease":True})
+        "name":"Highlight Desktop Test v1.2.8 - Group scheduling and faster views", "body":body,"draft":True,"prerelease":True})
     metadata = {k:result[k] for k in ("id","tag_name","html_url","upload_url","draft","prerelease")}
     metadata.update(source_commit=commit,branch_commit=branch_commit,installer_sha256=digest,installer_size=size,assets=[])
     save(metadata)
