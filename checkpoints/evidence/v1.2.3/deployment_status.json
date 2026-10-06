@@ -5,11 +5,15 @@
   "installer_verified": true,
   "github_inspect": "failed: connection blocked or unavailable",
   "git_remote_read": "failed: unable to connect to github.com port 443",
-  "push_attempted": false,
+  "push_attempted": true,
   "release_created": false,
   "release_published": false,
   "public_download_verified": false,
   "credentials_disclosed": false,
   "active_runtime_upgraded": false,
-  "live_posts_rescheduled": false
+  "live_posts_rescheduled": false,
+  "checked_at": "2026-10-06T11:08:39",
+  "push_succeeded": false,
+  "push_error": "Git operation failed; credential-bearing details withheld",
+  "blocker": "GitHub API and github.com:443 unavailable in this environment"
 }
