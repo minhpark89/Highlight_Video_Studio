@@ -74,3 +74,11 @@ Helper `deploy` thực hiện các bước theo thứ tự, dừng ngay khi lỗ
 Các action lẻ vẫn chạy được để chẩn đoán: `python checkpoints/tools/v1.2.3/github_release.py <action>` với action `inspect`, `push`, `draft`, `resume`, `upload`, `publish`, `verify`. Metadata ignored tại `release/v1.2.3_release.json`; không có metadata không có nghĩa release chưa tồn tại, phải inspect/resume trước. Không tạo release khác để che lần dở dang.
 
 Kiểm thử tooling bổ sung: `python -m pytest tests/test_github_deploy.py -q --no-header` → **5 passed**. App installer/source/tag đã kiểm chứng giữ nguyên; không cần build lại vì chỉ sửa công cụ deploy ngoài payload. Source backup bundle được cập nhật cùng nhánh checkpoint mới. Chưa nâng cấp runtime, chưa dời lịch thật hoặc gửi Meta/CMS trong lần thử deploy này.
+
+## Chẩn đoán cấu hình quyền mạng
+
+Không có HTTP_PROXY/HTTPS_PROXY/ALL_PROXY trong environment; WinHTTP dùng Direct access. Đọc firewall profile bị Access denied (`0x80041003`), nên chưa khẳng định được rule Windows Firewall cụ thể. Không tắt firewall, đổi proxy hoặc sửa token.
+
+Đã đọc riêng các khóa liên quan quyền ở `C:\Users\PV\.codex\config.toml` và `E:\OPENCLAW\CodexData\config.toml`: cả hai đặt `sandbox_mode = "workspace-write"`, `approval_policy = "never"`, `[windows] sandbox = "elevated"`, chưa có `[sandbox_workspace_write] network_access`. Chính sách được cung cấp cho phiên hiện tại xác nhận network restricted và không cho nâng quyền. Không thể suy ra file nào đang điều khiển UI chỉ từ việc cả hai tồn tại; cần xác định cách người dùng mở Codex trước khi chỉ file cần sửa. Evidence: `network_config_findings.json`.
+
+Hướng sửa là cấp quyền network cho phiên Codex qua cấu hình/quản lý quyền hợp lệ, giữ giới hạn filesystem. Thiết lập workspace-write cần xem xét là `[sandbox_workspace_write] network_access = true`; nếu dùng permission profile được ứng dụng/administrator quản lý, profile phải cho phép kết nối GitHub. Chưa chỉnh config global vì các file nằm ngoài workspace được phép ghi. Chưa tải được trang OpenAI Docs do kết nối cũng bị từ chối; chưa xác minh vị trí/nội dung nút UI cho phiên bản app này. Sau khi người dùng đổi cấu hình hợp lệ, mở phiên nhận quyền mới rồi kiểm tra lại `/user`; chỉ tiến hành deploy khi có HTTP response và quyền push.
