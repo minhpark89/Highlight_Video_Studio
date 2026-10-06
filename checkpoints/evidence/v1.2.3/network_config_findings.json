@@ -1,0 +1,28 @@
+{
+  "proxy_environment_configured": false,
+  "winhttp_proxy": "direct access",
+  "firewall_profiles_readable_by_agent": false,
+  "firewall_profile_query_result": "Access denied, HRESULT 0x80041003",
+  "inspected_configs": [
+    {
+      "path": "C:/Users/PV/.codex/config.toml",
+      "approval_policy": "never",
+      "sandbox_mode": "workspace-write",
+      "windows_sandbox": "elevated",
+      "sandbox_workspace_write_network_access_explicitly_set": false
+    },
+    {
+      "path": "E:/OPENCLAW/CodexData/config.toml",
+      "approval_policy": "never",
+      "sandbox_mode": "workspace-write",
+      "windows_sandbox": "elevated",
+      "sandbox_workspace_write_network_access_explicitly_set": false
+    }
+  ],
+  "active_session_network_policy": "restricted",
+  "active_session_approval_policy": "never",
+  "official_docs_search_and_fetch": "connection unavailable",
+  "global_configuration_modified": false,
+  "firewall_modified": false,
+  "token_modified": false
+}
