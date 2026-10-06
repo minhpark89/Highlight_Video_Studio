@@ -24,7 +24,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build_release.ps1 -Version 1
 powershell -NoProfile -ExecutionPolicy Bypass -File checkpoints/tools/v1.2.5/inspect_payload.ps1
 ```
 
-Không thêm/chạy test chức năng hoặc hồi quy. Rà soát source/cú pháp trước build; công cụ inspect chỉ đọc payload/hash/identity/seed, không chạy app/bộ cài hoặc gửi Meta request. Source sạch và tag local v1.2.5 cố định trước build. Artifact/hash/evidence được bổ sung khi hoàn tất.
+Không thêm/chạy test chức năng hoặc hồi quy. Rà soát source/cú pháp trước build; công cụ inspect chỉ đọc payload/hash/identity/seed, không chạy app/bộ cài hoặc gửi Meta request. Source sạch và tag local v1.2.5 cố định trước build.
+
+**Build và payload inspection đã hoàn tất.**
+
+- Installer: `release/Highlight_Desktop_Test_Setup_v1.2.5.exe`, **705077760 bytes**.
+- SHA256: `8194509413b225e4217231bc9441be406e2f18132c3b1b0f7395c3c3b53f53b0`.
+- Source commit/tag v1.2.5: `1bed062ae03f67fbedcfda468cbc818878830ba6`, build identity `source_dirty=false`, app/prerelease v1.2.5, Meta API v24.0.
+- Payload khớp **19 file** source; không còn production v22, credential seed rỗng, không có dữ liệu người dùng/lịch/token/machine identity. Evidence: `checkpoints/evidence/v1.2.5/installer_payload.json`.
+- AST rà soát cú pháp 10 file Python thay đổi; không execute code app. Không chạy hồi quy/chức năng hoặc POST Meta. Chưa cài vào runtime thật, chưa publish GitHub.
+- Bản tiện tải được sao chép ra `E:\OPENCLAW\BOB\Highlight_Desktop_Test_Setup_v1.2.5.exe` cùng SHA256. Hash của bản sao phải khớp installer đã inspect.
+
+Các commit cập nhật checkpoint/evidence sau build có thể nằm sau tag v1.2.5; không đổi tag hoặc code đã đóng gói. Root `CODEX_CHECKPOINT_LATEST.md` trỏ tới checkpoint này.
 
 ## Tình trạng hạn chế và lịch trễ
 
