@@ -34,6 +34,11 @@ def observation(data, http_status=None):
             "error": safe_error(error.get("error_user_msg") or error.get("message"))}
 
 
+def latest_publish_attempt(post):
+    receipts = [p for p in (post.get("meta_publish_attempt"), post.get("meta_last_publish_attempt")) if isinstance(p, dict)]
+    return max(receipts, key=lambda p: str(p.get("checked_at") or ""), default={})
+
+
 def diagnose(post, seen=None):
     seen = seen or post.get("meta_observation") or {}
     upload_id = str(post.get("meta_upload_video_id") or "")
@@ -67,8 +72,8 @@ def diagnose(post, seen=None):
     publishing = seen.get("publishing_status")
     processing = seen.get("processing_status")
     recovery_error = post.get("auto_finish_error") or post.get("meta_finish_recovery_error") or ""
-    attempt = post.get("meta_last_publish_attempt") or {}
-    identity_rejected = (attempt.get("state") == "rejected" and attempt.get("error_subcode") == 4854002
+    attempt = latest_publish_attempt(post)
+    identity_rejected = (attempt.get("error_subcode") == 4854002 and (attempt.get("state") == "rejected" or attempt.get("error_code") == 368)
                          if attempt else "4854002" in str(recovery_error))
     if publishing != "published" and identity_rejected:
         result.update(state="identity_required", message="Facebook yêu cầu xác minh danh tính",

@@ -39,6 +39,24 @@ của và là những này không trong với được về đang một chi ti�
 """.split())
 
 
+_ENGLISH_HEADING_WORDS = frozenset("""
+lesson cabin etiquette footage recording source context sequence viewing guide
+gameplay gaming graphics weapon build trailer breakdown overview summary
+highlights uncut watching player conclusion tips settings performance discipline
+""".split())
+
+
+def _english_heading(value):
+    """Short English headings have too little evidence for n-gram detection."""
+    text = public_text(value)
+    if any(char.isalpha() and ord(char) > 127 for char in text):
+        return False
+    words = re.findall(r"[a-z]+", text.casefold())
+    return bool(2 <= len(words) <= 12 and not set(words) & _FOREIGN_MARKERS
+                and set(words) & _ENGLISH_HEADING_WORDS
+                and set(words) & (_ENGLISH_MARKERS | {"a", "an", "in", "to", "at"}))
+
+
 def _short_english_evidence(words):
     lowered = [word.casefold() for word in words]
     markers = set(lowered) & _ENGLISH_MARKERS
@@ -117,8 +135,8 @@ def _english_error(value):
         return "must be in English; non-English output was rejected"
     # A mostly English article can contain an untranslated paragraph. Validate
     # paragraphs individually so the majority language cannot hide that drift.
-    for part in re.findall(r'<(?:p|h[1-6]|li)\b[^>]*>(.*?)</(?:p|h[1-6]|li)>', str(value or ""), re.S | re.I):
-        if not is_english(part):
+    for tag, part in re.findall(r'<(p|h[1-6]|li)\b[^>]*>(.*?)</\1>', str(value or ""), re.S | re.I):
+        if not is_english(part) and not (tag.lower().startswith("h") and _english_heading(part)):
             return "contains a non-English paragraph"
     return ""
 

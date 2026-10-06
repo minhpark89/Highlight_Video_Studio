@@ -1,3 +1,11 @@
+# Latest checkpoint — v1.2.6 Content recovery
+
+Ngày 2026-10-06. Đọc [CHECKPOINT_V1_2_6_CONTENT_RECOVERY_20261006.md](CHECKPOINT_V1_2_6_CONTENT_RECOVERY_20261006.md) trước khi sửa tiếp. Nhánh `release/v1.2.6`, Graph v24.0. Thumbnail ưu tiên model ảnh; hai ảnh body từ video dài gốc; text LLM có fallback; Website giữ URL, embed thật và comment đúng link; video lỗi terminal có phục hồi/xóa local qua fresh Meta check.
+
+Kiểm tra cuối: **507 passed, 4 skipped, 29 subtests passed**, JavaScript syntax (4 inline + 1 external), templates identical. HTTP thật bị chặn trong offline tests. Chưa thay runtime/lịch/token thật. Build/publish đang chuẩn bị tại mốc này; mục bổ sung/evidence trong checkpoint chi tiết sẽ ghi kết quả thực tế. Tool phát hành: `checkpoints/tools/v1.2.6/`. Không đổi tag/asset các release cũ.
+
+## Checkpoint trước
+
 # Checkpoint mới nhất — Highlight Desktop Test v1.2.5
 
 Ngày 2026-10-06, Asia/Saigon. Nhánh `release/v1.2.5`. Đọc [CHECKPOINT_V1_2_5_META_BACKEND_20261006.md](CHECKPOINT_V1_2_5_META_BACKEND_20261006.md) và [docs/META_V24_BACKEND.md](docs/META_V24_BACKEND.md).

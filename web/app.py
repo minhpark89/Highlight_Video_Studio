@@ -106,7 +106,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.2.5"
+APP_VERSION = "1.2.6"
 
 @app.after_request
 def add_header(response):
@@ -370,6 +370,9 @@ def run_job_pipeline(job):
 
         if not segments:
             raise RuntimeError("Không thể lấy phụ đề hoặc nhận diện giọng nói của video này.")
+
+        from src.publisher.website_publisher import source_transcript_excerpt
+        update_job_status(job_id, {"source_transcript_excerpt": source_transcript_excerpt(segments)})
 
         # Bước 3: AI LLM phân tích Hook & Highlight
         update_msg("AI Gemini đang phân tích nội dung, chấm điểm Viral & cắt Hook...", step=3)
@@ -3152,7 +3155,7 @@ def api_post_meta_diagnosis(post_id):
 
 
 def _post_meta_diagnostic_payload(post, seen, mapping):
-    from web.meta_diagnostics import diagnose
+    from web.meta_diagnostics import diagnose, latest_publish_attempt
     from web.meta_recovery import can_retry_existing, can_refresh_existing, recovery_credentials, publishing_token_id
     diagnostic = diagnose(post, seen)
     from web.video_recovery import can_replace_failed_video
@@ -3169,7 +3172,7 @@ def _post_meta_diagnostic_payload(post, seen, mapping):
                     "scheduled_time": post.get("scheduled_time"),
                     "page_name": post.get("page_name"), "page_id": post.get("page_id"),
                     "observation": seen, "diagnosis": diagnostic,
-                    "last_publish_attempt": post.get("meta_last_publish_attempt"),
+                    "last_publish_attempt": latest_publish_attempt(post),
                     "publish_attempts": int(post.get("auto_finish_attempts") or post.get("meta_finish_recovery_attempts") or 0),
                     "read_checks": int(post.get("meta_reconcile_attempts") or 0),
                     "credential_check": {"token_id": publishing_token_id(post), "status": selected_entry.get("status"),
@@ -3249,12 +3252,12 @@ def api_replace_failed_video(post_id):
         if not mapping:
             return jsonify({"success": False, "error": "Sync Token đúng Page trước khi tạo lịch thay thế."}), 409
         replacement, created = prepare_replacement(posts, post, seen, OUTPUT_DIR,
-            filename=body.get("filename"), schedule_time=body.get("schedule_time"))
+            filename=body.get("filename"), schedule_time=body.get("schedule_time"), mode=body.get("mode") or "meta_scheduled")
         save_posts(posts)
         from src.publisher.first_comment_queue import cancel_first_comment
         cancel_first_comment(post_id=post_id, object_id=video_id)
         return jsonify({"success": True, "queued": created, "post_id": replacement["id"],
-                        "message": "Đã tạo lịch thay thế. App sẽ upload MP4 đã kiểm tra để Facebook giữ lịch; ID lỗi cũ được lưu trong lịch sử."})
+                        "message": "Đã đưa MP4 thay thế vào hàng chờ theo chế độ đã chọn; giữ Website và lịch sử Meta ID lỗi cũ."})
     except (ValueError, FileNotFoundError) as exc:
         return jsonify({"success": False, "error": sanitize_error(exc)}), 409
     except Exception as exc:
@@ -3451,6 +3454,8 @@ def _enrich_post_rows(posts, *, audit_posts=None):
     token_audit(audited, page_manager.list_pages(), catalog, load_token_groups())
     token_catalog = {str(item.get("id")): item for item in catalog if item.get("id")}
     for post in posts:
+        from web.video_recovery import can_replace_failed_video
+        post["can_replace_failed_video"] = can_replace_failed_video(post, post.get("meta_observation") or {})
         post["can_retry_publish"] = (can_retry_without_upload(post) and post.get("retry_stage") in
                                      ("meta_preflight", "facebook_publish", "meta_schedule_rejected"))
         recovery_id = str(post.get("meta_recovery_token_id") or "")
@@ -3677,6 +3682,42 @@ def api_delete_post(post_id):
     try:
         posts = load_posts()
         post = next((p for p in posts if p.get("id") == post_id), None)
+        remote_id = str((post or {}).get("meta_upload_video_id") or (post or {}).get("meta_video_id") or "")
+        if post and remote_id and post.get("status") in ("processing", "failed"):
+            from web.video_recovery import can_replace_failed_video
+            from web.meta_diagnostics import safe_error
+            seen, mapping = _inspect_post_meta(post)
+            if not mapping or not can_replace_failed_video(post, seen):
+                return jsonify({"success": False, "requires_meta_check": True,
+                    "error": "Meta chưa xác nhận video lỗi và chưa đăng. Mở Kiểm tra Meta để phục hồi đúng video hiện có; bài yêu cầu xác minh danh tính phải xử lý quyền Page trước."}), 409
+            # Keep terminal evidence durably before removing the local row.
+            # This action never deletes a Facebook object or a source MP4.
+            from multi_pc.json_io import replace_with_retry
+            import uuid
+            audit_path = POSTS_FILE.parent / "data" / "meta_failed_removed.json"
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            history = json.loads(audit_path.read_text(encoding="utf-8")) if audit_path.exists() else []
+            if not isinstance(history, list):
+                return jsonify({"success": False, "error": "Lịch sử phục hồi không hợp lệ; chưa xóa bài."}), 409
+            history.append({"post_id": post_id, "page_id": post.get("page_id"), "token_id": post.get("token_id"),
+                            "video_id": remote_id, "media_file": post.get("media_file"),
+                            "article_url": post.get("article_url"), "removed_at": datetime.now().astimezone().isoformat(),
+                            "observation": {k: seen.get(k) for k in ("id", "checked_at", "http_status", "video_status",
+                                "uploading_status", "processing_status", "publishing_status", "copyright_matches")}})
+            temp = audit_path.with_name(audit_path.name + "." + uuid.uuid4().hex + ".tmp")
+            try:
+                temp.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+                replace_with_retry(temp, audit_path)
+            except Exception as exc:
+                return jsonify({"success": False, "error": "Không lưu được lịch sử lỗi; chưa xóa bài. " + safe_error(exc)}), 409
+            finally:
+                temp.unlink(missing_ok=True)
+            posts = [p for p in posts if p.get("id") != post_id]
+            save_posts(posts)
+            from src.publisher.first_comment_queue import cancel_first_comment
+            cancel_first_comment(post_id=post_id, object_id=remote_id)
+            return jsonify({"success": True, "can_repost": True,
+                            "message": "Đã xóa bài lỗi khỏi app và lưu Meta ID cũ trong lịch sử. Kiểm tra hoặc sửa MP4 trước khi đăng lại."})
         if post and post.get("status") in ("meta_handoff", "publishing", "processing", "meta_scheduled"):
             return jsonify({"success": False, "error": "Bài đang giao hoặc đã giao Meta. Xóa lịch local không hủy lịch trên Meta."}), 409
         posts = [p for p in posts if p.get("id") != post_id]
@@ -3889,11 +3930,12 @@ def api_retry_post_website(post_id):
                         item["repair_existing_article"] = bool(item.get("article_url"))
                 _write(QUEUE_FILE, items)
         else:
-            retry_package(package["id"], repair_website=True)
+            retry_package(package["id"], repair_website=True, post_id=post_id)
         post.update(content_package_id=package["id"], content_package_status="queued", website_status="pending_generation",
-                    website_error="", website_retried_at=datetime.now().isoformat(timespec="seconds"))
+                    website_error="", content_package_error="", website_retried_at=datetime.now().isoformat(timespec="seconds"))
         if not post.get("first_comment_snapshot") and post.get("first_comment_status") != "posted":
             post["first_comment_status"] = "pending_generation"
+            post["first_comment_error"] = ""
         save_posts(posts)
         start_content_package_worker()
         return jsonify({"success": True, "queued": True, "package_id": package["id"],

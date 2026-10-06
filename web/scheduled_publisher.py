@@ -533,6 +533,13 @@ def _process_scheduled_posts_once(
             from web.meta_diagnostics import diagnose
             post["meta_observation"] = check["meta_observation"]
             post["meta_diagnosis"] = diagnose(post)
+            from web.video_recovery import can_replace_failed_video
+            if can_replace_failed_video(post, check["meta_observation"]):
+                post.update(status="failed", meta_schedule_status="rejected", retryable=False,
+                            outcome_unknown=False, retry_stage="meta_video_rejected",
+                            error="Meta xác nhận video lỗi và chưa đăng. Kiểm tra MP4 rồi dùng Đăng lại hoặc xóa bài lỗi khỏi app.")
+                reconciled += 1
+                continue
             if _resume_complete_upload(
                     post, check["meta_observation"], poster_for_check, credential, posts, current_dt,
                     vault=token_vault, manager=page_manager):

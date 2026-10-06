@@ -39,7 +39,10 @@ class YouTubeEmbedPublishTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertTrue(first[0].startswith("https://example.test/blog/"))
         assets.assert_not_called()
-        service.assert_not_called()
+        self.assertEqual(service.call_count, 2)
+        service.return_value.verify_article_english.assert_called()
+        service.return_value.verify_article_embed.assert_called()
+        service.return_value.verify_article_quality.assert_called()
 
     def test_extract_youtube_id_supports_common_url_forms(self):
         from src.publisher.website_publisher import extract_youtube_video_id
@@ -62,7 +65,8 @@ class YouTubeEmbedPublishTests(unittest.TestCase):
             {'base_url':'https://example.test'}, mock.Mock(exists=mock.Mock(return_value=True))
         )), mock.patch.object(publisher, 'get_clip_metadata', return_value={'video_title':'Original cycling recording'}), \
                 mock.patch.object(publisher.requests, 'get', side_effect=existing), \
-                mock.patch.object(publisher, 'upload_long_video_to_public_stream') as upload:
+                mock.patch.object(publisher, 'upload_long_video_to_public_stream') as upload, \
+                mock.patch.object(publisher, 'WebsiteArticleService'):
             url, _ = publisher.publish_clip_to_website_cms('renamed.mp4', asset_metadata=receipt)
         upload.assert_not_called()
         self.assertTrue(url.startswith('https://example.test/blog/'))

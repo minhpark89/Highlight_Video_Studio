@@ -46,6 +46,8 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             ), mock.patch.object(web_app.page_manager, "list_groups", return_value=[]), mock.patch.object(
                 web_app.page_manager, "save_pages"
             ), mock.patch.object(web_app.token_vault, "get_token_by_id", return_value=self._credential_entry()), mock.patch.object(
+                web_app.token_vault, "ensure_page_access", return_value={"ok": True}
+            ), mock.patch.object(
                 web_app.reel_poster, "publish_reel", return_value={
                     "success": True, "video_id": "reel-1", "status": "PUBLISHED",
                     "comment_result": {"success": False, "error": "Meta busy"},
@@ -234,7 +236,8 @@ class SchedulingPublishFlowTests(unittest.TestCase):
 
         page = {"page_id": "page-1", "page_name": "Page One", "token_id": "tok_verified"}
         credential = {"id": "tok_verified", "name": "Test", "token": "cred", "status": "ACTIVE"}
-        self.assertTrue(resolve_page_token(page, Vault(credential), Manager(["PROFILE_PLUS_MANAGE"]))["ok"])
+        self.assertTrue(resolve_page_token(page, Vault(credential), Manager(["PROFILE_PLUS_CREATE_CONTENT"]))["ok"])
+        self.assertFalse(resolve_page_token(page, Vault(credential), Manager(["PROFILE_PLUS_MANAGE"]))["ok"])
         blocked = resolve_page_token(page, Vault(credential), Manager(["ANALYZE", "ADVERTISE"]))
         self.assertFalse(blocked["ok"])
         self.assertEqual(blocked["code"], "publish_capability_missing")
@@ -286,7 +289,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             video = Path(folder) / "clip.mp4"
             video.write_bytes((Path(__file__).parent / "fixtures" / "tiny-video.mp4").read_bytes())
             responses = [
-                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"video_id": "video-1", "upload_url": "https://upload.test/video-1"}),
+                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"video_id": "video-1", "upload_url": "https://rupload.facebook.com/video-upload/v24.0/video-1"}),
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {}),
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"success": True, "video_id": "video-1", "permalink_url": "https://facebook.test/reel/video-1"}),
             ]
@@ -296,7 +299,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         self.assertEqual(result["video_id"], "video-1")
         self.assertEqual(post.call_count, 3)
         self.assertEqual(post.call_args_list[0].args[0], "https://graph.facebook.com/v24.0/page-1/video_reels")
-        self.assertIn("upload.test", post.call_args_list[1].args[0])
+        self.assertIn("rupload.facebook.com", post.call_args_list[1].args[0])
         self.assertEqual(post.call_args_list[2].args[0], "https://graph.facebook.com/v24.0/page-1/video_reels")
 
     def test_meta_reel_finish_without_object_id_is_unknown(self):
@@ -305,7 +308,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             video = Path(folder) / "clip.mp4"
             video.write_bytes((Path(__file__).parent / "fixtures" / "tiny-video.mp4").read_bytes())
             responses = [
-                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"video_id": "video-1", "upload_url": "https://upload.test/video-1"}),
+                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"video_id": "video-1", "upload_url": "https://rupload.facebook.com/video-upload/v24.0/video-1"}),
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {}),
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"success": True}),
             ]
@@ -320,7 +323,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
             video = Path(folder) / "clip.mp4"
             video.write_bytes((Path(__file__).parent / "fixtures" / "tiny-video.mp4").read_bytes())
             responses = [
-                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"video_id": "upload-1", "upload_url": "https://upload.test/1"}),
+                mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"video_id": "upload-1", "upload_url": "https://rupload.facebook.com/video-upload/v24.0/1"}),
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {}),
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"success": True, "message": "Video is Processing...check upload status", "post_id": "122117668215471152"}),
             ]
@@ -651,7 +654,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
                 calls.append(("publish", kwargs["first_comment"]))
                 return {"success": True, "video_id": "video-123", "fb_url": "https://facebook.test/reel/123"}
 
-            def post_first_comment(self, object_id, page_token, comment_text, token_id=None):
+            def post_first_comment(self, object_id, page_token, comment_text, token_id=None, *, page_id=None):
                 calls.append(("comment", object_id, comment_text))
                 return {"success": True, "comment_id": "comment-1"}
 

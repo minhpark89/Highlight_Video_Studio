@@ -19,7 +19,9 @@ def queue_fixture(tmp_path, monkeypatch):
     pages = PageManager(tmp_path)
     credential = {"id": "tok_original", "name": "Fixture", "token": "fixture-token", "status": "ACTIVE"}
     vault._save([credential])
-    pages.sync_pages_from_token(credential, [{"id": "9901", "name": "Page", "access_token": "fixture-page-token", "tasks": ["CREATE_CONTENT"]}])
+    discovered = [{"id": "9901", "name": "Page", "access_token": "fixture-page-token", "tasks": ["CREATE_CONTENT", "MODERATE"]}]
+    pages.sync_pages_from_token(credential, discovered)
+    monkeypatch.setattr(TokenVault, "verify_token", lambda self, token: {"status": "ACTIVE", "pages": discovered})
     output = tmp_path / "output"
     output.mkdir()
     (output / "clip.mp4").write_bytes(b"video")

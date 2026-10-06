@@ -20,8 +20,8 @@ from src.llm_response import chat_model_unavailable, chat_stream_incomplete, jso
 from src.text_llm_diagnostics import chat_endpoint, chat_failure
 from src.fallback_comments import fallback_first_comment
 from src.first_comment_profiles import load_profile_store, profile_first_comment
-from src.article_format import normalize_article, viewing_article, word_count
-from src.english_text import ENGLISH_INSTRUCTION, assert_english_package, english_or_default, package_is_english, package_summary_is_english
+from src.article_format import normalize_article, viewing_article, word_count, paragraph_html, sentences
+from src.english_text import ENGLISH_INSTRUCTION, assert_english, assert_english_package, english_or_default, package_is_english, package_summary_is_english
 
 DATA_ROOT = canonical_data_root()
 QUEUE_FILE = DATA_ROOT / "data" / "content_packages.json"
@@ -64,15 +64,48 @@ def _now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _validated_fallback_comment(title, url, profile_id, store):
+    try:
+        comment = profile_first_comment(title, url, profile_id, store)
+        assert_english(comment, "Fallback First Comment")
+        if comment.count(url) == 1:
+            return comment
+    except (ValueError, OSError):
+        pass
+    return fallback_first_comment(title, url)
+
+
 def fallback_package(title: str, summary: str = "", article_url: str = "", profile_id: str = "", profile_store=None, niche: str = "") -> dict:
     clean = english_or_default(title, "Original Video")
     context = english_or_default(summary)
+    try:
+        assert_english(paragraph_html(context), "Source description")
+    except ValueError:
+        accepted = []
+        for sentence in sentences(str(summary or "")):
+            try:
+                assert_english(sentence, "Source excerpt")
+                accepted.append(sentence)
+            except ValueError:
+                continue
+        context = " ".join(accepted[:12])[:2400]
     niche = english_or_default(niche)
     hero = clean[:110]
-    lead = context or f"A guide to reviewing the original video associated with {clean}."
     article = viewing_article(clean, context, niche)
+    # Mixed source descriptions must not make the fallback fail its own gate.
+    try:
+        assert_english(article, "Fallback article")
+    except ValueError:
+        context, niche = "", ""
+        article = viewing_article(clean)
+        try:
+            assert_english(article, "Fallback article")
+        except ValueError:
+            clean, hero = "Original Video", "Original Video"
+            article = viewing_article(clean)
+    lead = context or f"A guide to reviewing the original video associated with {clean}."
     link = str(article_url or "").strip()
-    comment = profile_first_comment(clean, link, profile_id, profile_store) if link else ""
+    comment = _validated_fallback_comment(clean, link, profile_id, profile_store) if link else ""
     caption = f"🔥 {clean}\n\n{lead}\n\nWhat detail did you notice first?\n\n#highlight #viral #trending #mustwatch"
     return {
         "hero_title": hero,
@@ -82,6 +115,7 @@ def fallback_package(title: str, summary: str = "", article_url: str = "", profi
         "hashtags": ["#highlight", "#viral", "#trending", "#mustwatch"],
         "source": "no_llm",
         "language": "en",
+        "source_summary": context or f"The original video is titled {clean}. Watch the embedded recording for the complete sequence.",
     }
 
 
@@ -105,6 +139,14 @@ def circuit_status(now=None):
     current = int(now or time.time())
     retry_at = int(state.get("retry_at") or 0)
     return {**state, "open": retry_at > current, "retry_after_seconds": max(0, retry_at - current)}
+
+
+def package_due(item, now=None):
+    if item.get("status") == "queued":
+        return True
+    if item.get("status") != "retryable":
+        return False
+    return float(item.get("next_retry_at") or 0) <= float(now or time.time())
 
 
 def record_quota_failure(error, cooldown_seconds=900):
@@ -226,28 +268,34 @@ def generate_package(title, summary="", video_url="", mode="auto", article_url="
     if selected_mode == "no_llm":
         result = fallback
     elif circuit_status().get("open"):
-        if selected_mode == "llm":
-            raise RuntimeError("LLM quota circuit open; try again after cooldown")
-        result = {**fallback, "source": "no_llm_circuit_open", "circuit": circuit_status()}
+        result = {**fallback, "source": "no_llm_circuit_open", "circuit": circuit_status(),
+                  "fallback_reason": "LLM quota circuit open; using validated fallback during cooldown"}
     else:
         try:
             result = _llm_package(title, summary, video_url, article_url, niche=niche, component=component)
         except QuotaError as exc:
-            if selected_mode == "llm":
-                raise RuntimeError(sanitize_error(exc)) from None
             state = record_quota_failure(exc)
-            result = {**fallback, "source": "no_llm_quota_fallback", "circuit": {**state, "open": True}}
+            result = {**fallback, "source": "no_llm_quota_fallback", "circuit": {**state, "open": True},
+                      "fallback_reason": sanitize_error(exc)}
         except Exception as exc:
             reason = sanitize_error(exc) if isinstance(exc, (RuntimeError, ValueError)) else type(exc).__name__
-            if selected_mode == "llm":
-                raise RuntimeError(reason) from None
             result = {**fallback, "source": "no_llm_error_fallback", "fallback_reason": reason}
     result["niche"] = niche
+    result.setdefault("source_summary", fallback["source_summary"])
     if article_url and str(result.get("source") or "").startswith("no_llm"):
-        result["first_comment"] = profile_first_comment(title, article_url, profile_id, profile_store)
+        result["first_comment"] = _validated_fallback_comment(fallback["hero_title"], article_url, profile_id, profile_store)
     if result.get("article_html"):
         result["article_html"] = normalize_article(result["article_html"])
         result["word_count"] = word_count(result["article_html"])
+    # Validate the exact normalized HTML that will be published to the CMS.
+    try:
+        assert_english_package(result)
+    except ValueError as exc:
+        result = {**fallback, "source": "no_llm_validation_fallback", "fallback_reason": sanitize_error(exc), "niche": ""}
+        if article_url:
+            result["first_comment"] = _validated_fallback_comment(fallback["hero_title"], article_url, profile_id, profile_store)
+        result["word_count"] = word_count(result["article_html"])
+        assert_english_package(result)
     if article_url and result.get("first_comment"):
         result.setdefault("first_comment_profile_id", profile_id or profile_store.get("default_profile_id", "builtin_general"))
         result.setdefault("first_comment_source", "template_fallback" if str(result.get("source") or "").startswith("no_llm") else "llm")
@@ -597,7 +645,21 @@ def resolve_article_url(item):
             raise RuntimeError("CMS không trả Website URL")
         return url, "ready", ""
     except Exception as exc:
-        return existing, "failed", sanitize_error(exc)
+        # CMS throttling is separate from the text LLM circuit. Retries first
+        # look up the same slug/URL and never blindly create another article.
+        if re.search(r"\b(?:HTTP\s+429|429\s+Client\s+Error)\b", str(exc), re.I):
+            count = int(item.get("website_rate_limit_retries") or 0) + 1
+            item["website_rate_limit_retries"] = count
+            if count <= 5:
+                delay = min(1800, 60 * 2 ** (count - 1))
+                response = getattr(exc, "response", None)
+                try:
+                    delay = max(delay, min(3600, int((getattr(response, "headers", {}) or {}).get("Retry-After") or 0)))
+                except (ValueError, TypeError):
+                    pass
+                item["next_retry_at"] = time.time() + delay
+                item["website_retry_scheduled"] = True
+        return str(item.get("article_url") or existing), "failed", sanitize_error(exc)
 
 
 def _apply_to_posts(item):
@@ -769,8 +831,6 @@ def retry_package_component(package_id, component, mode=None):
     )
     if component == "first_comment" and str(result.get(component) or "").count(snapshot["article_url"]) != 1:
         reason = "First Comment must contain the article URL exactly once"
-        if (mode or snapshot.get("mode", "auto")) == "llm":
-            raise ValueError(reason)
         store = snapshot.get("first_comment_profile_store") or load_profile_store(DATA_ROOT / "data" / "first_comment_profiles.json")
         profile_id = snapshot.get("first_comment_profile_id") or store.get("default_profile_id", "builtin_general")
         profile = next((p for p in store.get("profiles", []) if p.get("id") == profile_id), {})
@@ -799,14 +859,17 @@ def retry_package_component(package_id, component, mode=None):
     return {"component": component, "package": merged, "item": item}
 
 
-def retry_package(package_id, mode=None, *, repair_website=False):
+def retry_package(package_id, mode=None, *, repair_website=False, post_id=None):
     """Put a failed/retryable package back in the worker queue with optional mode."""
     with _LOCK:
         items = _read(QUEUE_FILE, [])
         item = next((entry for entry in items if entry.get("id") == package_id), None)
         if not item:
             return None
+        if post_id:
+            item["post_ids"] = list(dict.fromkeys([*(item.get("post_ids") or []), post_id]))
         if item.get("status") in ("queued", "running"):
+            _write(QUEUE_FILE, items)
             return dict(item)
         if not repair_website and not package_needs_attention(item):
             return dict(item)
@@ -818,6 +881,12 @@ def retry_package(package_id, mode=None, *, repair_website=False):
                 item["regenerate_text"] = True
         if str((item.get("result") or {}).get("source") or "") in ("no_llm_error_fallback", "no_llm_quota_fallback"):
             item["regenerate_text"] = True
+        if repair_website:
+            item["regenerate_text"] = True
+            item["website_error"] = ""
+            item.pop("website_rate_limit_retries", None)
+            item.pop("next_retry_at", None)
+            item.pop("website_retry_scheduled", None)
         if item.get("article_url") and (repair_website or item.get("website_status") == "failed" or not package_is_english(item.get("result") or {})):
             item["repair_existing_article"] = True
         item.update({"status": "queued", "error": "", "updated_at": _now()})
@@ -829,8 +898,7 @@ def process_content_packages_once():
     with _LOCK:
         items = _read(QUEUE_FILE, [])
         running = [entry for entry in items if entry.get("status") == "running"]
-        item = next((entry for entry in sorted(items, key=lambda entry: not entry.get("schedule_priority")) if (entry.get("status") == "queued" or
-                     (entry.get("status") == "retryable" and not circuit_status().get("open")))
+        item = next((entry for entry in sorted(items, key=lambda entry: not entry.get("schedule_priority")) if package_due(entry)
                      and not any(_same_clip(active, entry.get("clip_filename"), entry.get("source_job_id"),
                                            entry.get("source_clip_id")) for active in running)), None)
         if not item:
@@ -862,7 +930,8 @@ def process_content_packages_once():
         else:
             _process_new_content_package(item)
     except Exception as exc:
-        item.update({"status": "retryable" if isinstance(exc, QuotaError) else "failed", "error": sanitize_error(exc), "completed_at": _now()})
+        item.update({"status": "retryable" if isinstance(exc, QuotaError) or item.get("website_retry_scheduled") else "failed", "error": sanitize_error(exc), "completed_at": _now()})
+        item.pop("website_retry_scheduled", None)
     with _LOCK:
         latest = _read(QUEUE_FILE, [])
         for index, existing in enumerate(latest):
@@ -944,6 +1013,12 @@ def update_package_progress(item, stage):
                 entry.update({"stage": stage, "stage_started_at": item["stage_started_at"]})
                 if item.get("result"):
                     entry["result"] = item["result"]
+                for field in ("article_url", "repair_existing_article", "website_video_status", "website_video_url", "youtube_id", "video_url"):
+                    if item.get(field):
+                        entry[field] = item[field]
+                for field in ("hero_image_url", "body_image_urls", "image_source", "image_model", "image_fallback_reason"):
+                    if field in item:
+                        entry[field] = item[field]
                 break
         _write(QUEUE_FILE, items)
 
@@ -1015,8 +1090,7 @@ def _worker_loop():
                         pass
                 active -= finished
                 limit = content_worker_settings()["workers"]
-                if any(item.get("status") == "queued" or (item.get("status") == "retryable" and
-                       not circuit_status().get("open")) for item in list_packages()):
+                if any(package_due(item) for item in list_packages()):
                     for _ in range(max(0, limit - len(active))):
                         active.add(pool.submit(process_content_packages_once))
                 if active:

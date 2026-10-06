@@ -301,6 +301,7 @@ def get_clip_metadata(clip_filename: str) -> dict:
                     meta["clip_title"] = c.get("title") or ""
                     meta["source_video_path"] = matched_job.get("video_path") or ""
                     meta["description"] = matched_job.get("description") or ""
+                    meta["source_transcript_excerpt"] = matched_job.get("source_transcript_excerpt") or ""
                     vt = (matched_job.get("video_title") or "").strip()
                     if vt and not re.search(r'^(video highlight|job_\d+|clip_\d+)', vt, re.IGNORECASE):
                         meta["video_title"] = vt
@@ -353,10 +354,27 @@ def get_clip_metadata(clip_filename: str) -> dict:
 
     return meta
 
+def source_transcript_excerpt(segments) -> str:
+    snippets = [str(item.get("text") or "").strip() if isinstance(item, dict)
+                else str(getattr(item, "text", "") or "").strip() for item in segments]
+    snippets = [text for text in snippets if text]
+    if not snippets:
+        return ""
+    excerpts = []
+    for position in (0, len(snippets) // 2, max(0, len(snippets) - 10)):
+        excerpt = " ".join(snippets[position:position + 8])[:600]
+        if excerpt and excerpt not in excerpts:
+            excerpts.append(excerpt)
+    return " | ".join(excerpts)[:1800]
+
+
 def _source_video_summary(meta: dict, title: str) -> str:
     description = str(meta.get("description") or "").strip()
     if description:
         return description
+    cached = str(meta.get("source_transcript_excerpt") or "").strip()
+    if cached:
+        return f"The original video, titled '{title}', includes these source transcript passages: {cached}"[:2400]
     ass_path = _runtime_data_root() / "temp" / f"{Path(str(meta.get('clip_filename') or '')).stem}.ass"
     if ass_path.is_file():
         try:
@@ -379,18 +397,16 @@ def _source_video_summary(meta: dict, title: str) -> str:
     if youtube_id:
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
-            transcript = YouTubeTranscriptApi().fetch(youtube_id)
-            snippets = [str(item.text or "").strip() for item in transcript]
-            snippets = [snippet for snippet in snippets if snippet]
-            if snippets:
-                positions = (0, len(snippets) // 2, max(0, len(snippets) - 10))
-                excerpts = []
-                for position in positions:
-                    excerpt = " ".join(snippets[position:position + 8])[:360]
-                    if excerpt and excerpt not in excerpts:
-                        excerpts.append(excerpt)
+            class TranscriptSession(requests.Session):
+                def request(self, method, url, **kwargs):
+                    kwargs.setdefault("timeout", (5, 15))
+                    return super().request(method, url, **kwargs)
+            with TranscriptSession() as session:
+                transcript = YouTubeTranscriptApi(http_client=session).fetch(youtube_id)
+            excerpts = source_transcript_excerpt(transcript)
+            if excerpts:
                 return (f"The original video, titled '{title}', includes these transcript passages "
-                        "from the opening, middle and closing portions: " + " | ".join(excerpts))[:1800]
+                        "from the opening, middle and closing portions: " + excerpts)[:2400]
         except Exception as exc:
             logger.info("Original transcript unavailable: %s", type(exc).__name__)
     return (
@@ -491,11 +507,12 @@ def select_smart_video_frame(video_path: str, clip_start=None, clip_end=None, ou
         try:
             info = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0",
                 "-show_entries", "stream=width,height:format=duration", "-of", "json", str(video_path)],
-                capture_output=True, text=True, timeout=20, check=True)
+                capture_output=True, text=True, timeout=20, check=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             payload = json.loads(info.stdout)
             stream = (payload.get("streams") or [{}])[0]
             width, height = int(stream.get("width") or 0), int(stream.get("height") or 0)
-            if not height or width / height < 1.45:
+            if not height or width <= height:
                 return ""
             duration = float((payload.get("format") or {}).get("duration") or 0)
             start = float(clip_start) if clip_start is not None else duration * 0.35
@@ -503,9 +520,13 @@ def select_smart_video_frame(video_path: str, clip_start=None, clip_end=None, ou
             timestamp = max(0.0, min((start + end) / 2, max(0.0, duration - 0.1)))
             destination = Path(output_path or (HVS_DIR / "temp" / "smart_hero_frame.jpg"))
             destination.parent.mkdir(parents=True, exist_ok=True)
+            crop_width = min(width, int(height * 16 / 9)) // 2 * 2
+            crop_height = min(height, int(width * 9 / 16)) // 2 * 2
             subprocess.run([ffmpeg, "-y", "-ss", str(timestamp), "-i", str(video_path),
+                "-vf", f"crop={crop_width}:{crop_height}",
                 "-frames:v", "1", "-q:v", "2", str(destination)],
-                capture_output=True, timeout=45, check=True)
+                capture_output=True, timeout=45, check=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             return str(destination) if _valid_image_file(str(destination), landscape=True) else ""
         except (OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
             logger.warning("Original source frame extraction failed: %s", type(exc).__name__)
@@ -518,14 +539,14 @@ def select_smart_video_frame(video_path: str, clip_start=None, clip_end=None, ou
     # vertical highlight must never masquerade as an original landscape frame.
     width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    if not height or width / height < 1.45:
+    if not height or width <= height:
         cap.release()
         return ""
     best = None
     for timestamp in _candidate_frame_times(video_path, clip_start, clip_end):
         cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000.0)
         ok, frame = cap.read()
-        if ok and frame.shape[1] / max(1, frame.shape[0]) >= 1.45:
+        if ok and frame.shape[1] > frame.shape[0]:
             score = _score_frame(frame)
             if best is None or score > best[0]:
                 best = score, frame
@@ -761,11 +782,11 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str, *, m
             step = (clip_end - clip_start) / 3.0
             windows = [(clip_start + i * step, clip_start + (i + 1) * step) for i in range(3)]
         except (TypeError, ValueError):
-            cap = cv2.VideoCapture(source_path) if HAS_CV2 else None
-            duration = (cap.get(cv2.CAP_PROP_FRAME_COUNT) / cap.get(cv2.CAP_PROP_FPS)
-                        if cap and cap.isOpened() and cap.get(cv2.CAP_PROP_FPS) else 0)
-            if cap:
-                cap.release()
+            from src.media_validation import InvalidMedia, probe_video
+            try:
+                duration = probe_video(source_path)["duration"]
+            except InvalidMedia:
+                duration = 0
             windows = [(duration * i / 3, duration * (i + 1) / 3) for i in range(3)] if duration else []
         for index, (start, end) in enumerate(windows):
             frame = select_smart_video_frame(source_path, start, end,
@@ -777,14 +798,15 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str, *, m
                 if url and url not in images:
                     images.append(url)
             except Exception as exc:
-                logger.warning("Original-source frame upload failed: %s", exc)
-    if len(images) < 3:
-        raise WebsiteServiceError("Cần 3 ảnh ngang từ video gốc; không dùng ảnh AI, thumbnail YouTube hoặc clip dọc")
+                logger.warning("Original-source frame upload failed: %s", type(exc).__name__)
+    if len(images) < 2:
+        raise WebsiteServiceError("Cần 2 ảnh minh họa từ video dài gốc. Nguồn ngang 4:3 hoặc 16:9 đều hợp lệ; không dùng clip dọc.")
     hero = images[0]
     image_config = get_image_provider_config()
     if metadata is not None:
         metadata.update(image_source="source_frame", image_model="", image_fallback_reason="")
-    if mode != "no_llm" and str(image_config.get("model") or "") != "__video_frame__":
+    # Text fallback mode does not disable the independent hero image model.
+    if str(image_config.get("model") or "") != "__video_frame__":
         try:
             generated = generate_llm_hook_image(video_title)
             if generated and _valid_image_file(generated, landscape=True):
@@ -798,6 +820,10 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str, *, m
                 metadata["image_fallback_reason"] = "Model ảnh chưa trả ảnh hợp lệ; dùng frame video gốc."
         except Exception as exc:
             logger.info("Article hero image model unavailable; using source frame (%s)", type(exc).__name__)
+            if metadata is not None:
+                metadata["image_fallback_reason"] = "Model ảnh lỗi; dùng ảnh ngang từ video dài gốc."
+    if hero == images[0] and len(images) < 3:
+        raise WebsiteServiceError("Model ảnh chưa có ảnh hợp lệ; cần thêm frame thứ ba từ video dài gốc làm thumbnail dự phòng.")
     if metadata is not None:
         metadata.update(hero_image_url=hero, body_image_urls=images[:2] if hero != images[0] else images[1:3])
     return hero, images[:2] if hero != images[0] else images[1:3]
@@ -1161,7 +1187,7 @@ def repair_existing_website_article(article_url, clip_filename, *, content_facto
         raise WebsiteServiceError("Bài Website hiện tại thiếu video gốc để xác minh; giữ URL và sửa embed trước.")
     # Validate the source on the existing page before either reusing or updating.
     service.verify_article_embed(article_url, youtube_id=youtube_id, video_stream_url=stream_url)
-    source.update(article_title=source.get("video_title") or article.get("title") or "Original Video",
+    source.update(article_title=article.get("title") or source.get("video_title") or "Original Video",
                   youtube_id=youtube_id, youtube_url=f"https://www.youtube.com/watch?v={youtube_id}" if youtube_id else "")
     cached = metadata.get("result") or {}
     from src.english_text import package_is_english
@@ -1171,9 +1197,11 @@ def repair_existing_website_article(article_url, clip_filename, *, content_facto
         needs_repair = False
     except ValueError:
         needs_repair = True
-    rewrite_article = needs_repair or bool(metadata.get("regenerate_text"))
-    if needs_repair or not package_is_english(cached) or not cached.get("article_html") or metadata.get("regenerate_text"):
+    from src.article_format import word_count
+    rewrite_article = needs_repair or bool(metadata.get("regenerate_text")) or word_count(old_body) < 600
+    if rewrite_article or not package_is_english(cached) or not cached.get("article_html"):
         progress("generating_text")
+        source["description"] = _source_video_summary(source, source["article_title"])
         generated = content_factory(article_url, source)
         assert_english_package(generated)
     else:
@@ -1190,15 +1218,39 @@ def repair_existing_website_article(article_url, clip_filename, *, content_facto
         media = [re.sub(r'(<video\b[^>]*>)(.*?)(</video\s*>)',
                         lambda m: m.group(1) + "".join(re.findall(r'<source\b[^>]*>', m.group(2), re.I)) +
                         "Your browser does not support embedded video." + m.group(3), tag, flags=re.I | re.S) for tag in media]
-        text_body = re.sub(r'<iframe\b[^>]*>.*?</iframe\s*>|<video\b[^>]*>.*?</video\s*>|<img\b[^>]*>|<source\b[^>]*>',
-                           "", str(generated.get("article_html") or ""), flags=re.I | re.S)
-        body = text_body + "\n" + "\n".join(media)
+        image_urls = [html.unescape(url) for url in re.findall(
+            r'<img\b[^>]*\bsrc=["\']([^"\']+)["\']', old_body, re.I)]
+        reuse_images = len(set(image_urls[:3])) == 3
+        if reuse_images:
+            hero, body_images = image_urls[0], image_urls[1:3]
+            metadata.setdefault("image_source", "existing_article")
+        else:
+            progress("repairing_images")
+            hero, body_images = extract_and_upload_article_assets(
+                clip_filename, title, mode=mode, metadata=metadata)
+        generated["required_llm"] = False
+        generated["image_source"] = metadata.get("image_source", "existing_article")
+        title, body = render_content_package_article(title, hero, body_images, package=generated,
+            youtube_id=youtube_id, video_stream_url=stream_url, source_summary=source.get("description", ""))
+        # Keep existing player URLs/attributes, while using the standard layout.
+        players = [tag for tag in media if re.match(r'<(?:iframe|video)\b', tag, re.I)]
+        if players:
+            body = re.sub(r'<iframe\b[^>]*>.*?</iframe\s*>|<video\b[^>]*>.*?</video\s*>',
+                          lambda _: "\n".join(players), body, count=1, flags=re.I | re.S)
+        extras = image_urls[3:] if reuse_images else image_urls
+        if extras:
+            extra_html = "".join(f'<figure><img src="{html.escape(url, quote=True)}" alt="{safe_title}" loading="lazy"></figure>' for url in extras)
+            body = body.replace('<section id="full-video"', extra_html + '<section id="full-video"', 1)
+        metadata.update(hero_image_url=hero, body_image_urls=body_images)
         progress("repairing_article")
-        service.update_existing_article(article_url, title=title, body_html=body, expected_article=article)
+        service.update_existing_article(article_url, title=title, body_html=body, expected_article=article,
+                                        allow_added_images=not reuse_images,
+                                        image_url=hero if not reuse_images else None)
     progress("verifying_article")
     service.verify_article(article_url)
     service.verify_article_english(article_url)
     service.verify_article_embed(article_url, youtube_id=youtube_id, video_stream_url=stream_url)
+    service.verify_article_quality(article_url, minimum_words=600, minimum_images=3)
     metadata.update(result=generated, youtube_id=youtube_id, video_url=source.get("youtube_url") or metadata.get("video_url", ""),
                     website_video_status="youtube_embed_verified" if youtube_id else "verified",
                     website_video_source="youtube" if youtube_id else "original",
@@ -1207,7 +1259,7 @@ def repair_existing_website_article(article_url, clip_filename, *, content_facto
     metadata["website_repair_verified_at"] = datetime.now().isoformat(timespec="seconds")
     metadata.pop("repair_existing_article", None)
     metadata.pop("regenerate_text", None)
-    return article_url, str(article.get("image") or "")
+    return article_url, str(metadata.get("hero_image_url") or article.get("image") or "")
 
 
 def publish_clip_to_website_cms(clip_filename: str, video_title: str = None, *, content_factory=None,
@@ -1240,6 +1292,7 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None, *, 
     if not video_title or re.search(r'^(video highlight|job_\d+|clip_\d+)', video_title, re.IGNORECASE):
         video_title = meta.get("video_title") or meta.get("clean_title")
     meta["article_title"] = video_title
+    meta["description"] = _source_video_summary(meta, video_title)
 
     # 2. Ưu tiên nhúng YouTube gốc để không lưu MP4 trên server. Chỉ upload
     # video dài làm fallback cho các job cũ không có nguồn YouTube hợp lệ.
@@ -1278,6 +1331,8 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None, *, 
         marker = (f"youtube-nocookie.com/embed/{youtube_id}" if youtube_id else video_stream_url)
         if not marker or marker not in existing.text:
             raise WebsiteServiceError("CMS slug already exists with a different or missing video embed")
+        asset_metadata.update(article_url=expected_url, repair_existing_article=True)
+        progress("verifying_existing_article")
         try:
             # A matching embed alone cannot make a legacy foreign article reusable.
             from src.english_text import assert_english
@@ -1292,6 +1347,21 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None, *, 
                     video_title, metadata.get("description", ""), metadata.get("youtube_url", ""), mode=mode, article_url=url)
             return repair_existing_website_article(expected_url, clip_filename, content_factory=content_factory,
                                                    asset_metadata=asset_metadata, mode=mode, progress=progress)
+        existing_service = WebsiteArticleService(str(cfg_file))
+        asset_metadata.update(article_url=expected_url, repair_existing_article=True)
+        progress("verifying_existing_article")
+        try:
+            existing_service.verify_article_english(expected_url)
+            existing_service.verify_article_quality(expected_url, minimum_words=600, minimum_images=3)
+        except WebsiteServiceError:
+            if content_factory is None:
+                from src.content_packages import generate_package
+                content_factory = lambda url, metadata: generate_package(
+                    video_title, metadata.get("description", ""), metadata.get("youtube_url", ""), mode=mode, article_url=url)
+            return repair_existing_website_article(expected_url, clip_filename, content_factory=content_factory,
+                                                   asset_metadata=asset_metadata, mode=mode, progress=progress)
+        existing_service.verify_article_embed(expected_url, youtube_id=youtube_id, video_stream_url=video_stream_url)
+        asset_metadata.pop("repair_existing_article", None)
         return expected_url, ""
     if existing.status_code != 404 and (existing.status_code != 200 or urlparse(existing.url).path.rstrip("/") != urlparse(base_url).path.rstrip("/")):
         raise WebsiteServiceError(f"CMS article lookup HTTP {existing.status_code}; publication paused to avoid duplicates")
@@ -1309,7 +1379,7 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None, *, 
                                     mode=mode, metadata=asset_metadata)
         package = text_future.result()
         hero_img, body_imgs = assets_future.result()
-    package["required_llm"] = mode == "llm"
+    package["required_llm"] = False
     package["image_source"] = asset_metadata.get("image_source", "source_frame")
     if len({url for url in [hero_img, *body_imgs] if str(url).strip()}) < 3:
         raise WebsiteServiceError("Article requires three distinct source images before CMS publication")
@@ -1332,10 +1402,18 @@ def publish_clip_to_website_cms(clip_filename: str, video_title: str = None, *, 
     article_url = res.get("article_url")
     if res.get("status") != "success" or not article_url:
         raise WebsiteServiceError("CMS không xác nhận bài viết đã được tạo")
+    asset_metadata["article_url"] = article_url
+    asset_metadata["repair_existing_article"] = True
+    # Persist the URL before readback: a verification/rate-limit failure must
+    # resume this article rather than generate a second CMS publication.
+    progress("verifying_article")
+    svc.verify_article_english(article_url)
     progress("verifying_article")
     svc.verify_article(article_url)
     svc.verify_article_embed(article_url, youtube_id=youtube_id, video_stream_url=video_stream_url)
     svc.verify_article_quality(article_url, minimum_words=600, minimum_images=3,
                                expected_images=[hero_img, *body_imgs[:2]])
+    asset_metadata.update(result=package, hero_image_url=hero_img, body_image_urls=body_imgs[:2], embed_status="ready")
+    asset_metadata.pop("repair_existing_article", None)
 
     return article_url, hero_img

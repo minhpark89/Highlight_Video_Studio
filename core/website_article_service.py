@@ -7,6 +7,7 @@ Keeping it here makes website publishing work on every machine that installs HVS
 from __future__ import annotations
 
 import json
+import html
 import mimetypes
 import os
 import re
@@ -183,7 +184,8 @@ class WebsiteArticleService:
             raise WebsiteServiceError("Existing CMS article identity changed")
         return article
 
-    def update_existing_article(self, article_url, *, title, body_html, expected_article, _session=None):
+    def update_existing_article(self, article_url, *, title, body_html, expected_article,
+                                allow_added_images=False, image_url=None, _session=None):
         """Correct text in place; preserve slug, media and CMS publication state."""
         from src.english_text import assert_english
         assert_english(title, "CMS title")
@@ -195,7 +197,14 @@ class WebsiteArticleService:
                 raise WebsiteServiceError("CMS article changed after preparation; inspect before updating")
         for tag in ("img", "iframe", "video", "source"):
             pattern = fr'<{tag}\b[^>]*\bsrc=["\']([^"\']+)'
-            if re.findall(pattern, str(current.get("description") or ""), re.I) != re.findall(pattern, body_html, re.I):
+            old_urls = re.findall(pattern, str(current.get("description") or ""), re.I)
+            new_urls = re.findall(pattern, body_html, re.I)
+            if tag == "img" and allow_added_images:
+                remaining = iter(new_urls)
+                preserved = all(any(candidate == url for candidate in remaining) for url in old_urls)
+            else:
+                preserved = old_urls == new_urls
+            if not preserved:
                 raise WebsiteServiceError("Article repair must preserve every existing media URL")
         payload = {key: current.get(key) for key in (
             "slug", "image", "is_active", "is_home", "is_top", "is_ai_generated", "series_id", "chapter_number",
@@ -209,6 +218,8 @@ class WebsiteArticleService:
                        twitter_image=current.get("twitter_image") or current.get("image"),
                        category_ids=[row["id"] for row in current.get("categories", [])],
                        tag_ids=[row["id"] for row in current.get("tags", [])])
+        if image_url is not None:
+            payload.update(image=image_url, og_image=image_url, twitter_image=image_url)
         self._ensure_session(session)
         response = session.http.put(f"{self.cfg.api_base_url}/posts/{current['id']}", json=payload,
                                     timeout=max(self.cfg.timeout, 60))
@@ -470,7 +481,23 @@ class WebsiteArticleService:
             response = requests.get(article_url, allow_redirects=True, timeout=self.cfg.timeout)
         except requests.RequestException as exc:
             raise WebsiteServiceError(f"Kh\u00f4ng x\u00e1c minh \u0111\u01b0\u1ee3c embed video: {exc}") from exc
-        if response.status_code != 200 or not any(marker in (response.text or "") for marker in markers):
+        source = response.text or ""
+        article = re.search(r"<article\b[^>]*>(.*?)</article>", source, re.S | re.I)
+        if article:
+            source = article.group(1)
+        valid_embed = False
+        if youtube_id:
+            for url in re.findall(r'<iframe\b[^>]*\bsrc=["\']([^"\']+)["\']', source, re.I):
+                parsed = urlparse(html.unescape(url))
+                if (parsed.scheme == "https" and parsed.hostname in ("www.youtube-nocookie.com", "youtube-nocookie.com", "www.youtube.com", "youtube.com")
+                        and parsed.path == f"/embed/{youtube_id}"):
+                    valid_embed = True
+        if video_stream_url:
+            for video in re.findall(r'<video\b[^>]*>.*?</video\s*>', source, re.I | re.S):
+                urls = re.findall(r'<(?:video|source)\b[^>]*\bsrc=["\']([^"\']+)["\']', video, re.I)
+                if any(html.unescape(url) == video_stream_url for url in urls):
+                    valid_embed = True
+        if response.status_code != 200 or not valid_embed:
             raise WebsiteServiceError("B\u00e0i vi\u1ebft CMS ch\u01b0a ch\u1ee9a embed video g\u1ed1c")
         return {"success": True, "url": response.url, "embed": "youtube" if youtube_id else "html5"}
 
@@ -484,13 +511,16 @@ class WebsiteArticleService:
         if response.status_code != 200:
             raise WebsiteServiceError(f"BÃ i public tráº£ HTTP {response.status_code}")
         source = response.text or ""
+        article = re.search(r"<article\b[^>]*>(.*?)</article>", source, re.S | re.I)
+        if article:
+            source = article.group(1)
         summary_start = source.find("Original video summary")
         video_start = source.find("Full Uncut Footage", summary_start)
         if summary_start < 0 or video_start < 0:
             raise WebsiteServiceError("BÃ i public thiáº¿u pháº§n tÃ³m táº¯t hoáº·c video gá»‘c")
         article_section = source[summary_start:video_start]
         images = re.findall(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\']', source, flags=re.IGNORECASE)
-        image_count = len(images)
+        image_count = len(set(images))
         words = len(re.findall(r"\b[A-Za-z]+\b", re.sub(r"<[^>]+>", " ", article_section)))
         if expected_images and any(image not in images for image in expected_images):
             raise WebsiteServiceError("BÃ i public thiáº¿u má»™t hoáº·c nhiá»u áº£nh minh há»a Ä‘Ã£ gá»­i")

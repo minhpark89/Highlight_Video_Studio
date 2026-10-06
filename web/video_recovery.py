@@ -21,7 +21,7 @@ def can_replace_failed_video(post, seen):
                 and seen.get("publishing_status") in ("not_started", "error", "failed", "rejected"))
 
 
-def prepare_replacement(posts, post, seen, output_dir, *, filename, schedule_time):
+def prepare_replacement(posts, post, seen, output_dir, *, filename, schedule_time=None, mode="meta_scheduled"):
     existing = next((p for p in posts if p.get("id") == post.get("replacement_post_id")), None)
     if existing:
         return existing, False
@@ -29,7 +29,17 @@ def prepare_replacement(posts, post, seen, output_dir, *, filename, schedule_tim
         raise ValueError("Meta chưa xác nhận video lỗi và chưa đăng; giữ ID cũ để đối soát.")
     path = scheduled_video_path(output_dir, filename)
     info = probe_video(path)
-    publish_at = parse_meta_schedule_time(schedule_time)
+    if mode not in ("meta_scheduled", "app_queue"):
+        raise ValueError("Chọn App đăng lại hoặc Meta giữ lịch.")
+    if mode == "meta_scheduled":
+        publish_at = parse_meta_schedule_time(schedule_time)
+    elif schedule_time:
+        due = datetime.fromisoformat(str(schedule_time).replace(" ", "T"))
+        if due <= datetime.now():
+            raise ValueError("Chọn giờ đăng mới chưa qua hoặc Đăng lại bằng App.")
+        publish_at = due.timestamp()
+    else:
+        publish_at = datetime.now().timestamp()
     url = str(post.get("article_url") or "").strip()
     comment = str(post.get("first_comment_snapshot") or post.get("first_comment") or "").strip()
     if post.get("website_status") != "ready" or not url or comment.count(url) != 1:
@@ -51,11 +61,11 @@ def prepare_replacement(posts, post, seen, output_dir, *, filename, schedule_tim
               "website_video_status", "website_video_url", "website_video_source", "website_thumbnail_url",
               "first_comment_profile_id", "first_comment_source", "first_comment_model", "content_package_source")
     replacement = {key: post[key] for key in fields if key in post}
-    replacement.update(id=post["id"] + "_replacement", status="meta_handoff", publish_mode="meta_scheduled",
+    replacement.update(id=post["id"] + "_replacement", status="meta_handoff" if mode == "meta_scheduled" else "scheduled", publish_mode=mode,
         media_file=path.name, scheduled_time=datetime.fromtimestamp(publish_at).strftime("%Y-%m-%d %H:%M:%S"),
         created_at=stamp, content_frozen_at=stamp, first_comment=comment, first_comment_snapshot=comment,
         first_comment_status="ready", retryable=False, outcome_unknown=False, error="",
-        meta_schedule_status="handoff_queued", replaces_post_id=post["id"],
+        meta_schedule_status="handoff_queued" if mode == "meta_scheduled" else "", replaces_post_id=post["id"],
         replacement_video_sha256=digest.hexdigest(), replacement_video_duration=info["duration"])
     if post.get("meta_recovery_token_id"):
         replacement["token_id"] = post["meta_recovery_token_id"]

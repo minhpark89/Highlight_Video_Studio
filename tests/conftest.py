@@ -36,3 +36,22 @@ def isolated_content_queue(tmp_path, monkeypatch):
     monkeypatch.setattr(content_packages, "DATA_ROOT", tmp_path)
     monkeypatch.setattr(content_packages, "QUEUE_FILE", tmp_path / "content_packages.json")
     monkeypatch.setattr(content_packages, "CIRCUIT_FILE", tmp_path / "llm_circuit.json")
+
+
+@pytest.fixture(autouse=True)
+def offline_original_transcripts(monkeypatch):
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+    except ImportError:
+        return
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("Offline test: no source transcript fixture supplied")
+    monkeypatch.setattr(YouTubeTranscriptApi, "fetch", unavailable)
+
+
+@pytest.fixture(autouse=True)
+def no_external_http_in_offline_tests(monkeypatch):
+    import requests
+    def blocked(self, method, url, **kwargs):
+        raise requests.ConnectionError("Offline test: HTTP transport must be mocked")
+    monkeypatch.setattr(requests.Session, "request", blocked)

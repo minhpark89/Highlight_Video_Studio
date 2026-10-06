@@ -152,3 +152,23 @@ def test_cms_repair_preserves_media_url_and_puts_same_id_once():
                                         body_html=repaired.replace("https://img.test/one", "https://img.test/two"),
                                         expected_article=old, _session=session)
     session.http.put.assert_not_called()
+
+
+def test_cms_repair_can_add_missing_images_but_never_remove_existing_media():
+    service = repair_service()
+    old = article_fixture()
+    service.read_existing_article = mock.Mock(return_value=copy.deepcopy(old))
+    session = mock.Mock()
+    session.http.put.return_value.json.return_value = {"ok": True}
+    session.http.put.return_value.status_code = 200
+    body = '<img src="https://img.test/new-hero">' + old["description"]
+    service.update_existing_article("https://cms.test/blog/same-slug", title="English title", body_html=body,
+        expected_article=old, allow_added_images=True, image_url="https://img.test/new-hero", _session=session)
+    payload = session.http.put.call_args.kwargs["json"]
+    assert payload["image"] == payload["og_image"] == "https://img.test/new-hero"
+    session.reset_mock()
+    with pytest.raises(WebsiteServiceError):
+        service.update_existing_article("https://cms.test/blog/same-slug", title="English title",
+            body_html=body.replace('<img src="https://img.test/one">', ''), expected_article=old,
+            allow_added_images=True, _session=session)
+    session.http.put.assert_not_called()
