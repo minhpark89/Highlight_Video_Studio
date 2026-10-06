@@ -8,11 +8,11 @@ Kiểm thử **632 passed, 4 skipped, 29 subtests passed**. Browser offline **9 
 
 Bộ cài đã kiểm chứng: `release/Highlight_Desktop_Test_Setup_v1.2.3.exe`, **705073152 bytes**, SHA256 `369bb5e8560faaaef74456a0e5ed7b9e05a8e041d20d1730f5da4ea7bdae3c02`. Tag source `v1.2.3` tại `8a5f77f0f5be55a8839e13b1542763b7d936438d`, identity sạch; payload khớp 21 file, không chứa state/credential người dùng. Xem `checkpoints/evidence/v1.2.3/installer_verify.json`.
 
-**GitHub hiện không kết nối được**, chưa có release công khai v1.2.3. Session sau dùng checkpoint chi tiết để tiếp tục deploy và nâng cấp đúng runtime. Không dùng link download dự đoán như link đã hoạt động. Source backup offline ở `E:\OPENCLAW\BOB\support\v1.2.3\Highlight_Source_v1.2.3.bundle` (nhánh/tag/checkpoint); installer và các asset nằm ở `source-worktree/release/`.
+**Đang phát hành GitHub:** phiên hiện tại kết nối thành công, xác thực `minhpark89`, quyền push=true; chưa có release v1.2.3 tại lần inspect đầu. SHA256 bộ cài vừa được kiểm tra lại, khớp proof. Tiếp tục push/draft/upload/publish/verify trước khi xác nhận link tải.
 
-Kiểm tra lại bằng đúng `E:\OPENCLAW\BOB\token github.txt`: file đọc được, nhận dạng token được; DNS github.com/api.github.com thành công, cả hai kết nối TCP 443 trả **PermissionError/WinError 10013**, chưa nhận HTTP từ GitHub nên chưa kiểm tra được quyền token. Đây là hạn chế kết nối của phiên, không có bằng chứng GitHub từ chối token. Bằng chứng v1.2.1 phát hành trước vẫn có Release ID `404026464`, ngày 06/10 lúc 02:06 +07.
+Checkpoint chi tiết có bảng triệu chứng → file source/test, cách lấy source từ nhánh `release/v1.2.3`, giữ claim/Meta IDs và tái hiện lỗi trên bản sao. Source app trong tag/installer là commit `8a5f77f0f5be55a8839e13b1542763b7d936438d`; nhánh phát hành có checkpoint/tooling mới hơn. Source backup offline ở `E:\OPENCLAW\BOB\support\v1.2.3\Highlight_Source_v1.2.3.bundle`; binary installer và asset ở `source-worktree/release/`.
 
-Lệnh tiếp tục trong môi trường có kết nối GitHub: `powershell -NoProfile -ExecutionPolicy Bypass -File checkpoints/tools/v1.2.3/deploy_github.ps1`. Helper đọc token trong memory, thực hiện inspect → push → draft hoặc resume → upload → publish → verify; không sửa tag/source/asset đã phát hành. 5 kiểm thử mới xác minh dừng khi push lỗi, thiếu quyền và không publish lại release công khai. Đọc `checkpoints/evidence/v1.2.3/network_diagnosis.json` và phần tiếp tục deploy trong checkpoint chi tiết.
+Lỗi WinError 10013 và chẩn đoán network trong checkpoint là lịch sử phiên trước. Trạng thái mới dùng `checkpoints/evidence/v1.2.3/deployment_status.json`; helper `checkpoints/tools/v1.2.3/deploy_github.ps1` hỗ trợ resume, kiểm tra digest và không thay asset đã public.
 
 ## Checkpoint trước — v1.2.2
 

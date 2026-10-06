@@ -26,7 +26,7 @@ Bộ cài đã kiểm chứng `release/Highlight_Desktop_Test_Setup_v1.2.3.exe`,
 
 Replay snapshot 11:00 riêng đã xếp **294** bài NEW còn preparing/Draft về 06/10 **11:31–14:16**, 0 overflow/skip; 198 bài trước đó ở 07/10. Giữ status, caption, First Comment, Website URL, Page–Token, source claim và mọi bài không chọn/remote. Preview cả nhóm 0.1472 giây; lấy kho 20 bài có lịch đúng nhóm/ngày. Đây là kết quả offline, không thay lịch thật hoặc gửi Meta/CMS. Runtime cài đặt vẫn v1.2.1.
 
-**Chưa deploy GitHub:** inspect API và Git remote vẫn thất bại kết nối port 443. Đọc `deployment_status.json` cho lần push cuối. Chưa tạo draft/public release v1.2.3, chưa có link tải công khai mới; bộ cài/SHA256/checkpoint asset đã sẵn sàng local. Không dùng URL dự đoán như URL đã xác minh.
+Checkpoint này đi kèm bộ cài v1.2.3. Trạng thái phát hành, Release ID và kết quả kiểm chứng tải công khai nằm trong `checkpoints/evidence/v1.2.3/deployment_status.json` và `release.json` trên nhánh `release/v1.2.3`. Các lỗi mạng trong phần lịch sử bên dưới thuộc phiên trước; phiên deploy mới đã kết nối và xác thực GitHub thành công.
 
 Backup source offline: `E:\OPENCLAW\BOB\support\v1.2.3\Highlight_Source_v1.2.3.bundle`. Bundle chứa `release/v1.2.3` và `v1.2.3`; có thể clone vào thư mục mới trong workspace để sửa tiếp. Giữ `source-worktree/release/` vì binary installer và asset ignored không nằm trong bundle. Không cài đè hoặc sửa queue live trong session này.
 
@@ -37,6 +37,24 @@ Backup source offline: `E:\OPENCLAW\BOB\support\v1.2.3\Highlight_Source_v1.2.3.b
 3. Trong Nhóm Trang chọn NEW → Cả nhóm hôm nay → Xem trước → Áp dụng. Chọn “Tự lên lịch khi sẵn sàng” nếu muốn tự đăng sau Website; manual cần duyệt Draft. Kho dùng “Lấy từ kho cho hôm nay”. Ngày/giờ thực tế lấy từ máy chạy app; không dùng 06/10 cố định ở session khác.
 4. Bài Website chưa sẵn sàng có lịch hôm nay vẫn phải chờ chuẩn bị. Xem lỗi Website/English và retry đúng URL; không coi đã xếp lịch là đã xuất bản.
 5. Giữ receipt các bài đã published và Meta IDs. `post_1791183298_90ab26` đã published/First Comment posted; không repost. Clip 262 bytes có replacement ngoài intake ở `support/v1.2.2/media-recovery/`; đọc checkpoint v1.2.2 trước import. Lỗi `368/4854002` còn cần xác minh Facebook.
+
+## Bản tải và cách tiếp tục sửa lỗi
+
+- Trang phát hành: https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.2.3. Installer, SHA256 và `CODEX_CHECKPOINT_v1.2.3.md` là ba asset của bản này. Trạng thái công khai và lần kiểm chứng cuối được lưu trong `checkpoints/evidence/v1.2.3/deployment_status.json` và `release.json` trên nhánh phát hành.
+- Source app trong installer và tag `v1.2.3` cùng commit `8a5f77f0f5be55a8839e13b1542763b7d936438d`. Các cập nhật checkpoint/evidence/tooling nằm ở HEAD nhánh `release/v1.2.3`; khi lấy source từ GitHub để sửa tiếp, đọc checkpoint trên nhánh này vì archive của tag chỉ chứa trạng thái lúc build.
+- Có thể lấy đầy đủ source và checkpoint bằng `git clone --branch release/v1.2.3 https://github.com/minhpark89/Highlight_Video_Studio.git Highlight-v1.2.3-source`. Nếu dùng worktree hiện tại, kiểm tra `git status` trước khi fetch/chuyển nhánh; giữ các thay đổi local của người dùng.
+- Kết quả 632 passed/4 skipped/29 subtests và 9 browser checks là evidence từ lần build trước. Phiên deploy chỉ kiểm tra artifact/GitHub, không chạy lại suite hoặc build installer khác.
+
+| Triệu chứng cần sửa | Source và evidence cần đọc trước |
+| --- | --- |
+| Preview/áp dụng hôm nay sai giờ, overflow, Page–Token hoặc revision conflict | `src/output_scheduling.py:schedule_today`, endpoint `web/app.py:api_schedule_today`, `web/static/group_review.js`, `tests/test_schedule_today.py`. HTTP 409 do revision thay đổi cần xem trước lại; dùng ngày/giờ máy chạy app. |
+| Daily lại tạo lịch ngày mai sau khi áp dụng cả nhóm | `src/output_pipeline.py`, `allocation_override_date`, `schedule_scope`, `schedule_day`; test `test_group_today_prevents_daily_refilling_tomorrow_and_resumes_next_day`. Đổi lịch vài bài đã chọn vẫn cho Daily chạy. |
+| Áp dụng xong nhưng JSON/SQLite lệch hoặc source bị lấy hai lần | `src/output_scheduling.py`, `src/output_pipeline.py`, `web/posts_store.py`; backup `posts.json` và `output_ledger.sqlite3` cùng content queue trước khi sửa. Đọc hai test phục hồi JSON failure trong `tests/test_schedule_today.py`; giữ intent/claim, không xóa ledger để chạy lại. |
+| Bài preparing đã có lịch nhưng Website/First Comment chưa xong | `src/output_pipeline.py`, `src/content_packages.py`, `src/english_text.py`, `src/publisher/website_publisher.py`, `core/website_article_service.py`; checkpoint v1.2.2. Lịch không làm bài trở thành ready; retry Website tại URL cũ. |
+| Bài trễ qua nửa đêm không tự đăng | `web/scheduled_publisher.py`, `schedule_day`, test `test_publisher_does_not_dispatch_today_only_queue_after_midnight`. Với bài chưa gửi Meta, hẹn lại ngày/giờ mới qua UI; kiểm tra Meta ID trước mọi retry. |
+| Meta Init bị từ chối, thiếu token, lịch Meta quá giờ hoặc outcome chưa rõ | `web/post_retry.py`, `web/meta_recovery.py`, `web/meta_diagnostics.py`, `web/meta_handoff.py`; checkpoint v1.2.2. Read-back đúng remote ID/receipt trước, chỉ retry trường hợp đã xác nhận an toàn. |
+
+Khi người dùng báo lỗi, ghi phiên bản/build identity, giờ và múi giờ máy chạy app, group/post ID, scope, mode App/Meta, preview/revision, HTTP status/error và log đã che token. Tạo reproduction trên bản sao dữ liệu ngoài repo; không commit dữ liệu/credential thật. Sau khi sửa, chạy các test liên quan ở bảng trên rồi full suite và kiểm tra payload theo phần Build; phát hành phiên bản mới, giữ nguyên tag/asset v1.2.3.
 
 ## Build và GitHub
 
@@ -51,7 +69,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File checkpoints/tools/v1.2.3/ver
 
 Source phải sạch trước build. Credential GitHub chỉ đọc trong memory từ file đã có ở workspace; không in/commit credential. Helper giữ Git config kế thừa rồi thêm auth header trong memory. Khi có mạng, lần lượt chạy `python checkpoints/tools/v1.2.3/github_release.py inspect`, `push`, `draft`, `upload`, `publish`, `verify`. Ba asset: installer, SHA256, `CODEX_CHECKPOINT_v1.2.3.md`. Chỉ báo deploy thành công khi verify xác nhận tag/branch/digest và link tải công khai. Không bỏ qua hạn chế mạng của môi trường.
 
-## Tiếp tục deploy bằng đúng token đã chỉ định
+## Lịch sử phiên trước: tiếp tục deploy bằng đúng token đã chỉ định
+
+Phần này ghi lại trở ngại và hướng xử lý của phiên trước. Phiên phát hành hiện tại đã nhận HTTP thành công và xác nhận quyền push; đọc trạng thái mới ở đầu checkpoint cùng `deployment_status.json`.
 
 Token được đọc từ **`E:\OPENCLAW\BOB\token github.txt`** bằng helper ngay từ lần deploy trước; không cần thay token vào source hoặc URL remote. Lần kiểm tra lại sau yêu cầu dùng token xác nhận đọc file/nhận dạng token thành công. DNS cả `github.com` và `api.github.com` hoạt động. Tạo TCP socket đến port 443 của cả hai trả `PermissionError`, errno=13, **WinError 10013**. Request `/user` có Bearer token cũng dừng ở cùng lỗi socket, chưa nhận HTTP response. Vì vậy chưa thể kết luận token hết hạn/thiếu quyền; chưa xảy ra kiểm tra xác thực ở phía GitHub. Không mô tả đây là GitHub ban tài khoản. Evidence: `network_diagnosis.json` và `deployment_status.json`.
 
@@ -75,7 +95,7 @@ Các action lẻ vẫn chạy được để chẩn đoán: `python checkpoints/
 
 Kiểm thử tooling bổ sung: `python -m pytest tests/test_github_deploy.py -q --no-header` → **5 passed**. App installer/source/tag đã kiểm chứng giữ nguyên; không cần build lại vì chỉ sửa công cụ deploy ngoài payload. Source backup bundle được cập nhật cùng nhánh checkpoint mới. Chưa nâng cấp runtime, chưa dời lịch thật hoặc gửi Meta/CMS trong lần thử deploy này.
 
-## Chẩn đoán cấu hình quyền mạng
+## Lịch sử phiên trước: chẩn đoán cấu hình quyền mạng
 
 Không có HTTP_PROXY/HTTPS_PROXY/ALL_PROXY trong environment; WinHTTP dùng Direct access. Đọc firewall profile bị Access denied (`0x80041003`), nên chưa khẳng định được rule Windows Firewall cụ thể. Không tắt firewall, đổi proxy hoặc sửa token.
 
