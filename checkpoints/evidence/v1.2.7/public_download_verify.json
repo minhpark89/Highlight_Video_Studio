@@ -1,0 +1,39 @@
+{
+  "success": true,
+  "release_id": 404556122,
+  "tag": "v1.2.7",
+  "release_url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.2.7",
+  "draft": false,
+  "prerelease": true,
+  "authenticated_download": false,
+  "release_page_http_status": 200,
+  "release_api_http_status": 200,
+  "started_at_utc": "2026-10-06T10:11:20.128192+00:00",
+  "verified_at_utc": "2026-10-06T10:14:21.346353+00:00",
+  "assets": [
+    {
+      "name": "CODEX_CHECKPOINT_v1.2.7.md",
+      "size": 24968,
+      "sha256": "2e6da25975260398c25d2ac9d02e889a0e2f474e07436fa61aa72e3e39aa46a1",
+      "browser_download_url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.7/CODEX_CHECKPOINT_v1.2.7.md",
+      "anonymous_get_status": 200,
+      "matches_local_bytes": true
+    },
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.2.7.exe",
+      "size": 705445376,
+      "sha256": "95ad9365a65eaa88fdad20b83034a2d90c0733edaf2efeda2ea0d1480f55170d",
+      "browser_download_url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.7/Highlight_Desktop_Test_Setup_v1.2.7.exe",
+      "anonymous_get_status": 200,
+      "matches_local_bytes": true
+    },
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.2.7.sha256",
+      "size": 107,
+      "sha256": "09768e8a196cbaa6cfb2d62206c77949299049df8193f9410a8bea49ec14118e",
+      "browser_download_url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.7/Highlight_Desktop_Test_Setup_v1.2.7.sha256",
+      "anonymous_get_status": 200,
+      "matches_local_bytes": true
+    }
+  ]
+}

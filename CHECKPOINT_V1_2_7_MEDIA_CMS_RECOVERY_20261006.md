@@ -84,7 +84,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build_release.ps1 -Version 1
 
 Build và inspect hoàn tất: tag/source `06ad9f5328e16f3b5794ae8478adfe753a5f7ca3`, clean identity, Graph v24.0, 31 source/lexicon/license files khớp; không có state/credential thật. Installer `Highlight_Desktop_Test_Setup_v1.2.7.exe`, **705445376 bytes**, SHA256 `95ad9365a65eaa88fdad20b83034a2d90c0733edaf2efeda2ea0d1480f55170d`. Offline cuối **537 passed, 4 skipped, 29 subtests passed**; JS 4 inline + 3 external, templates identical; Chromium 5 checks/0 errors.
 
-Chưa public tại thời điểm chuẩn bị asset checkpoint. Release ID/link/anonymous full-download verification sẽ được bổ sung trên nhánh release sau phát hành. Asset checkpoint được chuẩn bị trước public và giữ nguyên khi đã upload. Tag source và branch evidence có thể khác commit, tag phải khớp installer build_identity.
+**Đã public và xác minh tải đầy đủ ba asset**. Release ID `404556122`, draft=false/prerelease=true. Release: https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.2.7. Anonymous GET HTTP200/size/SHA256 khớp toàn bộ installer, checksum và checkpoint lúc **2026-10-06 17:14:21 +07**. Evidence `release.json`, `deployment_status.json`, `public_download_verify.json`. Installer public SHA256 khớp build đã kiểm tra ở trên.
+
+Asset checkpoint được chuẩn bị trước public và giữ nguyên sau upload; thông tin cuối ở nhánh release và checkpoint này. Tag source cố định; nhánh checkpoint/evidence có commit mới hơn. Source backup offline: `E:\OPENCLAW\BOB\support\v1.2.7\Highlight_Source_v1.2.7_published.bundle`. Không cài vào app thật, không thay live posts/token/schedules, không gửi publish/delete Meta/CMS.
 
 ## Session sau
 

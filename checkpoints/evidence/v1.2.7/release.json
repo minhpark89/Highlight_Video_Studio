@@ -1,0 +1,38 @@
+{
+  "id": 404556122,
+  "tag_name": "v1.2.7",
+  "html_url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.2.7",
+  "upload_url": "https://uploads.github.com/repos/minhpark89/Highlight_Video_Studio/releases/404556122/assets{?name,label}",
+  "draft": false,
+  "prerelease": true,
+  "source_commit": "06ad9f5328e16f3b5794ae8478adfe753a5f7ca3",
+  "branch_commit": "ff6c0cc1bb605c9cef68e229ad665e4d995fa2b2",
+  "installer_sha256": "95ad9365a65eaa88fdad20b83034a2d90c0733edaf2efeda2ea0d1480f55170d",
+  "installer_size": 705445376,
+  "assets": [
+    {
+      "name": "CODEX_CHECKPOINT_v1.2.7.md",
+      "size": 24968,
+      "digest": "sha256:2e6da25975260398c25d2ac9d02e889a0e2f474e07436fa61aa72e3e39aa46a1",
+      "state": "uploaded",
+      "browser_download_url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.7/CODEX_CHECKPOINT_v1.2.7.md"
+    },
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.2.7.exe",
+      "size": 705445376,
+      "digest": "sha256:95ad9365a65eaa88fdad20b83034a2d90c0733edaf2efeda2ea0d1480f55170d",
+      "state": "uploaded",
+      "browser_download_url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.7/Highlight_Desktop_Test_Setup_v1.2.7.exe"
+    },
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.2.7.sha256",
+      "size": 107,
+      "digest": "sha256:09768e8a196cbaa6cfb2d62206c77949299049df8193f9410a8bea49ec14118e",
+      "state": "uploaded",
+      "browser_download_url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.7/Highlight_Desktop_Test_Setup_v1.2.7.sha256"
+    }
+  ],
+  "public_downloads_verified": true,
+  "source_tag_verified": true,
+  "branch_verified": true
+}

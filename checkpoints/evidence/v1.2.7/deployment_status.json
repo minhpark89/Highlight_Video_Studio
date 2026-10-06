@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "release_id": 404556122,
+  "tag": "v1.2.7",
+  "draft": false,
+  "prerelease": true,
+  "source_commit": "06ad9f5328e16f3b5794ae8478adfe753a5f7ca3",
+  "installer_sha256": "95ad9365a65eaa88fdad20b83034a2d90c0733edaf2efeda2ea0d1480f55170d",
+  "release_url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.2.7",
+  "public_full_download_verified": true,
+  "verified_at_utc": "2026-10-06T10:14:21.346353+00:00",
+  "live_meta_write": false,
+  "live_cms_write": false,
+  "active_runtime_modified": false
+}
