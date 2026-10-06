@@ -194,6 +194,50 @@ def ready_item(post):
             'website_video_status': 'verified', 'website_video_url': 'https://cms.test/videos/finish.mp4'}
 
 
+def test_daily_plan_promotes_attached_text_only_cache_without_changing_package_id(intake):
+    root, _clock = intake
+    (root / 'output' / 'clip.mp4').write_bytes(b'video')
+    scan(intake)
+    post = load_posts_file(root / 'posts.json')[0]
+    item = packages.get_package(post['content_package_id'])
+    item.update(create_website_article=False, status='ready', website_status='not_configured',
+                website_video_status='youtube_embed_verified', error='stale', website_error='stale')
+    packages._write(packages.QUEUE_FILE, [item])
+    pipeline.save_plan({'daily': True, 'page_ids': ['a'], 'slots': ['19:30']}, [{'page_id': 'a', 'token_id': 't'}], [], root)
+    pipeline.process_once(root=root, pages=[{'page_id': 'a', 'token_id': 't'}], now=datetime(2026, 10, 6, 8))
+    saved = packages.get_package(item['id'])
+    assert saved['create_website_article'] and saved['status'] == 'queued'
+    assert saved['website_status'] == 'pending_generation' and not saved['error'] and not saved['website_error']
+    assert len(packages.list_packages()) == 1
+    post = load_posts_file(root / 'posts.json')[0]
+    assert post['page_id'] == 'a' and post['content_package_id'] == item['id'] and post['status'] == 'preparing'
+
+
+def test_invalid_cached_package_is_quarantined_and_valid_package_still_applies(intake):
+    root, _clock = intake
+    for name in ('a', 'b'):
+        (root / 'output' / (name + '.mp4')).write_bytes(name.encode())
+    scan(intake)
+    posts = load_posts_file(root / 'posts.json')
+    items = []
+    for post in posts:
+        item = packages.get_package(post['content_package_id'])
+        item.update(ready_item(post), id=post['content_package_id'])
+        items.append(item)
+    items[0]['result']['article_html'] = '<p>Đây là nội dung tiếng Việt không được đăng.</p>'
+    packages._write(packages.QUEUE_FILE, items)
+    result = pipeline.process_once(root=root, probe=lambda p: True)
+    saved = load_posts_file(root / 'posts.json')
+    assert result['imported'] == 0
+    assert saved[0]['content_package_status'] == 'failed' and saved[0]['website_status'] == 'failed'
+    assert 'article_html' in saved[0]['content_package_error']
+    assert packages.get_package(items[0]['id'])['article_url'] == items[0]['article_url']
+    assert packages.get_package(items[0]['id'])['status'] == 'failed'
+    assert saved[1]['status'] == 'draft' and saved[1]['content_package_status'] == 'ready'
+    pipeline.process_once(root=root, probe=lambda p: True)
+    assert load_posts_file(root / 'posts.json')[1]['status'] == 'draft'
+
+
 @pytest.mark.parametrize('mode,expected', [('manual', 'draft'), ('automatic', 'scheduled')])
 def test_manual_draft_and_explicit_auto_transition_use_same_fallback(intake, mode, expected):
     root, clock = intake

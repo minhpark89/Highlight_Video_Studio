@@ -452,6 +452,7 @@ def process_once(*, root=None, pages=None, groups=None, token_groups=None, now=N
                         or (post.get("page_id") and package.get("status") == "queued" and not package.get("schedule_priority"))
                         or (package.get("status") in ("queued", "failed", "retryable") and
                             package.get("clip_filename") != post["media_file"])
+                        or package.get("create_website_article") is False
                         or (package.get("status") == "ready" and not package.get("website_video_status")))
         if needs_attach:
             package = packages.ensure_content_package(
@@ -475,7 +476,22 @@ def process_once(*, root=None, pages=None, groups=None, token_groups=None, now=N
                     row.update(updates[row["id"]])
             save_posts_file(root / "posts.json", current)
     for package in ready:
-        packages._apply_to_posts(package)
+        try:
+            packages._apply_to_posts(package)
+        except ValueError as exc:
+            # One legacy non-English result must not starve every valid item
+            # behind it. Keep the failing URL/package for an explicit retry.
+            message = packages.sanitize_error(exc)
+            if packages.reject_cached_package(package["id"], message):
+                with POSTS_LOCK:
+                    current = load_posts_file(root / "posts.json")
+                    for row in current:
+                        if (row.get("content_package_id") == package["id"] and
+                                row.get("status") in ("preparing", "draft") and not row.get("content_frozen_at")):
+                            row.update(content_package_status="failed", content_package_error=message)
+                            if "article_html" in str(exc):
+                                row.update(website_status="failed", website_error=message)
+                    save_posts_file(root / "posts.json", current)
     return {"imported": imported, "assigned": assigned, **pressure(root)}
 
 

@@ -191,10 +191,10 @@ def test_prerelease_identity_differs_from_production_version():
     assert "preview" in env.PRERELEASE_NAME
 
 
-def test_environment_report_offline_and_json_serialisable():
+def test_environment_report_offline_and_json_serialisable(tmp_path):
     from multi_pc import environment as env
 
-    report = env.environment_report(run_canary=False, force=True)
+    report = env.environment_report(run_canary=False, force=True, cache_path=tmp_path / 'render_profile.json')
     assert report["production_safety"]["touches_production"] is False
     assert report["canary"] == {}
     assert report["build"] == env.PRERELEASE_BUILD

@@ -153,3 +153,41 @@ def test_automatic_refresh_rechecks_remote_state_before_writing(recovery):
     assert not worker._resume_complete_upload(row, idle(), poster, credential, [row], datetime.now(), vault=vault, manager=pages)
     poster.finish_existing_reel.assert_not_called()
     poster.publish_existing_scheduled_reel.assert_not_called()
+
+
+def test_read_only_refresh_recovers_binding_without_finish_upload_or_status_change(recovery, monkeypatch):
+    api, client, row, path, vault, pages = recovery
+    row.update(status='meta_scheduled', meta_scheduled_publish_time=datetime.now().timestamp() - 600)
+    row.pop('auto_finish_error')
+    path.write_text(json.dumps([row]))
+    seen = idle(video_status='ready', processing_status='complete', publishing_status='scheduled')
+    monkeypatch.setattr(api.reel_poster, 'inspect_reel', lambda *args: seen)
+    with mock.patch.object(api.reel_poster, 'finish_existing_reel') as finish, \
+         mock.patch.object(api.reel_poster, 'publish_reel') as upload, \
+         mock.patch.object(api.reel_poster, 'publish_existing_scheduled_reel') as publish:
+        response = client.post('/api/posts/post/refresh-meta', json={'token_id': 'alternative'})
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data['diagnosis']['state'] == 'schedule_overdue' and data['diagnosis']['can_sync_existing']
+    assert 'fixture' not in json.dumps(data)
+    saved = json.loads(path.read_text())[0]
+    assert saved['status'] == 'meta_scheduled' and saved['meta_upload_video_id'] == '9001'
+    assert saved['token_id'] == 'original' and saved['meta_recovery_token_id'] == 'alternative'
+    assert saved['first_comment_snapshot'] == row['first_comment_snapshot']
+    finish.assert_not_called()
+    upload.assert_not_called()
+    publish.assert_not_called()
+
+
+def test_refresh_rejects_wrong_token_and_changed_remote_id(recovery, monkeypatch):
+    api, client, row, path, vault, pages = recovery
+    with mock.patch.object(vault, 'verify_token') as verify:
+        assert client.post('/api/posts/post/refresh-meta', json={'token_id': 'unknown'}).status_code == 409
+    verify.assert_not_called()
+    def change_id(*args):
+        row['meta_upload_video_id'] = 'new'
+        path.write_text(json.dumps([row]))
+        return idle()
+    monkeypatch.setattr(api.reel_poster, 'inspect_reel', change_id)
+    assert client.post('/api/posts/post/refresh-meta', json={}).status_code == 409
+    assert 'meta_observation' not in json.loads(path.read_text())[0]

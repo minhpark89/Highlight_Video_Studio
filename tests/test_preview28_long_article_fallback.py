@@ -119,8 +119,11 @@ class LongArticleFallbackTests(unittest.TestCase):
                 p, "_BackendSession"
             ), mock.patch.object(p, "select_smart_video_frame", side_effect=lambda source, start, end, output: output) as select, mock.patch.object(
                 p, "_valid_image_file", return_value=True
-            ), mock.patch.object(p, "upload_long_video_to_public_stream") as video_upload:
+            ), mock.patch.object(p, "upload_long_video_to_public_stream") as video_upload, mock.patch.object(
+                p.requests, "get", return_value=mock.Mock(status_code=404)
+            ) as lookup:
                 url, hero = p.publish_clip_to_website_cms("portrait.mp4")
+            lookup.assert_called_once()
             self.assertEqual((url, hero), ("https://cms.test/article", "https://cdn.test/source_frame_portrait_0.jpg"))
             self.assertEqual(select.call_count, 3)
             self.assertTrue(all(call.args[0] == str(source) for call in select.call_args_list))

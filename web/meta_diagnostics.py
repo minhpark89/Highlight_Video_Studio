@@ -1,5 +1,6 @@
 """Describe observed Meta phases without guessing a lost historical Finish response."""
 import re
+import time
 from datetime import datetime
 
 
@@ -40,11 +41,28 @@ def diagnose(post, seen=None):
               "detail": "Bấm Kiểm tra Meta để đọc trạng thái hiện tại.", "can_finish_existing": False,
               "can_reschedule_existing": False,
               "video_id": upload_id or str(post.get("meta_video_id") or post.get("meta_post_id") or "")}
+    def overdue():
+        if post.get("meta_schedule_status") != "scheduled" and post.get("status") != "meta_scheduled":
+            return False
+        try:
+            target = float(post.get("meta_scheduled_publish_time") or 0)
+        except (TypeError, ValueError):
+            target = 0
+        return bool(target and target < time.time() - 90)
+
     if not seen:
+        if overdue():
+            result.update(state="schedule_overdue", message="Meta giữ lịch đã quá giờ; chưa xác nhận đã đăng",
+                          detail="Đồng bộ Page đúng Token và kiểm tra đúng Meta ID trước khi phục hồi video hiện có.")
         return result
     if seen.get("error_code") or seen.get("http_status") not in (None, 200):
-        result.update(state="meta_error", message="Không đọc được đối tượng Meta",
-                      detail=seen.get("error") or "Kiểm tra quyền của Token gốc và đối tượng trong Meta Business Suite.")
+        if overdue():
+            result.update(state="schedule_overdue", message="Meta giữ lịch đã quá giờ nhưng chưa đọc được trạng thái",
+                          detail=(seen.get("error") or "Meta không cho đọc đối tượng hiện tại") +
+                                 " Đồng bộ Page đúng Token rồi bấm Kiểm tra Meta; chưa tạo upload mới để tránh đăng trùng.")
+        else:
+            result.update(state="meta_error", message="Không đọc được đối tượng Meta",
+                          detail=seen.get("error") or "Kiểm tra quyền của Token gốc và đối tượng trong Meta Business Suite.")
         return result
     publishing = seen.get("publishing_status")
     processing = seen.get("processing_status")
@@ -63,7 +81,11 @@ def diagnose(post, seen=None):
     if publishing == "published":
         result.update(state="published", message="Meta báo đã đăng", detail="Worker sẽ xác minh permalink trước khi cập nhật lịch sử và First Comment.")
     elif publishing == "scheduled":
-        result.update(state="scheduled", message="Meta đang giữ lịch", detail="Meta đã nhận lịch đăng của video này.")
+        if overdue():
+            result.update(state="schedule_overdue", message="Meta giữ lịch đã quá giờ; chưa xác nhận đã đăng",
+                          detail="Meta vẫn báo giữ lịch sau giờ dự kiến. Đồng bộ Page đúng Token, kiểm tra lại rồi dùng nút đăng video đã giữ lịch; không upload lại.")
+        else:
+            result.update(state="scheduled", message="Meta đang giữ lịch", detail="Meta đã nhận lịch đăng của video này.")
     elif seen.get("video_status") == "upload_complete" and processing == "not_started" and publishing == "not_started":
         known_error = post.get("meta_publish_error")
         result.update(state="finish_pending", message="Upload đã đủ; Meta chưa xử lý hoặc đăng",

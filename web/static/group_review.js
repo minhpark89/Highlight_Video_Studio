@@ -18,8 +18,9 @@ async function openGroupReview(groupId = '') {
 }
 
 async function loadGroupReviewSummary() {
-  const response = await fetch('/api/groups/post-summary');
+  const [response, pipelineResponse] = await Promise.all([fetch('/api/groups/post-summary'), fetch('/api/output-pipeline/status')]);
   const data = await response.json();
+  const pipelineData = await pipelineResponse.json();
   if (!response.ok || !data.success) throw new Error(data.error || 'Không tải được nhóm');
   const picker = document.getElementById('group-review-group');
   const chosen = picker.value;
@@ -28,6 +29,12 @@ async function loadGroupReviewSummary() {
   picker.value = chosen;
   await loadGroupReviewPages();
   document.getElementById('group-review-stock').textContent = `${data.stock} video trong kho chờ phân bổ. Bật Post hàng ngày ở nhóm cần dùng; app gắn Page, Token và giờ trước khi đưa vào danh sách duyệt.`;
+  const pipeline = pipelineData.pipeline || {};
+  const systemStatus = document.getElementById('group-review-system-status');
+  if (systemStatus) {
+    systemStatus.style.color = pipeline.error || !pipeline.alive ? '#fbbf24' : '#94a3b8';
+    systemStatus.textContent = `${pipeline.alive ? 'Pipeline output đang chạy' : 'Pipeline output đang dừng'}${pipeline.paused ? ' · Render tạm chờ: ' + (pipeline.reason === 'backlog_limit' ? 'kho đã đủ ' + pipeline.backlog + '/' + pipeline.max_backlog + ' video' : pipeline.reason) : ''}${pipeline.error ? ' · Lỗi: ' + pipeline.error : ''}`;
+  }
   document.getElementById('group-review-summary').innerHTML = data.groups.map(g =>
     `<button class="btn btn-outline btn-sm" data-group-id="${escapeHtml(g.id)}" onclick="openGroupReview(this.dataset.groupId)" style="white-space:normal;text-align:left;">${escapeHtml(g.name)}<br><small>${g.daily ? '● Post hàng ngày' : 'Post hàng ngày: tắt'} · ${g.counts.preparing || 0} chuẩn bị · ${g.counts.draft || 0} Draft</small></button>`).join('');
   return data;

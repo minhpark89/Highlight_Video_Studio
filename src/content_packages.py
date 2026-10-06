@@ -336,6 +336,12 @@ def ensure_content_package(**kwargs):
                 item["clip_filename"] = requested_clip
         if not item.get("video_url") and kwargs.get("video_url"):
             item["video_url"] = kwargs["video_url"]
+        # A text-only cached package cannot satisfy a newly opted-in daily
+        # Website plan. Reuse its identity and request the missing CMS work.
+        if kwargs.get("create_website_article") and not item.get("create_website_article"):
+            item["create_website_article"] = True
+            if not item.get("article_url") and item.get("status") == "ready":
+                item.update(status="queued", website_status="pending_generation", error="", website_error="")
         # Legacy finished CMS packages already verified the original YouTube
         # embed, before the intake worker had a separate media receipt field.
         # Carry that recorded evidence forward when reusing warehouse content.
@@ -367,6 +373,20 @@ def list_packages():
 
 def get_package(package_id):
     return next((item for item in list_packages() if item.get("id") == package_id), None)
+
+
+def reject_cached_package(package_id, error):
+    """Quarantine one invalid cached result; retain its CMS URL for explicit retry."""
+    with _LOCK:
+        items = _read(QUEUE_FILE, [])
+        item = next((row for row in items if row.get("id") == package_id), None)
+        if not item or item.get("status") != "ready":
+            return False
+        item.update(status="failed", error=sanitize_error(error), validation_error=sanitize_error(error), updated_at=_now())
+        if "article_html" in str(error):
+            item.update(website_status="failed", website_error=sanitize_error(error))
+        _write(QUEUE_FILE, items)
+        return True
 
 
 def _clip_keys(value):

@@ -1,0 +1,14 @@
+{
+  "observed_at": "2026-10-06T10:19:20.973522+07:00",
+  "command": "python -m pytest -q --no-header",
+  "exit_code": 0,
+  "passed": 608,
+  "skipped": 4,
+  "subtests_passed": 29,
+  "duration_seconds": 16.73,
+  "targeted": {
+    "passed": 70,
+    "skipped": 1
+  },
+  "network": "offline; no live Meta publishing tested"
+}

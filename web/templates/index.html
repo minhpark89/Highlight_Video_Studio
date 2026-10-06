@@ -1032,7 +1032,7 @@
           #group-review-panel input[type=checkbox] { width:16px; height:16px; margin:0; accent-color:#a855f7; }
         </style>
         <div id="group-review-panel" class="panel" style="margin-top:16px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;"><div><h3 style="margin:0;font-size:18px;">Chuẩn bị & Draft theo nhóm Page</h3><div style="font-size:12px;color:#94a3b8;margin-top:4px;">Video trong kho được gắn Page, Token và giờ trước khi hiện ở đây. Duyệt theo nhóm, không phải cuộn qua toàn bộ lịch sử.</div></div><button class="btn btn-outline btn-sm" onclick="loadGroupReview();loadGroupReviewSummary();">Làm mới</button></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;"><div><h3 style="margin:0;font-size:18px;">Chuẩn bị & Draft theo nhóm Page</h3><div style="font-size:12px;color:#94a3b8;margin-top:4px;">Video trong kho được gắn Page, Token và giờ trước khi hiện ở đây. Duyệt theo nhóm, không phải cuộn qua toàn bộ lịch sử.</div><div id="group-review-system-status" role="status" style="font-size:11px;margin-top:6px;color:#94a3b8;"></div></div><button class="btn btn-outline btn-sm" onclick="loadGroupReview();loadGroupReviewSummary();">Làm mới</button></div>
           <div id="group-review-stock" style="margin-top:10px;padding:9px 12px;border:1px solid #334155;border-radius:8px;color:#fbbf24;font-size:12px;">Đang đọc kho video…</div>
           <div id="group-review-summary" style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;"></div>
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;"><label>Nhóm <select id="group-review-group" class="form-control" onchange="groupReviewPage=1;loadGroupReview()"><option value="">Tất cả nhóm đã chọn</option></select></label><label>Page <select id="group-review-page-filter" class="form-control" onchange="groupReviewPage=1;loadGroupReview()"><option value="">Tất cả Page</option></select></label><label>Trạng thái <select id="group-review-status" class="form-control" onchange="groupReviewPage=1;loadGroupReview()"><option value="all">Chuẩn bị + Draft</option><option value="draft">Chỉ Draft</option><option value="preparing">Đang chuẩn bị</option></select></label><label><input id="group-review-select-all" type="checkbox" onchange="selectAllGroupDrafts(this.checked)"> Chọn Draft sẵn sàng</label><button id="group-review-approve" class="btn btn-primary" disabled onclick="approveGroupDrafts()">Duyệt & lên lịch</button></div>
@@ -6617,7 +6617,9 @@
             </div>
           `;
         } else if (p.status === 'meta_scheduled') {
-          statusBadge = `<span style="background:rgba(56,189,248,0.15);color:#38bdf8;border:1px solid #0ea5e9;padding:3px 8px;border-radius:6px;font-size:11px;">Meta giữ lịch · chờ đăng</span><div style="color:#94a3b8;font-size:11px;margin-top:5px;">Video tự đăng dù tắt app</div>`;
+          statusBadge = p.meta_schedule_overdue
+            ? `<span style="background:rgba(239,68,68,0.18);color:#fca5a5;border:1px solid #ef4444;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;">Meta giữ lịch · quá giờ, chưa xác minh</span><div style="color:#fbbf24;font-size:11px;margin-top:5px;">Trễ ${Math.max(1, Math.round(Number(p.meta_schedule_late_seconds || 0) / 60))} phút · kiểm tra đúng Meta ID</div>`
+            : `<span style="background:rgba(56,189,248,0.15);color:#38bdf8;border:1px solid #0ea5e9;padding:3px 8px;border-radius:6px;font-size:11px;">Meta giữ lịch · chờ đăng</span><div style="color:#94a3b8;font-size:11px;margin-top:5px;">Video tự đăng dù tắt app</div>`;
           if (p.meta_cancel_requested) statusBadge += `<div style="color:#fbbf24;font-size:11px;white-space:normal;max-width:240px;margin-top:5px;">${p.meta_cancel_verified ? 'Đã hủy Meta · chờ xóa bản ghi app' : 'Đã yêu cầu hủy · app tạm dừng thử đăng và comment. Lịch Meta chưa xác nhận hủy.'}<br>${escapeHtml(p.meta_cancel_result?.error || '')}</div>`;
           statusBadge += `<div style="color:#94a3b8;font-size:10px;margin-top:4px;">Meta ID: ${escapeHtml(String(p.meta_upload_video_id || p.meta_video_id || 'chưa lưu'))}</div>`;
         } else if (p.status === 'meta_handoff') {
@@ -6742,7 +6744,9 @@
             </td>
             <td style="padding: 12px 14px; text-align: right;">
               ${p.status === 'processing' || (p.status === 'failed' && (p.meta_upload_video_id || p.meta_video_id)) ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="openMetaDiagnosis(this.dataset.postId)" style="margin-bottom:6px;white-space:nowrap;">Kiểm tra Meta</button>` : ''}
+              ${p.status === 'meta_scheduled' && p.meta_schedule_overdue ? `<button class="btn btn-primary btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="openMetaDiagnosis(this.dataset.postId)" style="margin-bottom:6px;white-space:nowrap;"><i class="bi bi-cloud-check"></i> Kiểm tra / đăng video đã giữ lịch</button>` : ''}
               ${p.status === 'failed' && p.retry_stage === 'invalid_media' ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="retryLocalMedia(this.dataset.postId)" style="margin-bottom:6px;white-space:nowrap;">Kiểm tra MP4 và thử lại</button>` : ''}
+              ${p.can_retry_publish ? `<button class="btn btn-primary btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="retryPublishPost(this.dataset.postId)" style="margin-bottom:6px;white-space:nowrap;"><i class="bi bi-arrow-repeat"></i> Đăng lại bằng App</button>` : ''}
               ${p.can_handoff_meta ? `<button class="btn btn-primary btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="handoffMetaPosts(false,this.dataset.postId)" style="white-space:nowrap;margin-bottom:6px;" ${metaHandoffBusy ? 'disabled' : ''}><i class="bi bi-cloud-arrow-up"></i> Đưa lên Meta chờ</button>` : ''}
               ${p.status === 'meta_scheduled' ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="cancelMetaPosts(this.dataset.postId)" style="white-space:nowrap;margin-bottom:6px;color:#fca5a5;border-color:rgba(239,68,68,.4);" ${metaHandoffBusy ? 'disabled' : ''} title="Đọc đúng trạng thái Meta rồi hủy lịch; chỉ xóa app sau khi Meta xác nhận"><i class="bi bi-cloud-slash"></i> ${p.meta_cancel_requested ? 'Kiểm tra hủy & xóa app' : 'Hủy Meta & xóa app'}</button>` : `
               <button class="btn btn-outline btn-sm" onclick="deletePostItem('${p.id}')" ${['meta_handoff','publishing','processing','meta_scheduled'].includes(p.status) ? 'disabled' : ''} style="color: #ef4444; border-color: rgba(239,68,68,0.3); padding: 4px 8px;" title="Xóa khỏi hàng đợi local; không hủy lịch Meta">
@@ -6812,6 +6816,19 @@
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || 'Chưa kiểm tra được MP4');
       showToast(data.message); loadPostsTable();
+    } catch (error) { showToast(error.message, 'error'); }
+  }
+
+  async function retryPublishPost(postId) {
+    if (!confirm('Đưa bài lỗi vào hàng chờ đăng lại bằng App?\nApp sẽ kiểm tra Page/Token trước khi gửi.')) return;
+    try {
+      const response = await fetch(`/api/posts/${encodeURIComponent(postId)}/retry-publish`, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:'app_queue'})
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Chưa đưa bài vào hàng chờ đăng lại');
+      showToast(data.message || 'Đã đưa bài vào hàng chờ đăng lại.');
+      loadDashboard(); loadPostsTable({quiet:true});
     } catch (error) { showToast(error.message, 'error'); }
   }
 
@@ -8041,6 +8058,7 @@
       <div class="app-modal-footer" style="gap:8px;flex-wrap:wrap;">
         <button class="btn btn-secondary" id="meta-diagnosis-refresh" onclick="openMetaDiagnosis(currentMetaDiagnosisPost)">Kiểm tra lại</button>
         <button class="btn btn-secondary" onclick="copyMetaDiagnostic()">Sao chép báo cáo lỗi</button>
+        <button class="btn btn-outline" id="meta-sync-existing" style="display:none;" onclick="syncExistingPost()">Đồng bộ quyền và kiểm tra lại</button>
         <button class="btn btn-primary" id="meta-recover-existing" style="display:none;" onclick="recoverExistingPost()">Đồng bộ quyền và thử đăng lại</button>
         <button class="btn btn-primary" id="meta-finish-existing" style="display:none;" onclick="finishExistingUpload()">Hoàn tất video đã upload</button>
         <button class="btn btn-primary" id="meta-replace-failed" style="display:none;" onclick="replaceFailedVideo()">Tạo lịch lại bằng video đã sửa</button>
@@ -8163,7 +8181,7 @@
   let currentMetaDiagnosisPost=null,currentMetaDiagnosis=null,metaFinishBusy=false;
   async function openMetaDiagnosis(postId){
     if(metaFinishBusy) return; currentMetaDiagnosisPost=postId;currentMetaDiagnosis=null;
-    document.getElementById('modal-meta-diagnosis').style.display='flex';const body=document.getElementById('meta-diagnosis-body');body.textContent='Đang đọc trạng thái hiện tại trên Meta...';document.getElementById('meta-finish-existing').style.display='none';document.getElementById('meta-recover-existing').style.display='none';document.getElementById('meta-replace-failed').style.display='none';
+    document.getElementById('modal-meta-diagnosis').style.display='flex';const body=document.getElementById('meta-diagnosis-body');body.textContent='Đang đọc trạng thái hiện tại trên Meta...';document.getElementById('meta-finish-existing').style.display='none';document.getElementById('meta-recover-existing').style.display='none';document.getElementById('meta-replace-failed').style.display='none';document.getElementById('meta-sync-existing').style.display='none';
     try{
       const response=await fetch('/api/posts/'+encodeURIComponent(postId)+'/meta-diagnosis'); const data=await response.json();
       if(postId!==currentMetaDiagnosisPost) return;
@@ -8182,12 +8200,14 @@
         document.getElementById('meta-replace-failed').style.display='';
       }
       if(diag.can_reschedule_existing){ const input=document.createElement('input'); input.type='datetime-local'; input.id='meta-replacement-time'; input.style='margin-top:16px;padding:8px;background:#0f172a;color:white;border:1px solid #475569;border-radius:6px;'; const label=document.createElement('label'); label.textContent='Giờ đăng mới (nên chọn ít nhất 30 phút từ bây giờ để có thời gian xử lý): '; label.appendChild(input); body.appendChild(label); }
-      if(diag.can_retry_existing){
+      if(diag.can_retry_existing || diag.can_sync_existing){
         const options=data.recovery_credentials || [];
         const container=document.createElement('div'); container.style='margin-top:12px;';
-        container.innerHTML=`<label for="meta-recovery-token">Token để phục hồi bài</label><select id="meta-recovery-token" class="form-control">${options.map(item=>`<option value="${escapeHtml(item.token_id)}">${escapeHtml(item.name)}${item.original ? ' · Token gốc' : ''}${item.owner_name ? ' · '+escapeHtml(item.owner_name) : ''} · ${escapeHtml(item.token_id)}</option>`).join('')}</select><small style="color:#94a3b8;">App đồng bộ quyền của Token đã chọn cho đúng Page rồi thử đăng video hiện có. Có thể chọn Token quản lý Page khác đã đồng bộ.</small>`;
+        container.innerHTML=`<label for="meta-recovery-token">Token để phục hồi bài</label><select id="meta-recovery-token" class="form-control">${options.map(item=>`<option value="${escapeHtml(item.token_id)}">${escapeHtml(item.name)}${item.original ? ' · Token gốc' : ''}${item.owner_name ? ' · '+escapeHtml(item.owner_name) : ''} · ${escapeHtml(item.token_id)}</option>`).join('')}</select><small style="color:#94a3b8;">Chọn Token quản lý đúng Page. Đồng bộ quyền và kiểm tra lại trước khi quyết định đăng hoặc thay video.</small>`;
         body.appendChild(container); document.getElementById('meta-recovery-token').value=data.recovery_token_id || '';
-        document.getElementById('meta-recover-existing').style.display='';
+        document.getElementById('meta-recover-existing').style.display=diag.can_retry_existing ? '' : 'none';
+        document.getElementById('meta-recover-existing').textContent=diag.state === 'schedule_overdue' ? 'Đồng bộ quyền và đăng video đã quá giờ' : 'Đồng bộ quyền và thử đăng lại';
+        document.getElementById('meta-sync-existing').style.display=diag.can_sync_existing ? '' : 'none';
       }
       const result=document.createElement('div'); result.id='meta-recovery-result'; result.setAttribute('role','status'); result.style='margin-top:12px;color:#cbd5e1;white-space:pre-line;'; body.appendChild(result);
       document.getElementById('meta-finish-existing').style.display=(diag.can_finish_existing || diag.can_reschedule_existing) ? '' : 'none';
@@ -8198,6 +8218,21 @@
     if(!currentMetaDiagnosis){showToast('Kiểm tra Meta trước khi sao chép.');return;}
     try{await navigator.clipboard.writeText(JSON.stringify(currentMetaDiagnosis,null,2));showToast('Đã sao chép báo cáo; không chứa giá trị token.');}
     catch(error){showToast('Chưa sao chép được báo cáo: '+error.message);}
+  }
+  async function syncExistingPost(){
+    if(metaFinishBusy || !currentMetaDiagnosis?.diagnosis?.can_sync_existing) return;
+    const tokenId=document.getElementById('meta-recovery-token')?.value;
+    if(!tokenId){showToast('Chọn Token quản lý đúng Page.');return;}
+    const postId=currentMetaDiagnosisPost;
+    metaFinishBusy=true;const button=document.getElementById('meta-sync-existing');button.disabled=true;
+    const feedback=document.getElementById('meta-recovery-result');feedback.textContent='Đang đồng bộ quyền và kiểm tra Meta ID hiện có...';
+    try{
+      const response=await fetch('/api/posts/'+encodeURIComponent(postId)+'/refresh-meta',{
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token_id:tokenId})});
+      const data=await response.json();if(!response.ok || !data.success) throw new Error(data.error || 'Chưa đồng bộ được');
+      metaFinishBusy=false;await openMetaDiagnosis(postId);loadPostsTable({quiet:true});
+    }catch(error){feedback.style.color='#fbbf24';feedback.textContent=error.message;}
+    finally{metaFinishBusy=false;button.disabled=false;}
   }
   async function recoverExistingPost(){
     if(metaFinishBusy || !currentMetaDiagnosis?.diagnosis?.can_retry_existing) return;

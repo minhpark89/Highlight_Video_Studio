@@ -105,7 +105,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 
 @app.after_request
 def add_header(response):
@@ -3140,11 +3140,15 @@ def _inspect_post_meta(post):
 
 @app.route("/api/posts/<post_id>/meta-diagnosis", methods=["GET"])
 def api_post_meta_diagnosis(post_id):
-    from web.meta_diagnostics import diagnose
     post = next((item for item in load_posts() if item.get("id") == post_id), None)
     if not post:
         return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
     seen, mapping = _inspect_post_meta(post)
+    return jsonify(_post_meta_diagnostic_payload(post, seen, mapping))
+
+
+def _post_meta_diagnostic_payload(post, seen, mapping):
+    from web.meta_diagnostics import diagnose
     from web.meta_recovery import can_retry_existing, can_refresh_existing, recovery_credentials, publishing_token_id
     diagnostic = diagnose(post, seen)
     from web.video_recovery import can_replace_failed_video
@@ -3154,7 +3158,11 @@ def api_post_meta_diagnosis(post_id):
     selected_entry = token_vault.get_token_by_id(publishing_token_id(post)) or {}
     tasks = [str(value).upper() for value in (mapping or {}).get("tasks") or []]
     from src.publisher.meta_preflight import PUBLISH_TASKS
-    return jsonify({"success": True, "post_id": post_id, "title": post.get("title"),
+    choices = recovery_credentials(post, token_vault, page_manager)
+    diagnostic["can_sync_existing"] = bool(choices and (post.get("meta_upload_video_id") or post.get("meta_video_id"))
+        and post.get("status") in ("processing", "meta_scheduled", "failed") and not post.get("meta_cancel_requested"))
+    return {"success": True, "post_id": post["id"], "title": post.get("title"), "post_status": post.get("status"),
+                    "scheduled_time": post.get("scheduled_time"),
                     "page_name": post.get("page_name"), "page_id": post.get("page_id"),
                     "observation": seen, "diagnosis": diagnostic,
                     "last_publish_attempt": post.get("meta_last_publish_attempt"),
@@ -3163,9 +3171,54 @@ def api_post_meta_diagnosis(post_id):
                     "credential_check": {"token_id": publishing_token_id(post), "status": selected_entry.get("status"),
                         "owner_name": selected_entry.get("owner_name") or selected_entry.get("name") or "",
                         "mapping_verified": bool(mapping), "can_create_content": bool(set(tasks).intersection(PUBLISH_TASKS))},
-                    "recovery_credentials": recovery_credentials(post, token_vault, page_manager),
+                    "recovery_credentials": choices,
                     "recovery_token_id": publishing_token_id(post),
-                    "media_file": post.get("media_file") or post.get("clip_filename") or ""})
+                    "media_file": post.get("media_file") or post.get("clip_filename") or ""}
+
+
+@app.route("/api/posts/<post_id>/refresh-meta", methods=["POST"])
+def api_refresh_post_meta(post_id):
+    """Sync one Page binding and read its video independently of the publish cycle."""
+    from web.meta_recovery import recovery_credentials, publishing_token_id, refresh_page_credential
+    from web.posts_store import _LOCK as posts_lock
+    from web.meta_diagnostics import safe_error
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"success": False, "error": "Dữ liệu Token không hợp lệ."}), 400
+    post = next((p for p in load_posts() if p.get("id") == post_id), None)
+    if not post:
+        return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
+    video_id = str(post.get("meta_upload_video_id") or post.get("meta_video_id") or "")
+    if not video_id or post.get("meta_cancel_requested"):
+        return jsonify({"success": False, "error": "Bài chưa có Meta ID hoặc đang được hủy."}), 409
+    selected = str(body.get("token_id") or publishing_token_id(post))
+    if selected not in {p["token_id"] for p in recovery_credentials(post, token_vault, page_manager)}:
+        return jsonify({"success": False, "error": "Chọn Token gốc hoặc binding đã xác minh cho đúng Page."}), 409
+    try:
+        credential, summary = refresh_page_credential(post, token_vault, page_manager, selected)
+        if not credential:
+            return jsonify({"success": False, "error": summary["error"]}), 409
+        seen = reel_poster.inspect_reel(video_id, credential["token"], selected)
+        # Merge diagnostic metadata only. No Finish, new upload, status
+        # promotion or comment is sent by this endpoint.
+        with posts_lock:
+            posts = load_posts()
+            current = next((p for p in posts if p.get("id") == post_id), None)
+            if not current or str(current.get("meta_upload_video_id") or current.get("meta_video_id") or "") != video_id:
+                return jsonify({"success": False, "error": "Meta ID đã thay đổi; kiểm tra lại bài."}), 409
+            if current.get("meta_cancel_requested"):
+                return jsonify({"success": False, "error": "Bài đang được hủy; giữ kết quả hủy để đối soát."}), 409
+            current.update(meta_observation=seen, meta_credential_refresh={**summary, "checked_at": datetime.now().isoformat()})
+            if selected != str(current.get("token_id") or ""):
+                current["meta_recovery_token_id"] = selected
+            else:
+                current.pop("meta_recovery_token_id", None)
+            save_posts(posts)
+        result = _post_meta_diagnostic_payload(current, seen, credential)
+        result["message"] = "Đã đồng bộ quyền Page và đọc lại đúng Meta ID."
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"success": False, "error": safe_error(exc)}), 500
 
 
 @app.route("/api/posts/<post_id>/replace-failed-video", methods=["POST"])
@@ -3387,12 +3440,15 @@ def _enrich_post_rows(posts, *, audit_posts=None):
     from web.meta_handoff import handoff_eligibility
     from web.dashboard import post_bucket
     from web.meta_diagnostics import diagnose
+    from web.post_retry import can_retry_without_upload
     from web.token_audit import token_audit
     catalog = token_vault.list_tokens(mask=True)
     audited = audit_posts if audit_posts is not None else posts
     token_audit(audited, page_manager.list_pages(), catalog, load_token_groups())
     token_catalog = {str(item.get("id")): item for item in catalog if item.get("id")}
     for post in posts:
+        post["can_retry_publish"] = (can_retry_without_upload(post) and post.get("retry_stage") in
+                                     ("meta_preflight", "facebook_publish", "meta_schedule_rejected"))
         recovery_id = str(post.get("meta_recovery_token_id") or "")
         if recovery_id:
             recovery_token = token_catalog.get(recovery_id) or {}
@@ -3406,8 +3462,15 @@ def _enrich_post_rows(posts, *, audit_posts=None):
             post["effective_token_name"] = post.get("token_display_name") or post.get("token_name") or ""
             post["effective_token_is_recovery"] = False
         post["post_bucket"] = post_bucket(post)
-        if post.get("status") == "processing":
+        if post.get("status") in ("processing", "meta_scheduled"):
             post["meta_diagnosis"] = diagnose(post)
+            if post.get("status") == "meta_scheduled":
+                try:
+                    target = float(post.get("meta_scheduled_publish_time") or 0)
+                except (TypeError, ValueError):
+                    target = 0
+                post["meta_schedule_overdue"] = bool(target and target < time.time() - 90)
+                post["meta_schedule_late_seconds"] = max(0, int(time.time() - target)) if target else 0
         post["can_handoff_meta"], post["meta_handoff_blocked_reason"] = handoff_eligibility(post, OUTPUT_DIR)
         media_file = post.get("media_file") or post.get("clip_filename")
         if media_file:
@@ -3835,6 +3898,35 @@ def api_retry_post_website(post_id):
     if post.get("website_status") != "ready":
         return jsonify({"success": False, "error": post.get("website_error"), "post": post}), 502
     return jsonify({"success": True, "post": post})
+
+
+@app.route("/api/posts/<post_id>/retry-publish", methods=["POST"])
+def api_retry_publish_post(post_id):
+    """Requeue a definitive pre-upload/Meta-init failure without reusing an ID."""
+    from web.scheduled_publisher import _cycle_lock
+    from web.post_retry import prepare_retry
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"success": False, "error": "Dữ liệu thử lại không hợp lệ."}), 400
+    mode = str(body.get("mode") or "app_queue")
+    if not _cycle_lock.acquire(blocking=False):
+        return jsonify({"success": False, "busy": True, "error": "App đang xử lý bài khác; thử lại sau chu kỳ này."}), 409
+    try:
+        posts = load_posts()
+        post = next((item for item in posts if item.get("id") == post_id), None)
+        if not post:
+            return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
+        try:
+            prepare_retry(post, posts, OUTPUT_DIR, mode=mode,
+                          schedule_time=body.get("schedule_time"), now=datetime.now())
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            return jsonify({"success": False, "error": sanitize_error(exc)}), 409
+        save_posts(posts)
+        return jsonify({"success": True, "queued": True, "post": {k: post.get(k) for k in
+                        ("id", "status", "publish_mode", "scheduled_time", "retry_stage")},
+                        "message": "Đã đưa bài vào hàng chờ; worker sẽ kiểm tra quyền và đăng theo chế độ đã chọn."}), 202
+    finally:
+        _cycle_lock.release()
 
 
 @app.route("/api/distribute/batch", methods=["POST"])

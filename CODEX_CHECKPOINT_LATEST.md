@@ -1,4 +1,14 @@
-# Checkpoint mới nhất — Highlight Desktop Test v1.2.1
+# Checkpoint mới nhất — Highlight Desktop Test v1.2.2
+
+Ngày: 2026-10-06, Asia/Saigon. Xem [CHECKPOINT_V1_2_2_META_RECOVERY_20261006.md](CHECKPOINT_V1_2_2_META_RECOVERY_20261006.md).
+
+Bản sửa thêm retry Init chắc chắn bị từ chối qua App, Sync Page/Token đọc lại Meta ID, cảnh báo lịch Meta quá giờ, chuyển cache text-only sang Website cho Daily và cách ly package non-English để pipeline tiếp tục. Full suite **608 passed, 4 skipped, 29 subtests passed**; browser offline **7 checks, không có JavaScript error**. Evidence: `checkpoints/evidence/v1.2.2/`.
+
+Trạng thái hiện tại: đang chuẩn bị bộ cài/tag local trên `release/v1.2.2`. Kết nối GitHub qua shell bị chặn (`WinError 10013`); chưa push hoặc tạo release v1.2.2. Không coi link `releases/tag/v1.2.2` là đã có bản tải. Sau build, `installer_verify.json` ghi đúng source commit/hash; checkpoint này sẽ được cập nhật kết quả cuối. Giữ nguyên release/tag v1.2.1. Chưa cài vào runtime đang dùng hoặc đăng/xóa Meta/CMS thật.
+
+Session sau đọc checkpoint v1.2.2 để lấy lệnh build/publish và cách xử lý từng loại lỗi; kiểm tra identity/PID/port, backup local trước nâng cấp, giữ Meta IDs/comment receipts/ledger. Bài `post_1791183298_90ab26` đã published; không đăng lại. Lỗi `368/4854002` vẫn cần xác minh Facebook.
+
+## Bản phát hành trước — v1.2.1
 
 Ngày: 2026-10-06 (Asia/Saigon). Nhánh phát hành: `release/v1.2.1`. Tag source: `v1.2.1` tại `edfdd753800c0171e5758b25b9da8a3b96766df3`.
 
