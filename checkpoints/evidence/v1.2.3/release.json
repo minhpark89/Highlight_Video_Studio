@@ -1,0 +1,42 @@
+{
+  "id": 404324624,
+  "tag_name": "v1.2.3",
+  "html_url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.2.3",
+  "upload_url": "https://uploads.github.com/repos/minhpark89/Highlight_Video_Studio/releases/404324624/assets{?name,label}",
+  "draft": false,
+  "prerelease": true,
+  "source_commit": "8a5f77f0f5be55a8839e13b1542763b7d936438d",
+  "branch_commit": "7a8943c6e94be401da14f92324a1fb55fa4ec1c5",
+  "installer_sha256": "369bb5e8560faaaef74456a0e5ed7b9e05a8e041d20d1730f5da4ea7bdae3c02",
+  "installer_size": 705073152,
+  "assets": [
+    {
+      "name": "CODEX_CHECKPOINT_v1.2.3.md",
+      "size": 17199,
+      "digest": "sha256:9d845ad25a84a01fc41dc721ff7df13ee39a4efebab61c9e7c2b3f3f97147c0f",
+      "state": "uploaded",
+      "browser_download_url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.3/CODEX_CHECKPOINT_v1.2.3.md"
+    },
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.2.3.exe",
+      "size": 705073152,
+      "digest": "sha256:369bb5e8560faaaef74456a0e5ed7b9e05a8e041d20d1730f5da4ea7bdae3c02",
+      "state": "uploaded",
+      "browser_download_url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.3/Highlight_Desktop_Test_Setup_v1.2.3.exe"
+    },
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.2.3.sha256",
+      "size": 107,
+      "digest": "sha256:25b4992303e1bd411e8aa82693bff547ec28d1a8fcc0a03a70d953c98729ff4e",
+      "state": "uploaded",
+      "browser_download_url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.2.3/Highlight_Desktop_Test_Setup_v1.2.3.sha256"
+    }
+  ],
+  "public_downloads_verified": true,
+  "source_tag_verified": true,
+  "branch_verified": true,
+  "verified_at_utc": "2026-10-06T05:09:28.556307+00:00",
+  "full_anonymous_downloads_verified": true,
+  "public_download_evidence": "public_download_verify.json",
+  "verification_phase": "Publication verified before committing the final deployment checkpoint; the branch may advance with checkpoint-only changes."
+}

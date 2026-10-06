@@ -26,9 +26,9 @@ Bộ cài đã kiểm chứng `release/Highlight_Desktop_Test_Setup_v1.2.3.exe`,
 
 Replay snapshot 11:00 riêng đã xếp **294** bài NEW còn preparing/Draft về 06/10 **11:31–14:16**, 0 overflow/skip; 198 bài trước đó ở 07/10. Giữ status, caption, First Comment, Website URL, Page–Token, source claim và mọi bài không chọn/remote. Preview cả nhóm 0.1472 giây; lấy kho 20 bài có lịch đúng nhóm/ngày. Đây là kết quả offline, không thay lịch thật hoặc gửi Meta/CMS. Runtime cài đặt vẫn v1.2.1.
 
-**Tiến độ phát hành ngày 2026-10-06:** phiên hiện tại đã gọi GitHub API thành công, xác thực tài khoản `minhpark89`, quyền push=true; inspect xác nhận chưa có release v1.2.3. Bộ cài local vừa được tính lại SHA256 và khớp proof. Đang tiếp tục push/draft/upload/publish/verify; chỉ xác nhận tải công khai sau khi verify hoàn tất. Các lỗi mạng trong phần lịch sử bên dưới thuộc phiên trước.
+**Đã phát hành GitHub v1.2.3:** Release ID `404324624`, `draft=false`, `prerelease=true`. Release: https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.2.3. Kiểm chứng lúc `2026-10-06T05:09:28.556307+00:00`: tag remote khớp source đóng gói, nhánh source đã push, đúng ba asset và digest/size/state; đã tải toàn bộ cả ba asset không đăng nhập và hash khớp local (installer 705073152 bytes). Đọc `deployment_status.json`, `release.json` và `public_download_verify.json`. Chỉ cập nhật checkpoint/evidence sau phát hành; installer/tag/asset giữ nguyên. Các lỗi mạng phía dưới là lịch sử phiên trước. Phiên deploy không nâng cấp runtime, dời lịch thật hoặc gửi Meta/CMS.
 
-Backup source offline: `E:\OPENCLAW\BOB\support\v1.2.3\Highlight_Source_v1.2.3.bundle`. Bundle chứa `release/v1.2.3` và `v1.2.3`; có thể clone vào thư mục mới trong workspace để sửa tiếp. Giữ `source-worktree/release/` vì binary installer và asset ignored không nằm trong bundle. Không cài đè hoặc sửa queue live trong session này.
+Backup source offline: `E:\OPENCLAW\BOB\support\v1.2.3\Highlight_Source_v1.2.3_published.bundle`. Bundle chứa `release/v1.2.3` và `v1.2.3`; có thể clone vào thư mục mới trong workspace để sửa tiếp. Giữ `source-worktree/release/` vì binary installer và asset ignored không nằm trong bundle. Không cài đè hoặc sửa queue live trong session này.
 
 ## Session sau
 

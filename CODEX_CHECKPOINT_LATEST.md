@@ -8,9 +8,9 @@ Kiểm thử **632 passed, 4 skipped, 29 subtests passed**. Browser offline **9 
 
 Bộ cài đã kiểm chứng: `release/Highlight_Desktop_Test_Setup_v1.2.3.exe`, **705073152 bytes**, SHA256 `369bb5e8560faaaef74456a0e5ed7b9e05a8e041d20d1730f5da4ea7bdae3c02`. Tag source `v1.2.3` tại `8a5f77f0f5be55a8839e13b1542763b7d936438d`, identity sạch; payload khớp 21 file, không chứa state/credential người dùng. Xem `checkpoints/evidence/v1.2.3/installer_verify.json`.
 
-**Đang phát hành GitHub:** phiên hiện tại kết nối thành công, xác thực `minhpark89`, quyền push=true; chưa có release v1.2.3 tại lần inspect đầu. SHA256 bộ cài vừa được kiểm tra lại, khớp proof. Tiếp tục push/draft/upload/publish/verify trước khi xác nhận link tải.
+**Đã phát hành GitHub v1.2.3:** Release ID `404324624`, `draft=false`, `prerelease=true`. [Trang tải](https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.2.3); ba asset installer/SHA256/checkpoint đã được tải toàn bộ không đăng nhập và đối chiếu hash với local lúc `2026-10-06T05:09:28.556307+00:00`. Tag remote/source đã xác minh. Evidence: `checkpoints/evidence/v1.2.3/release.json`, `deployment_status.json`, `public_download_verify.json`. Phiên deploy không nâng cấp runtime hoặc thay lịch thật.
 
-Checkpoint chi tiết có bảng triệu chứng → file source/test, cách lấy source từ nhánh `release/v1.2.3`, giữ claim/Meta IDs và tái hiện lỗi trên bản sao. Source app trong tag/installer là commit `8a5f77f0f5be55a8839e13b1542763b7d936438d`; nhánh phát hành có checkpoint/tooling mới hơn. Source backup offline ở `E:\OPENCLAW\BOB\support\v1.2.3\Highlight_Source_v1.2.3.bundle`; binary installer và asset ở `source-worktree/release/`.
+Checkpoint chi tiết có bảng triệu chứng → file source/test, cách lấy source từ nhánh `release/v1.2.3`, giữ claim/Meta IDs và tái hiện lỗi trên bản sao. Source app trong tag/installer là commit `8a5f77f0f5be55a8839e13b1542763b7d936438d`; nhánh phát hành có checkpoint/tooling mới hơn. Source backup offline ở `E:\OPENCLAW\BOB\support\v1.2.3\Highlight_Source_v1.2.3_published.bundle`; binary installer và asset ở `source-worktree/release/`.
 
 Lỗi WinError 10013 và chẩn đoán network trong checkpoint là lịch sử phiên trước. Trạng thái mới dùng `checkpoints/evidence/v1.2.3/deployment_status.json`; helper `checkpoints/tools/v1.2.3/deploy_github.ps1` hỗ trợ resume, kiểm tra digest và không thay asset đã public.
 
