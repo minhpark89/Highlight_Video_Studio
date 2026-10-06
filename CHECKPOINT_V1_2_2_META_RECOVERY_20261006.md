@@ -17,7 +17,9 @@ Giữ nguyên tag/release `v1.2.1` tại `edfdd753800c0171e5758b25b9da8a3b96766d
 
 ## Trạng thái phát hành
 
-GitHub API kiểm tra quyền đã bị môi trường chặn kết nối (`WinError 10013`). Bộ cài, SHA256 và checkpoint asset đã chuẩn bị local; chưa có xác minh push/public release v1.2.2. Đọc `CODEX_CHECKPOINT_LATEST.md` và `deployment_status.json` để biết trạng thái cuối cùng. Không dùng URL v1.2.2 như link tải đã hoạt động cho đến khi có bằng chứng công khai.
+**Chưa deploy GitHub:** API bị môi trường chặn (`WinError 10013`); Git push thất bại ở kết nối và `git ls-remote` báo `Failed to connect to github.com port 443`. Chưa tạo draft/public release v1.2.2. Bộ cài, SHA256 và checkpoint asset đã chuẩn bị local. Xem `checkpoints/evidence/v1.2.2/deployment_status.json`. Không dùng URL v1.2.2 như link tải đã hoạt động cho đến khi có bằng chứng công khai.
+
+Backup source offline: `E:\OPENCLAW\BOB\support\v1.2.2\Highlight_Source_v1.2.2.bundle`, chứa nhánh/tag mới và checkpoint. Có thể `git clone -b release/v1.2.2` từ bundle vào thư mục mới trong workspace rồi đặt origin về URL repo ở đầu tài liệu. Giữ repo hiện tại để tiếp tục deploy vì bundle clone không có installer/asset ignored. Source tag cố định ở commit ứng dụng; nhánh có thêm commit bằng chứng và sửa deployment helper để giữ cấu hình Git kế thừa, gồm safe.directory.
 
 ## Chẩn đoán runtime đã có trước phát hành
 

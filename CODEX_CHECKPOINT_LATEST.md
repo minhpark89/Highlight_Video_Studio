@@ -6,7 +6,9 @@ Bản sửa thêm retry Init chắc chắn bị từ chối qua App, Sync Page/T
 
 Tag local `v1.2.2` tại source commit `e5fa37306e2c9214f0012ff36784bd8c629f44e7`; nhánh `release/v1.2.2`. Bộ cài: `release/Highlight_Desktop_Test_Setup_v1.2.2.exe`, 705064448 bytes; SHA256 `bb86ce8047a17acd0109792e65fbe8895421cc27eec1df116f5e2475a67a323d`. Payload khớp 20 file source, identity sạch, không chứa state/credential người dùng. Xem `installer_verify.json`.
 
-GitHub API qua shell bị chặn (`WinError 10013`); đang kiểm tra khả năng push bằng Git. Chưa tạo/public release v1.2.2. Trạng thái cuối được ghi trong `deployment_status.json`. Không coi link `releases/tag/v1.2.2` là đã có bản tải. Giữ nguyên release/tag v1.2.1. Chưa cài vào runtime đang dùng hoặc đăng/xóa Meta/CMS thật.
+**Chưa deploy lên GitHub.** GitHub API bị chặn (`WinError 10013`); Git push cũng thất bại và kiểm tra remote báo `Failed to connect to github.com port 443`. Chưa tạo/public release v1.2.2. `checkpoints/evidence/v1.2.2/deployment_status.json` ghi trạng thái này. Installer, SHA256 và checkpoint asset đã sẵn sàng local. Giữ nguyên release/tag v1.2.1. Chưa cài vào runtime đang dùng hoặc đăng/xóa Meta/CMS thật.
+
+Source backup offline: `E:\OPENCLAW\BOB\support\v1.2.2\Highlight_Source_v1.2.2.bundle`, chứa nhánh `release/v1.2.2` và tag `v1.2.2`. Session sau dùng repo hiện tại hoặc clone bundle vào thư mục mới; khi GitHub hoạt động, chạy các bước inspect/push/draft/upload/publish/verify ở checkpoint chi tiết. Deployment helper mới giữ nguyên cấu hình Git kế thừa của sandbox rồi thêm auth header trong bộ nhớ; không đưa credential vào source/log.
 
 Session sau đọc checkpoint v1.2.2 để lấy lệnh build/publish và cách xử lý từng loại lỗi; kiểm tra identity/PID/port, backup local trước nâng cấp, giữ Meta IDs/comment receipts/ledger. Bài `post_1791183298_90ab26` đã published; không đăng lại. Lỗi `368/4854002` vẫn cần xác minh Facebook.
 
