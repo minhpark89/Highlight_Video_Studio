@@ -82,7 +82,7 @@ def process_next_handoff(posts, save, poster, output_dir, vault, pages, *, now=N
     candidate = {**post, "status": "scheduled", "publish_mode": "app_queue"}
     ok, reason = handoff_eligibility(candidate, output_dir, now_ts=current.timestamp())
     page = next((page for page in pages.list_pages() if str(page.get("page_id")) == str(post.get("page_id"))), None)
-    verdict = preflight_pages([{**page, "token_id": post["token_id"]}], vault, pages) if ok and page else {"ok": False}
+    verdict = preflight_pages([{**page, "token_id": post["token_id"]}], vault, pages, refresh=True) if ok and page else {"ok": False}
     if not ok or not verdict.get("ok"):
         post.update({"status": "scheduled", "publish_mode": "app_queue",
                      "meta_schedule_status": "handoff_blocked", "meta_handoff_error": reason or "Credential gốc chưa được xác minh; hãy Sync Page."})
@@ -115,6 +115,8 @@ def process_next_handoff(posts, save, poster, output_dir, vault, pages, *, now=N
         first_comment=comment, schedule_time=publish_at, token_id=post["token_id"],
         post_id=post["id"], on_upload_initialized=initialized,
     )
+    if result.get("meta_attempt"):
+        post["meta_publish_attempt"] = result["meta_attempt"]
     from web.scheduled_publisher import sanitize_error
     video_id = str(result.get("meta_video_id") or result.get("upload_video_id") or post.get("meta_video_id") or "")
     if result.get("success") and result.get("status") == "SCHEDULED" and video_id:

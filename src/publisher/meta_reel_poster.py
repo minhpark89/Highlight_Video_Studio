@@ -5,12 +5,13 @@ import re
 from src.english_text import assert_english
 from pathlib import Path
 from datetime import datetime
+from urllib.parse import urlparse
 from src.media_validation import InvalidMedia, probe_video
-from src.publisher.meta_api import GRAPH_API_VERSION
+from src.publisher.meta_api import GRAPH_API_VERSION, bearer_headers, safe_meta_text
 
 class MetaReelPoster:
     @staticmethod
-    def _meta_error(data):
+    def _meta_error(data, token=""):
         error = data.get("error") if isinstance(data, dict) else None
         if not isinstance(error, dict):
             return "Meta did not return an error object"
@@ -20,7 +21,13 @@ class MetaReelPoster:
                            ("fbtrace_id", "trace")):
             if error.get(key):
                 details.append(f"{label}: {error[key]}")
-        return " | ".join(details)
+        return safe_meta_text(" | ".join(details), token)
+
+    def _note_rejection(self, token_id, data, page_token):
+        error = data.get("error") if isinstance(data, dict) else None
+        if (self.token_vault and token_id and isinstance(error, dict) and error.get("code") == 200
+                and "api access blocked" in str(error.get("message") or "").lower()):
+            self.token_vault.pause_page_access(token_id, self._meta_error(data, page_token))
 
     def _publish_receipt(self, operation, target_id, video_id, token_id, page_token, response=None, data=None):
         """Keep the publication response separate from later successful read calls."""
@@ -29,7 +36,7 @@ class MetaReelPoster:
         error = error if isinstance(error, dict) else {}
         clean = lambda value: safe_error(value).replace(page_token, "[redacted]") if page_token else safe_error(value)
         return {"checked_at": datetime.now().astimezone().isoformat(), "operation": operation,
-                "method": "POST", "endpoint": f"/{self.api_version}/{target_id}" + ("/video_reels" if operation == "finish_existing" else ""),
+                "method": "POST", "endpoint": f"/{self.api_version}/{target_id}" + ("/video_reels" if operation in ("initialize", "finish", "finish_existing") else ""),
                 "video_id": str(video_id), "token_id": str(token_id or ""),
                 "http_status": response.status_code if response is not None else None,
                 "error_code": error.get("code"), "error_subcode": error.get("error_subcode"),
@@ -53,7 +60,7 @@ class MetaReelPoster:
     def _read_meta_object(self, object_id, page_token, token_id=None, timeout=12):
         """The phases belong to the upload Video, not the Finish post_id."""
         response = requests.get(f"{self.base_url}/{object_id}",
-                                params={"fields": "id,status,permalink_url", "access_token": page_token},
+                                headers=bearer_headers(page_token), params={"fields": "id,status,permalink_url"},
                                 timeout=timeout)
         self._track_headers(token_id or page_token, response)
         return response, response.json()
@@ -116,8 +123,8 @@ class MetaReelPoster:
             return {"success": state == "deleted", "safe_to_remove_local": state == "deleted",
                     "state": state, "error": clean(error), **extra}
         def read_video():
-            response = requests.get(f"{self.base_url}/{video_id}", params={
-                "fields": "id,status,from", "access_token": page_token}, timeout=12)
+            response = requests.get(f"{self.base_url}/{video_id}", headers=bearer_headers(page_token),
+                                    params={"fields": "id,status,from"}, timeout=12)
             self._track_headers(token_id or page_token, response)
             data = response.json()
             seen = observation(data, response.status_code)
@@ -133,8 +140,8 @@ class MetaReelPoster:
         already_accepted = (prior.get("state") == "accepted" and prior.get("video_id") == video_id
                             and prior.get("page_id") == page_id and prior.get("token_id") == str(token_id or ""))
         try:
-            identity = requests.get(f"{self.base_url}/me", params={
-                "fields": "id", "access_token": page_token}, timeout=12)
+            identity = requests.get(f"{self.base_url}/me", headers=bearer_headers(page_token),
+                                    params={"fields": "id"}, timeout=12)
             self._track_headers(token_id or page_token, identity)
             identity_data = identity.json()
             if not identity.ok or not isinstance(identity_data, dict) or str(identity_data.get("id") or "") != page_id:
@@ -156,7 +163,7 @@ class MetaReelPoster:
                        "method": "DELETE", "endpoint": f"/{self.api_version}/{video_id}",
                        "video_id": video_id, "page_id": page_id, "token_id": str(token_id or ""), "state": "unknown"}
             response = requests.delete(f"{self.base_url}/{video_id}",
-                                       data={"access_token": page_token}, timeout=20)
+                                       headers=bearer_headers(page_token), timeout=20)
             self._track_headers(token_id or page_token, response)
             attempt["http_status"] = response.status_code
             try:
@@ -196,14 +203,14 @@ class MetaReelPoster:
             return {"accepted": False, "state": "rejected", "error": str(exc)}
         if not re.fullmatch(r"[0-9]+", str(video_id or "")):
             return {"accepted": False, "state": "rejected", "error": "Meta upload ID không hợp lệ."}
-        payload = {"upload_phase": "finish", "access_token": page_token, "video_id": str(video_id),
+        payload = {"upload_phase": "finish", "video_id": str(video_id),
                    "description": description, "video_state": "PUBLISHED"}
         if schedule_time is not None:
             from multi_pc.meta_scheduling import parse_meta_schedule_time
             payload.update(video_state="SCHEDULED", scheduled_publish_time=parse_meta_schedule_time(schedule_time))
         receipt = self._publish_receipt("finish_existing", page_id, video_id, token_id, page_token)
         try:
-            response = requests.post(f"{self.base_url}/{page_id}/video_reels", data=payload, timeout=35)
+            response = requests.post(f"{self.base_url}/{page_id}/video_reels", headers=bearer_headers(page_token), data=payload, timeout=35)
             self._track_headers(token_id or page_token, response)
             receipt = self._publish_receipt("finish_existing", page_id, video_id, token_id, page_token, response)
             data = response.json()
@@ -211,6 +218,7 @@ class MetaReelPoster:
             if response.status_code >= 500 or not isinstance(data, dict):
                 return {"accepted": False, "state": "unknown", "attempt": receipt, "error": "Chưa xác nhận phản hồi Finish; tiếp tục đối soát đúng Meta ID."}
             if not response.ok or data.get("error") or data.get("success") is False:
+                self._note_rejection(token_id, data, page_token)
                 return {"accepted": False, "state": "rejected", "attempt": receipt, "error": safe_error(self._meta_error(data)).replace(page_token, "[redacted]")}
             if data.get("success") is not True and not any(data.get(key) for key in ("video_id", "reel_id", "post_id")):
                 return {"accepted": False, "state": "unknown", "attempt": receipt, "error": "Meta chưa xác nhận Finish; tiếp tục đối soát đúng Meta ID."}
@@ -265,7 +273,7 @@ class MetaReelPoster:
         receipt = self._publish_receipt("publish_existing", video_id, video_id, token_id, page_token)
         try:
             response = requests.post(f"{self.base_url}/{video_id}",
-                                     data={"access_token": page_token, "published": "true"}, timeout=35)
+                                     headers=bearer_headers(page_token), data={"published": "true"}, timeout=35)
             self._track_headers(token_id or page_token, response)
             receipt = self._publish_receipt("publish_existing", video_id, video_id, token_id, page_token, response)
             data = response.json()
@@ -273,6 +281,7 @@ class MetaReelPoster:
             if response.status_code >= 500 or not isinstance(data, dict):
                 return {"accepted": False, "state": "unknown", "attempt": receipt, "error": "Publish-existing outcome unknown; reconcile the same video"}
             if not response.ok or data.get("error") or data.get("success") is False:
+                self._note_rejection(token_id, data, page_token)
                 return {"accepted": False, "state": "rejected", "attempt": receipt, "error": safe_error(self._meta_error(data)).replace(page_token, "[redacted]")}
             if data.get("success") is True:
                 return {"accepted": True, "state": "accepted", "attempt": receipt, "error": ""}
@@ -313,20 +322,21 @@ class MetaReelPoster:
         init_url = f"{self.base_url}/{page_id}/video_reels"
         init_payload = {
             "upload_phase": "start",
-            "access_token": page_token
         }
         try:
-            r_init = requests.post(init_url, data=init_payload, timeout=25)
+            r_init = requests.post(init_url, headers=bearer_headers(page_token), data=init_payload, timeout=25)
             self._track_headers(track_target, r_init)
             try:
                 init_data = r_init.json()
             except ValueError:
                 return {"success": False, "error": f"Meta init non-JSON response (HTTP {r_init.status_code})"}
             if not r_init.ok:
-                err_msg = self._meta_error(init_data)
-                return {"success": False, "error": f"Meta init rejected (HTTP {r_init.status_code}): {err_msg}"}
+                err_msg = self._meta_error(init_data, page_token)
+                self._note_rejection(token_id, init_data, page_token)
+                return {"success": False, "error": f"Meta init rejected (HTTP {r_init.status_code}): {err_msg}",
+                        "meta_attempt": self._publish_receipt("initialize", page_id, "", token_id, page_token, r_init, init_data)}
             if "video_id" not in init_data:
-                err_msg = self._meta_error(init_data)
+                err_msg = self._meta_error(init_data, page_token)
                 return {"success": False, "error": f"Lỗi khởi tạo upload: {err_msg}"}
 
             video_id = init_data["video_id"]
@@ -340,6 +350,14 @@ class MetaReelPoster:
                             "meta_schedule_status": "persistence_failed",
                             "error": "Upload initialized but local handoff could not be persisted; reconcile before retry."}
             upload_url = init_data.get("upload_url", f"https://rupload.facebook.com/video-upload/{self.api_version}/{video_id}")
+            parsed_upload = urlparse(upload_url)
+            if (parsed_upload.scheme != "https" or parsed_upload.hostname != "rupload.facebook.com"
+                    or parsed_upload.username or parsed_upload.password or parsed_upload.port not in (None, 443)
+                    or not parsed_upload.path.startswith("/video-upload/")):
+                return {"success": False, "processing": True, "outcome_unknown": False,
+                        "upload_video_id": str(video_id), "meta_video_id": str(video_id),
+                        "finish_not_sent": True, "retryable": False,
+                        "error": "Meta returned an unexpected upload destination; keep the existing upload ID for inspection."}
 
             # Bước 2: Upload Binary Video (Transfer phase)
             headers = {
@@ -349,16 +367,18 @@ class MetaReelPoster:
                 "Content-Type": "application/octet-stream"
             }
             with open(video_path, "rb") as f:
-                r_upload = requests.post(upload_url, headers=headers, data=f, timeout=300)
+                r_upload = requests.post(upload_url, headers=headers, data=f, timeout=300, allow_redirects=False)
             
             if r_upload.status_code not in [200, 201]:
-                return {"success": False, "error": f"Lỗi upload binary video (status {r_upload.status_code}): {r_upload.text}"}
+                return {"success": False, "processing": True, "outcome_unknown": False,
+                        "upload_video_id": str(video_id), "meta_video_id": str(video_id),
+                        "finish_not_sent": True, "retryable": False,
+                        "error": f"Lỗi upload binary video (status {r_upload.status_code}): {safe_meta_text(r_upload.text, page_token)}"}
 
             # Bước 3: Xuất bản Reel hoặc Lên lịch (Finish phase)
             finish_url = f"{self.base_url}/{page_id}/video_reels"
             finish_payload = {
                 "upload_phase": "finish",
-                "access_token": page_token,
                 "video_id": video_id,
                 "description": description
             }
@@ -382,7 +402,7 @@ class MetaReelPoster:
                 finish_payload["video_state"] = "PUBLISHED"
 
             finish_started = True
-            r_finish = requests.post(finish_url, data=finish_payload, timeout=35)
+            r_finish = requests.post(finish_url, headers=bearer_headers(page_token), data=finish_payload, timeout=35)
             self._track_headers(track_target, r_finish)
             try:
                 finish_data = r_finish.json()
@@ -396,13 +416,15 @@ class MetaReelPoster:
             if r_finish.status_code >= 500:
                 raise RuntimeError("Meta finish server failure; reconcile before retry")
             if not r_finish.ok or finish_data.get("error") or finish_data.get("success") is False:
-                err_msg = self._meta_error(finish_data)
+                err_msg = self._meta_error(finish_data, page_token)
+                self._note_rejection(token_id, finish_data, page_token)
                 return {"success": False, "outcome_unknown": False, "code": "meta_finish_rejected",
                         "retryable": True,
+                        "meta_attempt": self._publish_receipt("finish", page_id, video_id, token_id, page_token, r_finish, finish_data),
                         "error": f"Meta finish rejected (HTTP {r_finish.status_code}): {err_msg}"}
             if is_scheduled:
                 meta_id = str(finish_data.get("video_id") or finish_data.get("reel_id") or video_id)
-                check = self.check_scheduled_reel(meta_id, page_token, target_ts, token_id=track_target)
+                check = self.check_scheduled_reel(meta_id, page_token, target_ts, token_id=token_id)
                 if not check.get("verified"):
                     state = str(check.get("status") or "unverified")
                     return {"success": False, "processing": True, "outcome_unknown": True,
@@ -416,9 +438,9 @@ class MetaReelPoster:
             if not is_scheduled and reconcile_seconds:
                 deadline = time.time() + max(0, min(int(reconcile_seconds), 30))
                 while True:
-                    check = self.check_processing_reel(video_id, page_token, token_id=track_target)
+                    check = self.check_processing_reel(video_id, page_token, token_id=token_id)
                     if check.get("verified"):
-                        comment_result = (self.post_first_comment(video_id, page_token, first_comment.strip(), token_id=track_target)
+                        comment_result = (self.post_first_comment(video_id, page_token, first_comment.strip(), token_id=token_id, page_id=page_id)
                                           if first_comment and first_comment.strip() else None)
                         return {"success": True, "video_id": check["video_id"], "fb_url": check["fb_url"],
                                 "status": "PUBLISHED", "comment_result": comment_result, "verified_meta": True}
@@ -434,7 +456,7 @@ class MetaReelPoster:
                         "error": "Meta accepted finish; Reel processing. Verify remotely before marking posted; do not retry."}
             # A success response without an object id is not authoritative.
             if not is_scheduled and not finish_data.get("video_id") and not finish_data.get("reel_id"):
-                err_msg = self._meta_error(finish_data)
+                err_msg = self._meta_error(finish_data, page_token)
                 return {"success": False, "processing": True, "outcome_unknown": True,
                         "upload_video_id": str(video_id), "meta_video_id": str(video_id),
                         "error": f"Meta finish returned no object id; outcome is unknown: {err_msg}"}
@@ -444,7 +466,7 @@ class MetaReelPoster:
             if not is_scheduled and first_comment and first_comment.strip():
                 try:
                     time.sleep(3)
-                    comment_result = self.post_first_comment(video_id, page_token, first_comment.strip(), token_id=track_target)
+                    comment_result = self.post_first_comment(video_id, page_token, first_comment.strip(), token_id=token_id, page_id=page_id)
                 except Exception:
                     comment_result = {"success": False, "error": "First comment failed after Reel publish; do not republish the Reel"}
             elif is_scheduled and first_comment and first_comment.strip():
@@ -453,7 +475,7 @@ class MetaReelPoster:
                     comment_result = enqueue_first_comment(
                         video_id, page_token, first_comment.strip(),
                         int(finish_payload["scheduled_publish_time"]) + 30,
-                        token_id=track_target, post_id=post_id,
+                        token_id=token_id, post_id=post_id,
                     )
                 except Exception:
                     comment_result = {"success": False, "error": "First comment queue failed after Reel finish; do not republish the Reel"}
@@ -476,27 +498,43 @@ class MetaReelPoster:
                         "upload_video_id": str(video_id), "meta_video_id": str(video_id),
                         "meta_scheduled_publish_time": target_ts, "meta_schedule_status": "verification_pending",
                         "error": "Meta finish request failed; outcome unknown, reconcile before retry"}
-            return {"success": False, "error": f"Ngoại lệ khi đăng/lên lịch Reel: {str(e)}"}
+            if video_id:
+                return {"success": False, "processing": True, "outcome_unknown": False,
+                        "upload_video_id": str(video_id), "meta_video_id": str(video_id),
+                        "finish_not_sent": True, "retryable": False,
+                        "error": "Upload chưa được xác nhận hoàn tất; giữ Meta upload ID để kiểm tra, chưa gửi Finish."}
+            return {"success": False, "error": "Không hoàn tất được kết nối đăng Reel với Meta; kiểm tra trạng thái trước khi thử lại."}
 
-    def post_first_comment(self, object_id, page_token, comment_text, token_id=None):
+    def post_first_comment(self, object_id, page_token, comment_text, token_id=None, *, page_id=None):
         """Bắn First Comment vào Reel hoặc Post"""
         try:
             assert_english(comment_text, "First Comment")
         except ValueError as exc:
             return {"success": False, "error": str(exc)}
+        if page_id and token_id and self.token_vault:
+            from src.publisher.page_manager import PageManager
+            from src.publisher.meta_preflight import resolve_page_token
+            verdict = resolve_page_token({"page_id": str(page_id), "token_id": str(token_id)}, self.token_vault,
+                                         PageManager(self.token_vault.data_dir), operation="comment")
+            if not verdict.get("ok"):
+                return {"success": False, "error": verdict.get("action"), "code": verdict.get("code")}
+            # Keep the comment tied to the selected root credential and Page.
+            page_token = verdict["token"]
         url = f"{self.base_url}/{object_id}/comments"
         payload = {
             "message": comment_text,
-            "access_token": page_token
         }
         try:
-            r = requests.post(url, data=payload, timeout=15)
+            r = requests.post(url, headers=bearer_headers(page_token), data=payload, timeout=15)
             if self.token_vault:
                 self._track_headers(token_id or page_token, r)
             data = r.json()
-            if "id" in data:
+            if r.ok and isinstance(data, dict) and not data.get("error") and data.get("id"):
                 return {"success": True, "comment_id": data["id"]}
-            return {"success": False, "error": data.get("error", {}).get("message", str(data))}
+            if r.status_code >= 500 or not isinstance(data, dict) or not data.get("error"):
+                return {"success": False, "outcome_unknown": True, "error": "First Comment response was not confirmed; verify before retrying."}
+            self._note_rejection(token_id, data, page_token)
+            return {"success": False, "error": self._meta_error(data, page_token)}
         except Exception as e:
             return {"success": False, "outcome_unknown": True,
                     "error": "First Comment response was not confirmed; verify on Meta before retrying."}

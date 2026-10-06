@@ -458,9 +458,9 @@ def _process_scheduled_posts_once(
             page = next((page for page in page_manager.list_pages()
                          if str(page.get("page_id")) == str((linked_post or {}).get("page_id"))), None)
             exact_page = {**page, "token_id": exact_token_id} if page else None
-            verdict = preflight_pages([exact_page], token_vault, page_manager) if exact_page else {"ok": False}
+            verdict = preflight_pages([exact_page], token_vault, page_manager, operation="comment", refresh=True) if exact_page else {"ok": False}
             if not verdict.get("ok"):
-                return {"ready": False, "error": "Exact First Comment credential unavailable; restore and Sync Page."}
+                return {"ready": False, "error": (verdict.get("blocked") or {}).get("action") or "Exact First Comment credential unavailable; restore and Sync Page."}
             page_token = verdict["ready"][0]["token"]
         if linked_post and (linked_post.get("publish_mode") == "meta_scheduled" or linked_post.get("status") != "published"):
             check = MetaReelPoster(token_vault=token_vault).check_processing_reel(
@@ -491,7 +491,7 @@ def _process_scheduled_posts_once(
         from web.meta_recovery import publishing_token_id
         recovery_token_id = publishing_token_id(post)
         exact_page = {**page, "token_id": recovery_token_id} if page and recovery_token_id else None
-        verdict = preflight_pages([exact_page], token_vault, page_manager) if exact_page else {"ok": False}
+        verdict = preflight_pages([exact_page], token_vault, page_manager, operation="read") if exact_page else {"ok": False}
         if not verdict.get("ok"):
             post["meta_reconcile_error"] = "Exact Page credential unavailable; read-only verification paused."
             continue
@@ -847,7 +847,7 @@ def _publish_claimed_post(post, posts, poster, current_dt, token_vault, page_man
             # a later auto-rebalance must not silently switch credentials.
             bound_page = dict(page_record or {})
             bound_page["token_id"] = str(post.get("token_id") or "")
-            verdict = preflight_pages([bound_page], token_vault, page_manager) if page_record else {"ok": False, "blocked": {"code": "missing_page", "stage": "mapping", "action": "Sync Page before publishing."}}
+            verdict = preflight_pages([bound_page], token_vault, page_manager, refresh=True) if page_record else {"ok": False, "blocked": {"code": "missing_page", "stage": "mapping", "action": "Sync Page before publishing."}}
             blocked = verdict.get("blocked") or {}
             verified = verdict["ready"][0] if verdict.get("ok") else None
         else:
@@ -929,6 +929,8 @@ def _publish_claimed_post(post, posts, poster, current_dt, token_vault, page_man
             reconcile_seconds=12,
             on_upload_initialized=persist_upload,
         )
+        if result.get("meta_attempt"):
+            post["meta_publish_attempt"] = result["meta_attempt"]
         facebook_id = result.get("video_id") or result.get("reel_id")
         if (result.get("processing") or result.get("outcome_unknown") or (not result.get("success") and post.get("meta_upload_video_id"))) and (result.get("meta_post_id") or result.get("upload_video_id") or post.get("meta_upload_video_id")):
             post.update({"status": "processing", "meta_post_id": str(result.get("meta_post_id") or ""),
@@ -974,7 +976,8 @@ def _publish_claimed_post(post, posts, poster, current_dt, token_vault, page_man
             post["ledger_error"] = sanitize_error(exc)
         if first_comment:
             try:
-                comment_result = poster.post_first_comment(facebook_id, page_token, first_comment)
+                comment_result = poster.post_first_comment(facebook_id, page_token, first_comment,
+                                                         token_id=post.get("token_id"), page_id=page_id)
                 if comment_result.get("success"):
                     post["comment_id"] = comment_result.get("comment_id")
                     post["first_comment_status"] = "posted"

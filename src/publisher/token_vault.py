@@ -5,13 +5,17 @@ import time
 import requests
 import uuid
 import threading
+import re
 from functools import wraps
 from pathlib import Path
 from datetime import datetime
 from multi_pc.json_io import replace_with_retry
-from src.publisher.meta_api import GRAPH_BASE_URL
+from src.publisher.meta_api import GRAPH_BASE_URL, bearer_headers, graph_error_message
 
 _VAULT_LOCK = threading.RLock()
+_PAGE_ACCESS_GUARD = threading.Lock()
+_PAGE_ACCESS_LOCKS = {}
+_PAGE_ACCESS_CACHE = {}
 
 def vault_transaction(function):
     @wraps(function)
@@ -141,6 +145,10 @@ class TokenVault:
             "total_calls": 0,
             "last_used": None
         }
+        for field in ("owner_id", "identity_valid", "verification_level", "permissions_status", "granted_permissions"):
+            if field in status_info:
+                entry[field] = status_info[field]
+        entry["kind_verified"] = False  # SYS/USER is an operator label, not /debug_token evidence.
 
         if existing:
             # Re-importing the same credential refreshes its verification data,
@@ -183,31 +191,36 @@ class TokenVault:
         return sorted(found)
 
     def verify_identity(self, token_str):
-        """Validate a token without enumerating its managed Pages."""
+        """Verify identity only; /me success does not prove publish permissions."""
         token_str = token_str.strip()
         try:
             response = requests.get(
                 f"{GRAPH_BASE_URL}/me",
-                params={"access_token": token_str, "fields": "id,name"},
+                headers=bearer_headers(token_str), params={"fields": "id,name"},
                 timeout=10
             )
             data = response.json()
-            if "error" in data:
-                err = data["error"]
+            if not response.ok or not isinstance(data, dict) or data.get("error"):
                 return {
                     "status": "ERROR",
-                    "error": f"[{err.get('code')}] {err.get('message')}",
-                    "pages": [],
-                    "owner_name": "",
+                    "error": graph_error_message(data, token_str, response.status_code),
+                    "pages": [], "owner_name": "", "identity_valid": False,
+                    "definitive_identity_rejection": bool(response.status_code < 500 and isinstance(data, dict) and data.get("error")),
                 }
+            if not re.fullmatch(r"[0-9]+", str(data.get("id") or "")):
+                raise ValueError("Missing Meta identity ID")
             return {
                 "status": "ACTIVE",
                 "error": "",
                 "pages": [],
                 "owner_name": str(data.get("name") or "").strip(),
+                "owner_id": str(data["id"]), "identity_valid": True,
+                "verification_level": "identity_only",
             }
-        except Exception as exc:
-            return {"status": "ERROR", "error": str(exc), "pages": [], "owner_name": ""}
+        except (requests.RequestException, ValueError, TypeError):
+            return {"status": "ERROR", "error": "Không xác minh được danh tính Meta; hãy kiểm tra kết nối và thử lại.",
+                    "pages": [], "owner_name": "", "identity_valid": False,
+                    "definitive_identity_rejection": False}
 
     def verify_token(self, token_str):
         token_str = token_str.strip()
@@ -216,69 +229,155 @@ class TokenVault:
         if identity.get("status") != "ACTIVE":
             return identity
 
-        return self.discover_pages(token_str, owner_name=owner_name)
+        result = self.discover_pages(token_str, owner_name=owner_name)
+        result.update(identity_valid=True, owner_id=identity.get("owner_id", ""))
+        if result.get("status") == "ACTIVE":
+            result.update(self.read_permissions(token_str))
+        return result
+
+    @staticmethod
+    def _read_edge(token_str, path, params, timeout=12):
+        """Read cursors through the fixed v24 endpoint; never follow token URLs."""
+        params = dict(params)
+        rows, seen_cursors = [], set()
+        for _ in range(50):
+            response = requests.get(f"{GRAPH_BASE_URL}/{path}", headers=bearer_headers(token_str),
+                                    params=params, timeout=timeout)
+            data = response.json()
+            if not response.ok or not isinstance(data, dict) or data.get("error"):
+                raise ValueError(graph_error_message(data, token_str, response.status_code))
+            if not isinstance(data.get("data"), list):
+                raise ValueError("Meta did not return a complete list of results.")
+            rows.extend(data["data"])
+            paging = data.get("paging") or {}
+            if not isinstance(paging, dict):
+                raise ValueError("Invalid Meta pagination response.")
+            if not paging.get("next"):
+                return rows
+            cursors = paging.get("cursors") or {}
+            cursor = cursors.get("after") if isinstance(cursors, dict) else None
+            if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
+                raise ValueError("Meta pagination cursor is missing or repeated.")
+            seen_cursors.add(cursor)
+            params["after"] = cursor
+        raise ValueError("Meta discovery exceeded 50 result pages.")
+
+    def read_permissions(self, token_str):
+        """Best-effort scope introspection; unavailable is never treated as granted."""
+        try:
+            rows = self._read_edge(token_str, "me/permissions", {"limit": 100}, timeout=10)
+            if not rows or not all(isinstance(row, dict) and row.get("permission") and row.get("status") for row in rows):
+                raise ValueError("Unverified permission response")
+            return {"permissions_status": "verified",
+                    "granted_permissions": sorted({str(row["permission"]) for row in rows if row["status"] == "granted"})}
+        except (requests.RequestException, ValueError, TypeError, AttributeError):
+            return {"permissions_status": "unverified", "granted_permissions": []}
 
     def discover_pages(self, token_str, owner_name=""):
         """Enumerate managed Pages after identity validation has already succeeded."""
         token_str = token_str.strip()
 
-        url = f"{GRAPH_BASE_URL}/me/accounts"
         params = {
-            "access_token": token_str,
             "fields": "id,name,category,access_token,tasks,picture{url}",
             "limit": 100
         }
         try:
-            resp = requests.get(url, params=params, timeout=12)
-            data = resp.json()
-            if "error" in data:
-                err = data["error"]
-                return {
-                    "status": "ERROR",
-                    "error": f"[{err.get('code')}] {err.get('message')}",
-                    "pages": [],
-                    "owner_name": owner_name,
-                }
-            
             pages = []
             seen = set()
-            for page_number in range(50):
-                for item in data.get("data", []):
-                    page_id = str(item.get("id") or "")
-                    if not page_id or page_id in seen:
-                        continue
-                    seen.add(page_id)
-                    pages.append({
-                        "page_id": page_id,
-                        "page_name": item.get("name"),
-                        "category": item.get("category", ""),
-                        "page_token": item.get("access_token"),
-                        "tasks": item.get("tasks") or [],
-                        "avatar": item.get("picture", {}).get("data", {}).get("url", "")
-                    })
-                next_url = (data.get("paging") or {}).get("next")
-                if not next_url:
-                    break
-                if not str(next_url).startswith("https://graph.facebook.com/"):
-                    raise ValueError("Unexpected Page discovery pagination URL")
-                data = requests.get(next_url, timeout=12).json()
-                if "error" in data:
-                    raise ValueError("Page discovery pagination failed")
-            else:
-                raise ValueError("Page discovery exceeded 50 pages of results")
+            for item in self._read_edge(token_str, "me/accounts", params):
+                if not isinstance(item, dict):
+                    raise ValueError("Invalid Meta Page record.")
+                page_id = str(item.get("id") or "")
+                if not re.fullmatch(r"[0-9]+", page_id):
+                    raise ValueError("Invalid Meta Page ID.")
+                if page_id in seen:
+                    continue
+                seen.add(page_id)
+                pages.append({
+                    "page_id": page_id, "page_name": item.get("name"),
+                    "category": item.get("category", ""), "page_token": item.get("access_token"),
+                    "tasks": item.get("tasks") or [],
+                    "avatar": (item.get("picture") or {}).get("data", {}).get("url", "")
+                })
             return {
                 "status": "ACTIVE",
                 "error": "",
                 "pages": pages,
-                "owner_name": owner_name
+                "owner_name": owner_name, "verification_level": "page_mapping",
             }
-        except Exception as e:
+        except (requests.RequestException, ValueError, TypeError, AttributeError) as e:
             return {
                 "status": "ERROR",
-                "error": str(e),
+                "error": str(e) if isinstance(e, ValueError) and not isinstance(e, requests.RequestException)
+                         else "Không đọc được danh sách Page từ Meta; hãy thử Sync lại.",
                 "pages": [],
                 "owner_name": owner_name,
             }
+
+    @vault_transaction
+    def record_verification(self, token_id, token_str, result):
+        """Merge verification into the current vault, preserving concurrent usage."""
+        entries = self.list_tokens(mask=False)
+        entry = next((item for item in entries if item.get("id") == token_id and item.get("token") == token_str), None)
+        if not entry:
+            return None
+        checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if result.get("status") == "ACTIVE" or result.get("definitive_identity_rejection"):
+            entry.update(status=result["status"], error_msg=result.get("error", ""), last_checked=checked_at)
+        for field in ("owner_id", "identity_valid", "verification_level", "permissions_status", "granted_permissions"):
+            if field in result:
+                entry[field] = result[field]
+        if "permissions_status" in result:
+            entry["permissions_checked_at"] = checked_at
+        entry["page_access_status"] = result.get("status", "ERROR")
+        entry["page_access_error"] = result.get("error", "")
+        if result.get("status") == "ACTIVE":
+            entry.update(pages_count=len(result.get("pages") or []), last_page_sync=checked_at,
+                         owner_name=result.get("owner_name") or entry.get("owner_name", ""))
+        self._save(entries)
+        return dict(entry)
+
+    def ensure_page_access(self, token_id, page_manager, *, max_age=300):
+        """Refresh the exact root-to-Page mapping once per credential per 5 minutes.
+
+        Failed discovery pauses writes for 60 seconds. No fallback credential or
+        stale Page token is used after a failed refresh. Cache is process-local.
+        """
+        key = (str(self.vault_file.resolve()).casefold(), str(token_id))
+        with _PAGE_ACCESS_GUARD:
+            lock = _PAGE_ACCESS_LOCKS.setdefault(key, threading.Lock())
+        with lock:
+            entry = self.get_token_by_id(token_id)
+            if not entry or not entry.get("token"):
+                return {"ok": False, "error": "Credential nguồn không còn trong kho Token."}
+            fingerprint = page_manager.credential_fingerprint(entry["token"])
+            cached = _PAGE_ACCESS_CACHE.get(key)
+            if cached and cached["fingerprint"] == fingerprint:
+                ttl = max_age if cached["ok"] else 60
+                if time.monotonic() - cached["checked_at"] < ttl:
+                    return {"ok": cached["ok"], "error": cached["error"]}
+            result = self.verify_token(entry["token"])
+            current = self.record_verification(token_id, entry["token"], result)
+            ok = bool(current and result.get("status") == "ACTIVE")
+            if ok:
+                page_manager.sync_pages_from_token(current, result.get("pages") or [], preserve_canonical=True)
+            cached = {"ok": ok, "error": result.get("error", "") or ("" if ok else "Credential thay đổi trong lúc Sync; hãy thử lại."),
+                      "fingerprint": fingerprint, "checked_at": time.monotonic()}
+            _PAGE_ACCESS_CACHE[key] = cached
+            return {"ok": cached["ok"], "error": cached["error"]}
+
+    def pause_page_access(self, token_id, error):
+        """Briefly stop new writes after Meta explicitly reports API access blocked."""
+        from src.publisher.page_manager import PageManager
+        from src.publisher.meta_api import safe_meta_text
+        entry = self.get_token_by_id(token_id)
+        if not entry:
+            return
+        key = (str(self.vault_file.resolve()).casefold(), str(token_id))
+        with _PAGE_ACCESS_GUARD:
+            _PAGE_ACCESS_CACHE[key] = {"ok": False, "error": safe_meta_text(error, entry.get("token")),
+                                       "fingerprint": PageManager.credential_fingerprint(entry.get("token")),
+                                       "checked_at": time.monotonic()}
 
     @vault_transaction
     def record_page_sync(self, token_id, pages):
@@ -293,6 +392,22 @@ class TokenVault:
         return entry
 
     @vault_transaction
+    def record_identity_checks(self, outcomes):
+        """Merge batch /me health results without overwriting Page sync or usage."""
+        entries = self.list_tokens(mask=False)
+        checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        by_id = {item.get("id"): item for item in entries}
+        for probed, result in outcomes:
+            entry = by_id.get(probed.get("id"))
+            if not entry or entry.get("token") != probed.get("token"):
+                continue
+            entry.update(status=result.get("status", "ERROR"), error_msg=result.get("error", ""), last_checked=checked_at)
+            for field in ("owner_id", "identity_valid", "owner_name"):
+                if field in result and (field != "owner_name" or result[field]):
+                    entry[field] = result[field]
+        self._save(entries)
+
+    @vault_transaction
     def refresh_token_pages(self, token_id):
         """Explicitly re-run full Page discovery for one stored token."""
         tokens = self.list_tokens(mask=False)
@@ -305,7 +420,15 @@ class TokenVault:
         entry["owner_name"] = status_info.get("owner_name", entry.get("owner_name", ""))
         entry["pages_count"] = len(status_info.get("pages", []))
         entry["last_checked"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for field in ("owner_id", "identity_valid", "verification_level", "permissions_status", "granted_permissions"):
+            if field in status_info:
+                entry[field] = status_info[field]
+        entry["page_access_status"] = status_info.get("status", "ERROR")
+        entry["page_access_error"] = status_info.get("error", "")
         self._save(tokens)
+        key = (str(self.vault_file.resolve()).casefold(), str(token_id))
+        with _PAGE_ACCESS_GUARD:
+            _PAGE_ACCESS_CACHE.pop(key, None)
         return entry, status_info.get("pages", [])
 
     @vault_transaction

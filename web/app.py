@@ -36,7 +36,7 @@ from multi_pc.concurrency import (
 )
 from multi_pc.json_io import replace_with_retry
 from multi_pc.posting_schedule import paced_offsets_by_token, posting_schedule_recommendation
-from src.publisher.meta_api import GRAPH_API_VERSION, GRAPH_BASE_URL
+from src.publisher.meta_api import GRAPH_API_VERSION
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -106,7 +106,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.2.4"
+APP_VERSION = "1.2.5"
 
 @app.after_request
 def add_header(response):
@@ -1796,7 +1796,7 @@ def api_list_tokens():
     for token in tokens:
         token["pages_count"] = page_counts.get(str(token.get("id")), 0)
         token["operator_label"] = token.get("name") or ""
-        token["identity_verified"] = bool(token.get("owner_name"))
+        token["identity_verified"] = bool(token.get("status") == "ACTIVE" and token.get("identity_valid", bool(token.get("owner_name"))))
         # Bulk-imported tokens can all carry the same operator label (e.g. Bm1).
         # Show the verified Meta owner so each credential remains identifiable.
         token["display_name"] = token.get("owner_name") or token.get("name") or token.get("id")
@@ -1805,29 +1805,18 @@ def api_list_tokens():
 
 @app.route("/api/tokens/health-sync", methods=["POST"])
 def api_token_health_sync():
-    """Probe every stored credential and move Pages off blocked credentials."""
+    """Check identity health only; Page permissions are verified separately."""
     from concurrent.futures import ThreadPoolExecutor
     tokens = token_vault.list_tokens(mask=False)
     healthy, blocked = set(), set()
     def check_token(token):
-        try:
-            response = requests.get(f"{GRAPH_BASE_URL}/me",
-                                    params={"access_token": token.get("token"), "fields": "id,name"}, timeout=8)
-            payload = response.json()
-            error = payload.get("error") if isinstance(payload, dict) else None
-            if response.ok and not error:
-                return token, True, ""
-            else:
-                return token, False, f"Meta [{(error or {}).get('code', response.status_code)}] {(error or {}).get('message', 'Credential rejected')}"
-        except Exception as exc:
-            return token, False, sanitize_error(exc)
+        return token, token_vault.verify_identity(token.get("token") or "")
     with ThreadPoolExecutor(max_workers=8) as pool:
         outcomes = list(pool.map(check_token, tokens))
-    for token, ok, error in outcomes:
+    for token, result in outcomes:
+        ok = result.get("status") == "ACTIVE"
         (healthy if ok else blocked).add(str(token.get("id")))
-        token.update({"status": "ACTIVE" if ok else "ERROR", "error_msg": error,
-                      "last_checked": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
-    token_vault._save(tokens)
+    token_vault.record_identity_checks(outcomes)
     # Health checks update credential status only. Page ownership is an explicit
     # operator choice and must never change as a side effect of scheduling.
     pages = page_manager.list_pages()
@@ -2412,7 +2401,7 @@ def api_publish_reel():
                 return jsonify({"success": False, "error": "Thời gian lên lịch không hợp lệ; dùng YYYY-MM-DD HH:MM hoặc timestamp.", "code": "invalid_schedule_time"}), 400
         if parsed_schedule_ts <= int(time.time()) + 5:
             return jsonify({"success": False, "error": "Thời gian lên lịch phải ở tương lai (ít nhất 5 giây). Hãy chọn lại giờ đăng.", "code": "schedule_time_in_past"}), 400
-        preflight = preflight_pages(target_pages, token_vault, page_manager)
+        preflight = preflight_pages(target_pages, token_vault, page_manager, refresh=(publish_mode == "meta_scheduled"))
         if not preflight.get("ok"):
             return jsonify({"success": False, "error": 'Preflight quyền đăng bài thất bại', **preflight["blocked"]}), 400
         for ready in preflight["ready"]:
@@ -2550,6 +2539,16 @@ def api_publish_reel():
             scheduled_dt = datetime.fromtimestamp(curr_sched).strftime("%Y-%m-%d %H:%M:%S")
             post_id = f"post_{int(time.time())}_{uuid.uuid4().hex[:6]}"
             if publish_mode == "meta_scheduled":
+                upload_preflight = preflight_pages([{**p_info, "token_id": verified["token_id"]}],
+                                                   token_vault, page_manager, refresh=True)
+                if not upload_preflight.get("ok"):
+                    blocked = upload_preflight.get("blocked") or {}
+                    results.append({"page_id": pid, "page_name": p_info.get("page_name"), "success": False,
+                                    "error": blocked.get("action"), "code": blocked.get("code"),
+                                    "reconnect_required": True})
+                    continue
+                verified = upload_preflight["ready"][0]
+                p_token = verified["token"]
                 # Persist the exact token binding and an ambiguous-outcome guard
                 # before sending the irreversible upload/finish requests.
                 post_entry = {
@@ -2583,6 +2582,8 @@ def api_publish_reel():
                     post_id=post_id,
                     on_upload_initialized=persist_upload_id,
                 )
+                if res.get("meta_attempt"):
+                    post_entry["meta_publish_attempt"] = res["meta_attempt"]
                 if res.get("success") and res.get("status") == "SCHEDULED" and res.get("meta_video_id"):
                     post_entry.update({
                         "status": "meta_scheduled", "meta_video_id": str(res["meta_video_id"]),
@@ -2702,7 +2703,7 @@ def api_publish_reel():
 
         # Immediate publish must use the same exact Page/token preflight as the
         # scheduler; never trust a stale cached page_token.
-        immediate_preflight = preflight_pages([p_info], token_vault, page_manager)
+        immediate_preflight = preflight_pages([p_info], token_vault, page_manager, refresh=True)
         if not immediate_preflight.get("ok"):
             blocked = immediate_preflight.get("blocked") or {}
             results.append({
@@ -2849,6 +2850,7 @@ def api_publish_reel():
                 "error": str(res.get("error") or "Meta publish returned no object id; outcome is unknown and must be reconciled before retry."),
                 "outcome_unknown": bool(res.get("outcome_unknown")),
                 "token_id": verified["token_id"],
+                "meta_publish_attempt": res.get("meta_attempt") or {},
                 "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
             failed_posts = load_posts()

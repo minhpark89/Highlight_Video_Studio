@@ -12,7 +12,7 @@ import requests
 
 from multi_pc.json_io import replace_with_retry
 from multi_pc.publishing_settings import credential_ready
-from src.publisher.meta_api import GRAPH_BASE_URL
+from src.publisher.meta_api import GRAPH_BASE_URL, bearer_headers
 
 METRICS = ('followers', 'reach', 'engagement', 'views')
 STALE_SECONDS = 900
@@ -121,7 +121,7 @@ class PageInsightsService:
             return {}, 'cooldown'
         try:
             response = requests.get(GRAPH_BASE + '/' + mapping['page_id'] + suffix,
-                                    params={**params, 'access_token': mapping['page_token']}, timeout=15)
+                                    headers=bearer_headers(mapping['page_token']), params=params, timeout=15)
             self.vault.record_usage(mapping['token_id'], response.headers)
             data = response.json()
             if not isinstance(data, dict):

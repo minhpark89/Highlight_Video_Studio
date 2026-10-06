@@ -1,8 +1,8 @@
-# Checkpoint mới nhất — Highlight Desktop Test v1.2.4
+# Checkpoint mới nhất — Highlight Desktop Test v1.2.5
 
-Ngày 2026-10-06, Asia/Saigon. Nhánh `release/v1.2.4`. Đọc [CHECKPOINT_V1_2_4_META_V24_20261006.md](CHECKPOINT_V1_2_4_META_V24_20261006.md).
+Ngày 2026-10-06, Asia/Saigon. Nhánh `release/v1.2.5`. Đọc [CHECKPOINT_V1_2_5_META_BACKEND_20261006.md](CHECKPOINT_V1_2_5_META_BACKEND_20261006.md) và [docs/META_V24_BACKEND.md](docs/META_V24_BACKEND.md).
 
-Theo yêu cầu người dùng, chuyển các luồng Meta của app từ Graph API v22.0 sang **v24.0**. Dùng shared constant cho Reel/comment/recovery/cancel, Token identity/Page discovery/bulk health và Insights; build identity và system info ghi phiên bản API. Bản app mới v1.2.4. Chưa thay scheduler/pacing hay live queue. Các đề xuất về API access blocked và lịch trễ nằm trong báo cáo ở thư mục BOB.
+Theo yêu cầu người dùng, chuyển các luồng Meta của app từ Graph API v22.0 sang **v24.0**, rồi cập nhật backend theo tài liệu Meta về Page token/System User/NPE. Bản mới v1.2.5: refresh exact binding trước Init, cache 300 giây/lock theo credential, kiểm tra CREATE_CONTENT/MODERATE và scopes riêng, Bearer Graph/cursor pagination/OAuth rupload, pause 60 giây khi API access blocked và sanitized receipts. Giữ upload IDs/outcome_unknown và tránh đăng lại khi comment lỗi. Chưa thay scheduler/pacing hay live queue. Chưa cài app mới hoặc phát hành GitHub; không chạy test chức năng/hồi quy.
 
 Đang chuẩn bị bộ cài local; chưa chạy test hồi quy, chưa tự cài hoặc phát hành GitHub. Kết quả artifact được cập nhật sau build.
 

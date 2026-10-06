@@ -57,11 +57,11 @@ class PageManager:
         with _PAGES_WRITE_LOCK:
             self._atomic_write(self.pages_file, pages)
 
-    def sync_pages_from_token(self, token_entry, pages_data):
+    def sync_pages_from_token(self, token_entry, pages_data, *, preserve_canonical=False):
         with _PAGES_WRITE_LOCK:
-            return self._sync_pages_from_token_locked(token_entry, pages_data)
+            return self._sync_pages_from_token_locked(token_entry, pages_data, preserve_canonical=preserve_canonical)
 
-    def _sync_pages_from_token_locked(self, token_entry, pages_data):
+    def _sync_pages_from_token_locked(self, token_entry, pages_data, *, preserve_canonical=False):
         current_pages = self.list_pages()
         token_id = token_entry.get("id")
         token_name = token_entry.get("name")
@@ -100,17 +100,18 @@ class PageManager:
                 # Preserve an already verified canonical credential when a Page is
                 # managed by multiple credentials; otherwise use this discovery.
                 canonical_id = str(existing.get("token_id") or "")
-                if canonical_id not in bindings:
+                if canonical_id not in bindings and not preserve_canonical:
                     canonical_id = token_id
-                canonical = bindings[canonical_id]
-                existing.update({
-                    "page_token": canonical["page_token"],
-                    "token_id": canonical_id,
-                    "token_name": canonical.get("token_name"),
-                    "mapping_verified_at": canonical.get("verified_at"),
-                    "mapping_status": "VERIFIED",
-                    "last_synced": verified_at,
-                })
+                canonical = bindings.get(canonical_id)
+                if canonical:
+                    existing.update({
+                        "page_token": canonical["page_token"],
+                        "token_id": canonical_id,
+                        "token_name": canonical.get("token_name"),
+                        "mapping_verified_at": canonical.get("verified_at"),
+                        "mapping_status": "VERIFIED",
+                        "last_synced": verified_at,
+                    })
             else:
                 current_pages.append({
                     "page_id": page_id,
@@ -138,7 +139,7 @@ class PageManager:
                 bindings.pop(token_id, None)
                 page["token_bindings"] = bindings
                 if str(page.get("token_id") or "") == token_id:
-                    replacement_id = next(iter(bindings), "")
+                    replacement_id = "" if preserve_canonical else next(iter(bindings), "")
                     if replacement_id:
                         replacement = bindings[replacement_id]
                         page.update({
@@ -150,8 +151,9 @@ class PageManager:
                         })
                     else:
                         page.pop("page_token", None)
-                        page["token_id"] = ""
-                        page["token_name"] = ""
+                        if not preserve_canonical:
+                            page["token_id"] = ""
+                            page["token_name"] = ""
                         page["mapping_status"] = "MISSING"
                         page["mapping_verified_at"] = ""
         self.save_pages(current_pages)

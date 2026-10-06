@@ -6,11 +6,12 @@ It never substitutes a generic credential and never performs a publish probe.
 from __future__ import annotations
 
 import re
+from src.publisher.meta_api import REEL_REQUIRED_PERMISSIONS, COMMENT_REQUIRED_PERMISSIONS
 
-# Meta has returned the canonical task above as well as product-surface aliases
-# for Pages managed through the newer Page experience. These all grant content
-# creation; read-only tasks (ANALYZE, ADVERTISE, MESSAGING, MODERATE) do not.
-PUBLISH_TASKS = {"CREATE_CONTENT", "PROFILE_PLUS_CREATE_CONTENT", "MANAGE", "PROFILE_PLUS_MANAGE"}
+# Retain the specific legacy NPE aliases already stored by older builds.
+# MANAGE assigns tasks; it does not by itself prove CREATE_CONTENT or MODERATE.
+PUBLISH_TASKS = {"CREATE_CONTENT", "PROFILE_PLUS_CREATE_CONTENT"}
+COMMENT_TASKS = {"MODERATE", "PROFILE_PLUS_MODERATE"}
 
 _SECRET_PATTERNS = (
     re.compile(r"(access_token|page_token|token|api_key|secret|password|authorization)[=:\s]+[^\s&\"',]+", re.I),
@@ -26,6 +27,9 @@ _ACTIONS = {
     'stale_mapping': 'Mapping Page-token đã cũ sau khi credential thay đổi; hãy Refresh Pages.',
     'cross_bound_mapping': 'Token được chọn không thuộc Page này; hãy chọn mapping đã được Sync cho đúng page_id.',
     'publish_capability_missing': 'Credential không có quyền tạo nội dung cho Page; hãy cấp lại quyền Meta rồi Refresh Pages.',
+    'comment_capability_missing': 'First Comment cần tác vụ MODERATE trên Page; hãy cấp quyền bình luận rồi Refresh Pages.',
+    'permissions_missing': 'Credential thiếu scope cho thao tác này; hãy cấp quyền Meta đúng chức năng rồi Refresh Pages.',
+    'page_access_refresh_failed': 'Chưa làm mới được quyền truy cập Page; kiểm tra lỗi Meta và Refresh Pages trước khi gửi bài.',
 }
 
 
@@ -59,7 +63,7 @@ def mapping_error(page_id, page_name, code, *, stage="mapping", token_id="", det
     }
 
 
-def resolve_page_token(page_entry, token_vault, page_manager):
+def resolve_page_token(page_entry, token_vault, page_manager, *, operation="publish", refresh=False):
     """Resolve one exact discovery-backed mapping; never use a fallback token."""
     if not isinstance(page_entry, dict):
         return mapping_error("", "", "missing_page", detail="Invalid Page record in the selected target list.")
@@ -67,6 +71,15 @@ def resolve_page_token(page_entry, token_vault, page_manager):
     page_id = str(page_entry.get("page_id") or "").strip()
     page_name = page_entry.get("page_name") or page_id
     token_id = str(page_entry.get("token_id") or "").strip()
+    if operation not in ("publish", "comment", "read"):
+        raise ValueError("Unsupported Meta preflight operation")
+    if refresh and token_id:
+        result = token_vault.ensure_page_access(token_id, page_manager)
+        if not result.get("ok"):
+            verdict = mapping_error(page_id, page_name, "page_access_refresh_failed", token_id=token_id,
+                                    stage="page_access", detail=result.get("error", ""))
+            verdict["action"] += " " + verdict["detail"]
+            return verdict
     token_entry = token_vault.get_token_by_id(token_id) if token_id else None
     mapping, reason = page_manager.resolve_verified_mapping(page_id, token_entry)
     if reason == "missing_credential" and token_id:
@@ -77,15 +90,26 @@ def resolve_page_token(page_entry, token_vault, page_manager):
         return mapping_error(page_id, page_name, reason, token_id=token_id)
 
     tasks = {str(task).upper() for task in (mapping.get("tasks") or [])}
-    if not tasks.intersection(PUBLISH_TASKS):
+    required_tasks = PUBLISH_TASKS if operation == "publish" else COMMENT_TASKS
+    if operation != "read" and not tasks.intersection(required_tasks):
         return mapping_error(
             page_id,
             page_name,
-            "publish_capability_missing",
-            stage="publish_capability",
+            "publish_capability_missing" if operation == "publish" else "comment_capability_missing",
+            stage=f"{operation}_capability",
             token_id=token_id,
-            detail="Meta Page tasks do not include a content-publishing task.",
+            detail="Required Page task: CREATE_CONTENT." if operation == "publish" else "Required Page task: MODERATE.",
         )
+
+    required_permissions = (REEL_REQUIRED_PERMISSIONS if operation == "publish" else
+                            COMMENT_REQUIRED_PERMISSIONS if operation == "comment" else frozenset())
+    permissions_status = token_entry.get("permissions_status", "unverified")
+    missing = required_permissions - set(token_entry.get("granted_permissions") or [])
+    if permissions_status == "verified" and missing:
+        verdict = mapping_error(page_id, page_name, "permissions_missing", stage=f"{operation}_permissions",
+                                token_id=token_id, detail="Missing scopes: " + ", ".join(sorted(missing)))
+        verdict["action"] += " " + verdict["detail"]
+        return verdict
 
     return {
         "ok": True,
@@ -97,6 +121,9 @@ def resolve_page_token(page_entry, token_vault, page_manager):
         "verified_at": mapping.get("verified_at", ""),
         "credential_fingerprint": mapping.get("credential_fingerprint", ""),
         "tasks": sorted(tasks),
+        "operation": operation,
+        "required_permissions": sorted(required_permissions),
+        "permissions_status": permissions_status,
         "stage": "ready",
         "code": "ok",
         "action": "",
@@ -104,11 +131,11 @@ def resolve_page_token(page_entry, token_vault, page_manager):
     }
 
 
-def preflight_pages(targets, token_vault, page_manager):
+def preflight_pages(targets, token_vault, page_manager, *, operation="publish", refresh=False):
     """Validate all targets before any queue record is created."""
     ready = []
     for entry in targets:
-        verdict = resolve_page_token(entry, token_vault, page_manager)
+        verdict = resolve_page_token(entry, token_vault, page_manager, operation=operation, refresh=refresh)
         if not verdict.get("ok"):
             return {"ok": False, "ready": ready, "blocked": verdict}
         ready.append(verdict)

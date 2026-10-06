@@ -28,4 +28,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File checkpoints/tools/v1.2.4/ins
 
 Các kiểm tra đóng gói đọc payload/identity/hash/seed, không chạy app hoặc đăng bài. Không chạy test hồi quy vì người dùng chỉ yêu cầu build. Source sạch trước đóng gói, tag local v1.2.4 chỉ vào source đã đóng gói; checkpoint có thể có commit mới hơn sau build.
 
-Artifact dự kiến: `release/Highlight_Desktop_Test_Setup_v1.2.4.exe`, `.sha256`, checkpoint bản mới. Chưa có kết quả build ở thời điểm viết đoạn này; bổ sung evidence sau khi tạo artifact thành công. Chưa phát hành GitHub.
+Build đã hoàn tất: `release/Highlight_Desktop_Test_Setup_v1.2.4.exe`, SHA256 `84d473ca33505d47f02957e5a00638ece02309d04453f4f04f090c9ddcfcf056`. Source tag local v1.2.4 tại `6aa832f6cf0ade894b4882aaa03991445dab3f44`. Chưa chạy payload inspection của candidate này, chưa phát hành GitHub.
+
+Sau khi build, người dùng yêu cầu thêm backend đúng docs Meta về System User/NPE. Candidate giao dùng mới chuyển sang **v1.2.5**, giữ nguyên tag/bộ cài v1.2.4. Đọc `CHECKPOINT_V1_2_5_META_BACKEND_20261006.md` và `docs/META_V24_BACKEND.md`.

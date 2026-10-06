@@ -44,11 +44,13 @@ def refresh_page_credential(post, vault, manager, token_id=None):
     if not page_token:
         return None, {"ok": False, "error": "Meta chưa cấp Page token; hãy kết nối lại Token."}
     # A transient discovery failure must not invalidate the saved source token.
-    active_entry = {**entry, "status": "ACTIVE"}
-    manager.sync_pages_from_token(active_entry, discovered)
+    active_entry = vault.record_verification(selected, entry.get("token") or "", result)
+    if not active_entry:
+        return None, {"ok": False, "error": "Credential thay đổi trong lúc Sync; hãy kiểm tra lại Token."}
+    manager.sync_pages_from_token(active_entry, discovered, preserve_canonical=True)
     verdict = preflight_pages([{"page_id": str(post["page_id"]), "token_id": selected}], vault, manager)
     if not verdict.get("ok"):
-        return None, {"ok": False, "error": "Mapping mới chưa hợp lệ; hãy kiểm tra Token trong kho."}
+        return None, {"ok": False, "error": (verdict.get("blocked") or {}).get("action") or "Mapping mới chưa hợp lệ; hãy kiểm tra Token trong kho."}
     return verdict["ready"][0], {"ok": True, "token_id": selected, "token_name": entry.get("name") or selected,
         "identity_valid": True, "page_access_verified": True, "tasks": sorted(tasks),
         "page_token_changed": bool(old and old.get("page_token") != page_token)}
