@@ -74,4 +74,8 @@ Nếu còn lỗi: recheck PID/port/build identity trước kết luận, không 
 
 Bộ cài đã build/inspect: `release/Highlight_Desktop_Test_Setup_v1.2.8.exe`, **705449472 bytes**, SHA256 `f0135aa94fd3cbc74519bcd6fba0ae4ac8e8f45ecbf0f035af97b5ec006d33e2`. Tag/source immutable `v1.2.8` tại `3cddca44e74556f217f7cdd0d825e61153c148cd`. Packaged identity sạch, Graph v24.0, 33 source files khớp, empty queue/credential seeds và không runtime state. Xem `installer_payload.json`.
 
-Bộ cài/SHA256/checkpoint đang được chuẩn bị để upload GitHub. Chưa tuyên bố public ở thời điểm checkpoint asset được tạo. Sau publication đọc `public_download_verify.json` và trạng thái cuối trên branch. Không tự cài vào runtime đang dùng.
+**Đã phát hành GitHub v1.2.8**, release ID **404937985**, `draft=false`, `prerelease=true`. URL: https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.2.8. Toàn bộ ba assets installer/SHA256/checkpoint được tải đầy đủ không đăng nhập, HTTP200 và byte/hash khớp lúc **2026-10-06 23:48:42 +07**. Xem `release.json`, `deployment_status.json`, `public_download_verify.json`. Remote immutable tag/source và branch đã được kiểm tra. Source/tag giữ nguyên `3cddca44e74556f217f7cdd0d825e61153c148cd`; branch documentation có các commit mới hơn.
+
+Checkpoint asset độc lập được chuẩn bị trước publication, nên phần trạng thái của nó ghi prepared; trạng thái cuối dùng evidence/latest branch. Source backup đầy đủ tại `E:\OPENCLAW\BOB\support\v1.2.8\Highlight_Source_v1.2.8_published.bundle`; installer/asset nằm trong `source-worktree/release/`. Không cài/sửa runtime thật hoặc gửi publish/delete Meta/CMS trong phiên.
+
+Cách dùng: đóng app cũ, cài v1.2.8 vào đúng thư mục đang dùng. Mở NEW → Lên lịch → chọn **3 bài/Page** → xác nhận để lưu đủ ba giờ cho tương lai. Group config cũ có ba giờ nhưng Daily plan cũ hai giờ sẽ được modal hiển thị đúng; nâng cấp/GET không tự rewrite các lịch đã có.
