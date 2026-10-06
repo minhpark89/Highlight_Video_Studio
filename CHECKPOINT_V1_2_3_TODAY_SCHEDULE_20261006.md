@@ -22,7 +22,13 @@ Daily plan `group:grp_1791020096_3` dùng 04:00 và 10:50, Meta mode, automatic,
 ## Kiểm chứng và artifact
 
 Đọc các report trong `checkpoints/evidence/v1.2.3/`: full suite, browser offline, replay snapshot thật và payload installer. Replay nằm riêng ở `support/v1.2.3/`, tuyệt đối không commit queue/binding/credential thật.
-Bộ cài dự kiến `release/Highlight_Desktop_Test_Setup_v1.2.3.exe`; kết quả hash/source identity sẽ ghi trong `installer_verify.json` và checkpoint latest sau build. Tag `v1.2.3` chỉ tạo ở commit ứng dụng được đóng gói; các commit evidence sau có thể tiến nhánh.
+Bộ cài đã kiểm chứng `release/Highlight_Desktop_Test_Setup_v1.2.3.exe`, 705073152 bytes; SHA256 `369bb5e8560faaaef74456a0e5ed7b9e05a8e041d20d1730f5da4ea7bdae3c02`. Tag source `v1.2.3` cố định tại `8a5f77f0f5be55a8839e13b1542763b7d936438d`, identity sạch, 21 file payload khớp, không có state/credential người dùng. Full suite **632 passed, 4 skipped, 29 subtests passed**; browser **9 checks**, không có JavaScript error. Các commit evidence sau có thể tiến nhánh. Tag v1.2.1/v1.2.2 không đổi.
+
+Replay snapshot 11:00 riêng đã xếp **294** bài NEW còn preparing/Draft về 06/10 **11:31–14:16**, 0 overflow/skip; 198 bài trước đó ở 07/10. Giữ status, caption, First Comment, Website URL, Page–Token, source claim và mọi bài không chọn/remote. Preview cả nhóm 0.1472 giây; lấy kho 20 bài có lịch đúng nhóm/ngày. Đây là kết quả offline, không thay lịch thật hoặc gửi Meta/CMS. Runtime cài đặt vẫn v1.2.1.
+
+**Chưa deploy GitHub:** inspect API và Git remote vẫn thất bại kết nối port 443. Đọc `deployment_status.json` cho lần push cuối. Chưa tạo draft/public release v1.2.3, chưa có link tải công khai mới; bộ cài/SHA256/checkpoint asset đã sẵn sàng local. Không dùng URL dự đoán như URL đã xác minh.
+
+Backup source offline: `E:\OPENCLAW\BOB\support\v1.2.3\Highlight_Source_v1.2.3.bundle`. Bundle chứa `release/v1.2.3` và `v1.2.3`; có thể clone vào thư mục mới trong workspace để sửa tiếp. Giữ `source-worktree/release/` vì binary installer và asset ignored không nằm trong bundle. Không cài đè hoặc sửa queue live trong session này.
 
 ## Session sau
 

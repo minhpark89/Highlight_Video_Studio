@@ -1,0 +1,15 @@
+{
+  "tag": "v1.2.3",
+  "branch": "release/v1.2.3",
+  "source_commit": "8a5f77f0f5be55a8839e13b1542763b7d936438d",
+  "installer_verified": true,
+  "github_inspect": "failed: connection blocked or unavailable",
+  "git_remote_read": "failed: unable to connect to github.com port 443",
+  "push_attempted": false,
+  "release_created": false,
+  "release_published": false,
+  "public_download_verified": false,
+  "credentials_disclosed": false,
+  "active_runtime_upgraded": false,
+  "live_posts_rescheduled": false
+}

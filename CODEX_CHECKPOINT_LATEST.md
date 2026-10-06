@@ -6,7 +6,9 @@ Thêm chọn preparing/Draft và xem trước/áp dụng lịch hôm nay cho bà
 
 Kiểm thử **632 passed, 4 skipped, 29 subtests passed**. Browser offline **9 checks, không có JavaScript error**. Replay snapshot thật ở bản sao riêng: **294** bài NEW có lịch 06/10, **11:31–14:16**, giữ nội dung/trạng thái/binding/remote posts; xem trước lấy thêm 20 video từ kho. Preview cả nhóm mất khoảng 0.15 giây. Đây là replay, app thật vẫn chạy bản cũ, chưa thay queue hoặc gửi Meta/CMS.
 
-Bộ cài v1.2.3 đang được đóng gói; xem `checkpoints/evidence/v1.2.3/installer_verify.json` sau khi build. **GitHub hiện không kết nối được**, chưa có release công khai v1.2.3. Session sau dùng checkpoint chi tiết để tiếp tục deploy và nâng cấp đúng runtime. Không dùng link download dự đoán như link đã hoạt động.
+Bộ cài đã kiểm chứng: `release/Highlight_Desktop_Test_Setup_v1.2.3.exe`, **705073152 bytes**, SHA256 `369bb5e8560faaaef74456a0e5ed7b9e05a8e041d20d1730f5da4ea7bdae3c02`. Tag source `v1.2.3` tại `8a5f77f0f5be55a8839e13b1542763b7d936438d`, identity sạch; payload khớp 21 file, không chứa state/credential người dùng. Xem `checkpoints/evidence/v1.2.3/installer_verify.json`.
+
+**GitHub hiện không kết nối được**, chưa có release công khai v1.2.3. Session sau dùng checkpoint chi tiết để tiếp tục deploy và nâng cấp đúng runtime. Không dùng link download dự đoán như link đã hoạt động. Source backup offline ở `E:\OPENCLAW\BOB\support\v1.2.3\Highlight_Source_v1.2.3.bundle` (nhánh/tag/checkpoint); installer và các asset nằm ở `source-worktree/release/`.
 
 ## Checkpoint trước — v1.2.2
 

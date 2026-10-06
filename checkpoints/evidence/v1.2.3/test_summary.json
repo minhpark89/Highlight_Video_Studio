@@ -4,7 +4,7 @@
   "passed": 632,
   "skipped": 4,
   "subtests_passed": 29,
-  "seconds": 15.41,
+  "seconds": 18.40,
   "scheduling_regressions": 24,
   "live_meta_or_cms_mutations": false
 }
