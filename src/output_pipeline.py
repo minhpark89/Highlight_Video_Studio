@@ -568,6 +568,11 @@ def review_draft(post_id, changes, pages, *, approve=False, root=None, now=None)
         assignment = {"page_id": page_id, "page_name": (page or {}).get("page_name", page_id),
                       "token_id": (page or {}).get("token_id", ""), "scheduled_time": assigned_time,
                       "approval_mode": "manual", "requested_publish_mode": requested_mode}
+        if "scheduled_time" in changes and post.get("schedule_origin") == "today":
+            # A later explicit date edit (or publish-now approval) replaces the
+            # original today-only boundary instead of expiring that new choice.
+            assignment.update(schedule_day=due.date().isoformat() if assigned_time else "",
+                              schedule_origin="manual", schedule_scope="selected")
         if page_id == str(post.get("page_id") or "") and post.get("token_group_id"):
             # Preserve the credential selected for this token group's Page.
             assignment["token_id"] = post.get("token_id") or assignment["token_id"]

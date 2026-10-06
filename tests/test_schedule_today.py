@@ -248,6 +248,16 @@ def test_selected_today_retains_normal_daily_intake(warehouse):
     assert len(list(pipeline._assignment_candidates(pipeline.settings(root)['plans'], pages, groups, NOW, tokens))) == 6
 
 
+def test_later_explicit_draft_date_edit_replaces_today_boundary(warehouse):
+    root, pages, _, _, options, call = warehouse
+    apply_preview(call, options)
+    row = pipeline.review_draft('p0', {'scheduled_time': '2026-10-07 11:30:00'}, pages, root=root, now=NOW)
+    assert row['schedule_day'] == '2026-10-07' and row['schedule_origin'] == 'manual'
+    with pipeline._connect(root) as db:
+        assignment = json.loads(db.execute('SELECT assignment FROM slots WHERE sha256="sha0"').fetchone()[0])
+        assert assignment['schedule_day'] == '2026-10-07'
+
+
 def test_pipeline_recovers_today_override_after_json_write_failure(warehouse):
     from src import output_scheduling as scheduling
     root, pages, groups, tokens, options, call = warehouse

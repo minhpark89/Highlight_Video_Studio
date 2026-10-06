@@ -36,7 +36,7 @@ try {
     }
     $report = @{success=$true; setup=$setup; sha256=(Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant(); size=(Get-Item -LiteralPath $setup).Length;
         build=$identity.prerelease_build; source_identity=$identity; packaged_files=$verified; runtime_state_absent=$true; credential_seeds_empty=$true;
-        test_result='631 passed, 4 skipped, 29 subtests passed'; browser_checks='9 offline checks; preparing selection, today preview and apply, stock allocation, midnight overflow, group preparation and review, 50/30 rows per page, batch approval, draft editor, daily manual/Meta mode, retry, overdue Meta and read-only refresh; no JavaScript errors';
+        test_result='632 passed, 4 skipped, 29 subtests passed'; browser_checks='9 offline checks; preparing selection, today preview and apply, stock allocation, midnight overflow, group preparation and review, 50/30 rows per page, batch approval, draft editor, daily manual/Meta mode, retry, overdue Meta and read-only refresh; no JavaScript errors';
         live_meta_test=$false; installed_in_active_runtime=$false}
     $report | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $source 'checkpoints\evidence\v1.2.3\installer_verify.json')
     @{success=$report.success; setup=$report.setup; sha256=$report.sha256; size=$report.size; matched_source_files=$verified.Count; runtime_state_absent=$true} | ConvertTo-Json
