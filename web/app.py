@@ -36,6 +36,7 @@ from multi_pc.concurrency import (
 )
 from multi_pc.json_io import replace_with_retry
 from multi_pc.posting_schedule import paced_offsets_by_token, posting_schedule_recommendation
+from src.publisher.meta_api import GRAPH_API_VERSION, GRAPH_BASE_URL
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -105,7 +106,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 
 @app.after_request
 def add_header(response):
@@ -1176,6 +1177,7 @@ def api_system_info():
     return jsonify({
         "success": True,
         "app_version": APP_VERSION,
+        "meta_graph_api_version": GRAPH_API_VERSION,
         "hardware": hw,
         "config": public_config(cfg)
     })
@@ -1809,7 +1811,7 @@ def api_token_health_sync():
     healthy, blocked = set(), set()
     def check_token(token):
         try:
-            response = requests.get("https://graph.facebook.com/v22.0/me",
+            response = requests.get(f"{GRAPH_BASE_URL}/me",
                                     params={"access_token": token.get("token"), "fields": "id,name"}, timeout=8)
             payload = response.json()
             error = payload.get("error") if isinstance(payload, dict) else None

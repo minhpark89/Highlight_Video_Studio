@@ -6,6 +6,7 @@ from src.english_text import assert_english
 from pathlib import Path
 from datetime import datetime
 from src.media_validation import InvalidMedia, probe_video
+from src.publisher.meta_api import GRAPH_API_VERSION
 
 class MetaReelPoster:
     @staticmethod
@@ -37,7 +38,7 @@ class MetaReelPoster:
                 "error_user_message": clean(error.get("error_user_msg")),
                 "trace_id": clean(error.get("fbtrace_id")), "is_transient": error.get("is_transient")}
 
-    def __init__(self, api_version="v22.0", token_vault=None):
+    def __init__(self, api_version=GRAPH_API_VERSION, token_vault=None):
         self.api_version = api_version
         self.base_url = f"https://graph.facebook.com/{self.api_version}"
         self.token_vault = token_vault

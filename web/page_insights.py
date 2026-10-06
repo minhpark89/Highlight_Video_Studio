@@ -12,11 +12,12 @@ import requests
 
 from multi_pc.json_io import replace_with_retry
 from multi_pc.publishing_settings import credential_ready
+from src.publisher.meta_api import GRAPH_BASE_URL
 
 METRICS = ('followers', 'reach', 'engagement', 'views')
 STALE_SECONDS = 900
 SYNC_COOLDOWN = 300
-GRAPH_BASE = 'https://graph.facebook.com/v22.0'
+GRAPH_BASE = GRAPH_BASE_URL
 REASONS = {
     'not_synced': 'Chưa đồng bộ Meta', 'missing_binding': 'Cần Sync Page với Token đã xác minh',
     'cooldown': 'Token đang cooldown; đồng bộ lại sau', 'permission': 'Token thiếu quyền đọc Insights hoặc đã hết hạn',

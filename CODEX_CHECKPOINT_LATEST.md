@@ -1,4 +1,12 @@
-# Checkpoint mới nhất — Highlight Desktop Test v1.2.3
+# Checkpoint mới nhất — Highlight Desktop Test v1.2.4
+
+Ngày 2026-10-06, Asia/Saigon. Nhánh `release/v1.2.4`. Đọc [CHECKPOINT_V1_2_4_META_V24_20261006.md](CHECKPOINT_V1_2_4_META_V24_20261006.md).
+
+Theo yêu cầu người dùng, chuyển các luồng Meta của app từ Graph API v22.0 sang **v24.0**. Dùng shared constant cho Reel/comment/recovery/cancel, Token identity/Page discovery/bulk health và Insights; build identity và system info ghi phiên bản API. Bản app mới v1.2.4. Chưa thay scheduler/pacing hay live queue. Các đề xuất về API access blocked và lịch trễ nằm trong báo cáo ở thư mục BOB.
+
+Đang chuẩn bị bộ cài local; chưa chạy test hồi quy, chưa tự cài hoặc phát hành GitHub. Kết quả artifact được cập nhật sau build.
+
+## Bản phát hành trước — v1.2.3
 
 Ngày 2026-10-06, Asia/Saigon. Nhánh `release/v1.2.3`. Đọc [CHECKPOINT_V1_2_3_TODAY_SCHEDULE_20261006.md](CHECKPOINT_V1_2_3_TODAY_SCHEDULE_20261006.md).
 

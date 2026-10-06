@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.2.3",
+    [string]$Version = "1.2.4",
     [string]$PreviewRevision = "",
     [string]$BuildChannel = "desktop-test",
     [switch]$SkipTests,
@@ -11,7 +11,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 if ($BuildChannel -ne "desktop-test") { throw "Phase 1.5 permits only BUILD_CHANNEL=desktop-test" }
-if ($Version -notin @("1.0.19", "1.1.6", "1.1.7", "1.1.8", "1.1.9", "1.2.0", "1.2.1", "1.2.2", "1.2.3")) { throw "Unsupported desktop-test APP_VERSION: $Version" }
+if ($Version -notin @("1.0.19", "1.1.6", "1.1.7", "1.1.8", "1.1.9", "1.2.0", "1.2.1", "1.2.2", "1.2.3", "1.2.4")) { throw "Unsupported desktop-test APP_VERSION: $Version" }
 if ($Version -eq "1.0.19" -and -not $PreviewRevision) { throw "Legacy v1.0.19 builds require PreviewRevision" }
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -88,11 +88,14 @@ Copy-Item -LiteralPath (Join-Path $root "config.json"), (Join-Path $root "posts.
 Copy-Item -LiteralPath (Join-Path $root "config\website_config.json") -Destination (Join-Path $stage "config\website_config.json") -Force
 Copy-Item -LiteralPath $IconSource -Destination (Join-Path $stage "app.ico") -Force
 
+$metaApiVersion = (& python -c "import sys; sys.path.insert(0, sys.argv[1]); from src.publisher.meta_api import GRAPH_API_VERSION; print(GRAPH_API_VERSION)" $root).Trim()
+if ($LASTEXITCODE -ne 0 -or -not $metaApiVersion) { throw "Cannot read Meta Graph API build version" }
 $buildIdentity = @{
     app_version = $Version
     prerelease_build = $releaseLabel
     build_channel = $BuildChannel
     product_name = "Highlight Desktop Test"
+    meta_graph_api_version = $metaApiVersion
     bind_host = "127.0.0.1"
     port = "ephemeral-loopback-never-5080"
     source_commit = (git -C $root rev-parse HEAD).Trim()

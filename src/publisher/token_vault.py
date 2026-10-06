@@ -9,6 +9,7 @@ from functools import wraps
 from pathlib import Path
 from datetime import datetime
 from multi_pc.json_io import replace_with_retry
+from src.publisher.meta_api import GRAPH_BASE_URL
 
 _VAULT_LOCK = threading.RLock()
 
@@ -186,7 +187,7 @@ class TokenVault:
         token_str = token_str.strip()
         try:
             response = requests.get(
-                "https://graph.facebook.com/v22.0/me",
+                f"{GRAPH_BASE_URL}/me",
                 params={"access_token": token_str, "fields": "id,name"},
                 timeout=10
             )
@@ -221,7 +222,7 @@ class TokenVault:
         """Enumerate managed Pages after identity validation has already succeeded."""
         token_str = token_str.strip()
 
-        url = "https://graph.facebook.com/v22.0/me/accounts"
+        url = f"{GRAPH_BASE_URL}/me/accounts"
         params = {
             "access_token": token_str,
             "fields": "id,name,category,access_token,tasks,picture{url}",

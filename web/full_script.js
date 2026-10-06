@@ -1761,7 +1761,7 @@
     banner.style.display = 'block';
     banner.style.background = '#1e293b';
     banner.style.color = '#38bdf8';
-    banner.innerHTML = '<i class="bi bi-hourglass-split"></i> Đang kết nối Meta Graph API v22.0 để tải video và xuất bản...';
+    banner.innerHTML = '<i class="bi bi-hourglass-split"></i> Đang kết nối Meta Graph API v24.0 để tải video và xuất bản...';
     const payload = {
       filename: filename,
       caption: caption,

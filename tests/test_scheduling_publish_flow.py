@@ -295,9 +295,9 @@ class SchedulingPublishFlowTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["video_id"], "video-1")
         self.assertEqual(post.call_count, 3)
-        self.assertEqual(post.call_args_list[0].args[0], "https://graph.facebook.com/v22.0/page-1/video_reels")
+        self.assertEqual(post.call_args_list[0].args[0], "https://graph.facebook.com/v24.0/page-1/video_reels")
         self.assertIn("upload.test", post.call_args_list[1].args[0])
-        self.assertEqual(post.call_args_list[2].args[0], "https://graph.facebook.com/v22.0/page-1/video_reels")
+        self.assertEqual(post.call_args_list[2].args[0], "https://graph.facebook.com/v24.0/page-1/video_reels")
 
     def test_meta_reel_finish_without_object_id_is_unknown(self):
         from src.publisher.meta_reel_poster import MetaReelPoster

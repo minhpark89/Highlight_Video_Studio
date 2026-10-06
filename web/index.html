@@ -3712,7 +3712,7 @@
         const scopeToken = (p.group_token_assignments || {})[scopeId];
         const tokenName = scopeId ? ((globalTokensCatalog.find(t => String(t.id) === String(scopeToken)) || {}).name || 'Chưa gán Token trong nhóm') : (p.token_name || 'Chưa gán');
         const grpName = p.group_name || 'Chưa nhóm';
-        const avatarUrl = p.avatar || `https://graph.facebook.com/${pId}/picture?type=normal`;
+        const avatarUrl = p.avatar || `https://graph.facebook.com/v24.0/${pId}/picture?type=normal`;
 
         // Avatar tròn: load ảnh thật từ Facebook CDN, nếu lỗi mới fallback sang chữ viết tắt
         const initials = pName.trim().substring(0, 2).toUpperCase();
@@ -3855,7 +3855,7 @@
         box.innerHTML = cachedPagesList.map(p => {
           const pName = p.page_name || p.name || 'Fanpage Facebook';
           const pId = p.page_id || p.id || 'N/A';
-          const avatarUrl = p.avatar || `https://graph.facebook.com/${pId}/picture?type=normal`;
+          const avatarUrl = p.avatar || `https://graph.facebook.com/v24.0/${pId}/picture?type=normal`;
           const initials = pName.trim().substring(0, 2).toUpperCase();
           const colors = ['#2563eb', '#7c3aed', '#db2777', '#059669', '#d97706', '#0284c7'];
           const avatarBg = colors[Math.abs(pName.split('').reduce((a,c)=>a+c.charCodeAt(0), 0)) % colors.length];
@@ -5478,7 +5478,7 @@
     banner.style.display = 'block';
     banner.style.background = '#1e293b';
     banner.style.color = '#38bdf8';
-    banner.innerHTML = '<i class="bi bi-hourglass-split"></i> Đang kết nối Meta Graph API v22.0 để tải video và xuất bản...';
+    banner.innerHTML = '<i class="bi bi-hourglass-split"></i> Đang kết nối Meta Graph API v24.0 để tải video và xuất bản...';
     const payload = {
       filename: filename,
       title: currentPublishContext.title || '',
