@@ -1,0 +1,45 @@
+{
+  "checked_at": "2026-10-09T02:37:09.293306+07:00",
+  "success": true,
+  "url": "http://127.0.0.1:52301",
+  "app_version": "1.3.0",
+  "source_commit": "f3b2b2b4aa90ed233862e326b536a2057f09b0a7",
+  "queue": {
+    "is_paused": true,
+    "active": 0,
+    "running": 0,
+    "queued": 742
+  },
+  "scheduler_cycle_active": true,
+  "plan": {
+    "id": "group:grp_1791020096_3",
+    "posts_per_day": 2,
+    "slots": [
+      "04:00",
+      "10:50"
+    ],
+    "page_count": 100
+  },
+  "templates_identical": true,
+  "template_sha256": "36052dcc01215b346d227ad879fab3f449229cf3a264dc039118c8e30fc0d1fb",
+  "http_ms": {
+    "system_info": 28.55,
+    "queue_status": 85.78,
+    "scheduler_status": 50.75
+  },
+  "posts_list_timings": [
+    {
+      "bucket": "all",
+      "response_ms": 125.57
+    },
+    {
+      "bucket": "app",
+      "response_ms": 153.43
+    },
+    {
+      "bucket": "published",
+      "response_ms": 76.07
+    }
+  ],
+  "timing_scope": "Read-only local API responses on this running installation; not an end-to-end render benchmark"
+}

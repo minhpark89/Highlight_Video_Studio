@@ -1,0 +1,21 @@
+﻿{
+    "target":  "E:\\OPENCLAW\\BOB\\Highlight destop test",
+    "backup":  "E:\\OPENCLAW\\BOB\\Highlight destop test\\update_backups\\20261009_012957_97f11adcfac24141904862452700ca7c",
+    "installer_sha256":  "3c557cbd8316902fce7912f7113dbfd6c3844895b21e55eb0ef3cae40bbd1f4d",
+    "mutable_hashes_unchanged":  true,
+    "code_hashes_match":  true,
+    "preserved_file_count":  51,
+    "pre_install":  {
+                        "read_only_reconciliation_stop":  false,
+                        "scheduler_cycle_active":  false,
+                        "render_running":  0,
+                        "render_active":  0,
+                        "posts_total":  1539,
+                        "content_running":  0,
+                        "meta_publishing":  0,
+                        "checked_at":  "2026-10-09T01:29:52.9579091+07:00"
+                    },
+    "installed_at":  "2026-10-09T01:30:35.0281130+07:00",
+    "code_files":  87,
+    "installed":  true
+}

@@ -1,0 +1,6 @@
+﻿{
+    "summary":  "769 passed, 4 skipped, 29 subtests passed",
+    "release_groups":  "all configured v1.3.0 groups",
+    "command":  "python -m pytest -q --no-header",
+    "success":  true
+}

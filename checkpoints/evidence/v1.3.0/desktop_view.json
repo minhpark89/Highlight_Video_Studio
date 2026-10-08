@@ -1,0 +1,9 @@
+{
+  "success": true,
+  "errors": [],
+  "blocked_write_requests": [],
+  "checks": [
+    "Installed posts pane renders rows and completes loading",
+    "Immediate and scheduled recovery controls exist in the installed DOM"
+  ]
+}

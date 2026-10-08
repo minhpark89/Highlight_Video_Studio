@@ -1,0 +1,8 @@
+﻿{
+    "checks":  [
+                   "node syntax check passed",
+                   "templates byte-identical",
+                   "CSharp launcher compile passed"
+               ],
+    "success":  true
+}

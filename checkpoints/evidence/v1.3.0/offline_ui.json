@@ -1,0 +1,9 @@
+﻿{
+    "checks":  [
+                   "daily default displays two slots",
+                   "existing Meta upload offers immediate App retry",
+                   "existing Meta upload offers Meta scheduling",
+                   "loopback app-mode launcher uses an ephemeral local port"
+               ],
+    "success":  true
+}
