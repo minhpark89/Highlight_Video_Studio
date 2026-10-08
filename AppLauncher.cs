@@ -9,25 +9,30 @@ using System.Windows.Forms;
 internal static class AppLauncher
 {
     private static string appUrl;
+    private static string appUrlFile;
     private static int appPort;
     private static Process ownedServer;
+    private static Process embeddedWindow;
     private static Mutex instanceMutex;
 
     [STAThread]
     private static void Main()
     {
+        string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+        Directory.SetCurrentDirectory(baseDir);
         bool created;
         instanceMutex = new Mutex(true, @"Local\HighlightDesktopTest", out created);
         if (!created)
         {
+            appUrlFile = Path.Combine(baseDir, "run", "desktop_url.txt");
+            try { appUrl = File.ReadAllText(appUrlFile).Trim(); } catch { appUrl = null; }
             OpenBrowser();
             return;
         }
 
-        string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-        Directory.SetCurrentDirectory(baseDir);
         appPort = PickFreeLoopbackPort();
         appUrl = "http://127.0.0.1:" + appPort;
+        appUrlFile = Path.Combine(baseDir, "run", "desktop_url.txt");
         string python = Path.Combine(baseDir, "runtime", "python.exe");
         string server = Path.Combine(baseDir, "run_server.py");
         if (!File.Exists(python) || !File.Exists(server))
@@ -57,6 +62,8 @@ internal static class AppLauncher
             return;
         }
 
+        Directory.CreateDirectory(Path.GetDirectoryName(appUrlFile));
+        File.WriteAllText(appUrlFile, appUrl);
         OpenBrowser();
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
@@ -111,6 +118,7 @@ internal static class AppLauncher
                 ownedServer.CloseMainWindow();
                 if (!ownedServer.WaitForExit(1500)) ownedServer.Kill();
             }
+            if (!String.IsNullOrWhiteSpace(appUrlFile) && File.Exists(appUrlFile)) File.Delete(appUrlFile);
         }
         catch { }
     }
@@ -118,12 +126,43 @@ internal static class AppLauncher
     private static void OpenBrowser()
     {
         if (String.IsNullOrWhiteSpace(appUrl)) return;
-        try { Process.Start(new ProcessStartInfo(appUrl) { UseShellExecute = true }); }
+        try
+        {
+            string edge = FindEdgeExecutable();
+            if (!String.IsNullOrWhiteSpace(edge))
+            {
+                string profile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "chrome_profile");
+                Directory.CreateDirectory(profile);
+                embeddedWindow = Process.Start(new ProcessStartInfo
+                {
+                    FileName = edge,
+                    Arguments = "--app=\"" + appUrl + "\" --user-data-dir=\"" + profile + "\" --no-first-run --no-default-browser-check",
+                    WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory,
+                    UseShellExecute = true
+                });
+                return;
+            }
+            Process.Start(new ProcessStartInfo(appUrl) { UseShellExecute = true });
+        }
         catch (Exception ex)
         {
             MessageBox.Show("Application is available at " + appUrl + "\n\n" + ex.Message,
                 "Highlight Desktop Test", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
+    }
+
+    private static string FindEdgeExecutable()
+    {
+        string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        string[] candidates = {
+            Path.Combine(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
+            Path.Combine(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+            Path.Combine(local, "Microsoft", "Edge", "Application", "msedge.exe")
+        };
+        foreach (string candidate in candidates) if (File.Exists(candidate)) return candidate;
+        return null;
     }
 
     private static bool ServerReady()
@@ -160,7 +199,7 @@ internal static class AppLauncher
     {
         internal LauncherForm()
         {
-            Text = "Highlight Desktop Test v1.2.8";
+            Text = "Highlight Desktop Test v1.3.0";
             Width = 410;
             Height = 175;
             StartPosition = FormStartPosition.CenterScreen;
@@ -175,6 +214,7 @@ internal static class AppLauncher
             Controls.Add(label);
             Controls.Add(open);
             Controls.Add(stop);
+            Shown += delegate { Hide(); };
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)

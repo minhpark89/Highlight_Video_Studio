@@ -1,0 +1,42 @@
+{
+  "upstream": "https://github.com/google/fonts",
+  "commit": "587df9bc0168395fa1f780dee770cba04225a7bb",
+  "fonts": [
+    {
+      "file": "Anton-Regular.ttf",
+      "url": "https://raw.githubusercontent.com/google/fonts/587df9bc0168395fa1f780dee770cba04225a7bb/ofl/anton/Anton-Regular.ttf",
+      "bytes": 170812,
+      "sha256": "a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab"
+    },
+    {
+      "file": "anton-OFL.txt",
+      "url": "https://raw.githubusercontent.com/google/fonts/587df9bc0168395fa1f780dee770cba04225a7bb/ofl/anton/OFL.txt",
+      "bytes": 4484,
+      "sha256": "ee67e6ee22790b7929f1a3769ca2801d565c64b5a9096942c1adf5596de9c9e4"
+    },
+    {
+      "file": "BarlowCondensed-Black.ttf",
+      "url": "https://raw.githubusercontent.com/google/fonts/587df9bc0168395fa1f780dee770cba04225a7bb/ofl/barlowcondensed/BarlowCondensed-Black.ttf",
+      "bytes": 110828,
+      "sha256": "e74b750df582c608f35db467b711b2b60d2217618e85e60b72b42dfd00446cab"
+    },
+    {
+      "file": "barlowcondensed-OFL.txt",
+      "url": "https://raw.githubusercontent.com/google/fonts/587df9bc0168395fa1f780dee770cba04225a7bb/ofl/barlowcondensed/OFL.txt",
+      "bytes": 4377,
+      "sha256": "186d750eb496a4c17a76385f82be6aea2ac1cf2de074a811d63786cf374ea73f"
+    },
+    {
+      "file": "BeVietnamPro-ExtraBold.ttf",
+      "url": "https://raw.githubusercontent.com/google/fonts/587df9bc0168395fa1f780dee770cba04225a7bb/ofl/bevietnampro/BeVietnamPro-ExtraBold.ttf",
+      "bytes": 139680,
+      "sha256": "44dbfa01553d227bec76ba6446c5618870a76a4a3297f41630dde859d0650d02"
+    },
+    {
+      "file": "bevietnampro-OFL.txt",
+      "url": "https://raw.githubusercontent.com/google/fonts/587df9bc0168395fa1f780dee770cba04225a7bb/ofl/bevietnampro/OFL.txt",
+      "bytes": 4397,
+      "sha256": "6b7f8f73609a25ea78c891e34cf37b06f8a676b7ea986e941e43b009110f2a85"
+    }
+  ]
+}

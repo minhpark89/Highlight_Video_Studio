@@ -1,6 +1,8 @@
 """Move existing app-held schedules to Meta without creating another post."""
 from datetime import datetime
 from urllib.parse import urlparse
+from pathlib import Path
+import threading
 
 from multi_pc.meta_scheduling import MetaScheduleTimeError, parse_meta_schedule_time
 from src.content_packages import scheduled_video_path
@@ -8,16 +10,19 @@ from src.publisher.meta_preflight import preflight_pages
 from src.english_text import assert_english
 
 
-def handoff_eligibility(post, output_dir, *, now_ts=None):
+def _handoff_eligibility(post, output_dir, *, now_ts=None, verify_text=True):
+    if post.get("local_archived_at"):
+        return False, "Bài đã được xóa khỏi danh sách app."
     if post.get("status") != "scheduled" or post.get("publish_mode") == "meta_scheduled":
         return False, "Chỉ chuyển bài đang do app giữ lịch."
     if any(post.get(key) for key in ("meta_video_id", "meta_upload_video_id", "meta_post_id", "post_fb_id", "publish_started_at", "outcome_unknown")):
         return False, "Bài đã gửi lên Meta; cần đối soát trước."
-    try:
-        for key in ("title", "content", "first_comment", "first_comment_snapshot"):
-            assert_english(post.get(key, ""), key)
-    except ValueError:
-        return False, "Nội dung phải là tiếng Anh. Sửa Content Studio trước khi giao lịch Meta."
+    if verify_text:
+        try:
+            for key in ("title", "content", "first_comment", "first_comment_snapshot"):
+                assert_english(post.get(key, ""), key)
+        except ValueError:
+            return False, "Nội dung phải là tiếng Anh. Sửa Content Studio trước khi giao lịch Meta."
     try:
         parse_meta_schedule_time(post.get("scheduled_time"), now_ts=now_ts)
     except MetaScheduleTimeError as exc:
@@ -38,11 +43,59 @@ def handoff_eligibility(post, output_dir, *, now_ts=None):
         return False, "Chờ bài Website có video gốc đầy đủ và player đã xác minh."
     try:
         path = scheduled_video_path(output_dir, post.get("media_file") or post.get("clip_filename"))
+        from src.media_quality_gate import require_publishable
+        require_publishable(path, post)
         from src.video_recovery_media import verify_recovery_digest
         verify_recovery_digest(post, path)
-    except (ValueError, FileNotFoundError, OSError):
-        return False, "Không tìm thấy video local."
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        return False, str(exc) or "Không tìm thấy video local."
     return True, ""
+
+
+_DISPLAY_CACHE = {}
+_DISPLAY_CACHE_LOCK = threading.RLock()
+
+
+def _display_cache_key(post, output_dir, now_ts):
+    media = str(post.get("media_file") or post.get("clip_filename") or "")
+    signature = None
+    if media:
+        try:
+            path = Path(output_dir) / Path(media).name
+            stat = path.stat()
+            signature = (stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            signature = (None, None)
+    return (str(post.get("id") or ""), str(post.get("status") or ""),
+            str(post.get("publish_mode") or ""), str(post.get("scheduled_time") or ""),
+            str(post.get("article_url") or post.get("website_url") or ""),
+            str(post.get("website_status") or ""),
+            str(post.get("first_comment_snapshot") or post.get("first_comment") or ""),
+            str(post.get("token_id") or ""), media, signature,
+            int(float(now_ts or datetime.now().timestamp()) // 60))
+
+
+def handoff_eligibility(post, output_dir, *, now_ts=None, verify_text=True):
+    """Return local handoff readiness without making a Graph request.
+
+    Paginated table reads use a short-lived advisory cache and skip the
+    expensive language model. The handoff API keeps verify_text=True and
+    repeats the complete validation immediately before any Meta request.
+    """
+    if verify_text:
+        return _handoff_eligibility(post, output_dir, now_ts=now_ts, verify_text=True)
+    key = _display_cache_key(post, output_dir, now_ts)
+    with _DISPLAY_CACHE_LOCK:
+        cached = _DISPLAY_CACHE.get(key)
+    if cached is not None:
+        return cached
+    result = _handoff_eligibility(post, output_dir, now_ts=now_ts, verify_text=False)
+    with _DISPLAY_CACHE_LOCK:
+        _DISPLAY_CACHE[key] = result
+        if len(_DISPLAY_CACHE) > 1024:
+            for old_key in list(_DISPLAY_CACHE)[:256]:
+                _DISPLAY_CACHE.pop(old_key, None)
+    return result
 
 
 def queue_handoffs(posts, post_ids, output_dir, vault, pages, *, now=None):
@@ -75,7 +128,7 @@ def queue_handoffs(posts, post_ids, output_dir, vault, pages, *, now=None):
 def process_next_handoff(posts, save, poster, output_dir, vault, pages, *, now=None, post_id=None):
     """Persist one selected handoff before sending any Meta request."""
     current = now or datetime.now()
-    waiting = sorted((post for post in posts if post.get("status") == "meta_handoff"
+    waiting = sorted((post for post in posts if post.get("status") == "meta_handoff" and not post.get("local_archived_at")
                       and (post_id is None or str(post.get("id")) == str(post_id))),
                      key=lambda post: (str(post.get("scheduled_time") or ""), str(post.get("id"))))
     if not waiting:

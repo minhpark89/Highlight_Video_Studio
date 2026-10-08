@@ -1,14 +1,16 @@
-"""Persisted local render requests. A finished render never posts by itself."""
+"""Persisted local renders with an optional, explicit replacement action."""
 from datetime import datetime
 from pathlib import Path
 import threading
 import uuid
+import time
 
 from src.video_recovery_media import (read_json, write_json, recovery_interval,
     file_digest, save_recovery_source, checked_video)
 
 _LOCK = threading.RLock()
 _ACTIVE = set()
+_AUTO_ACTIVE = set()
 
 
 def _state_file(root):
@@ -27,7 +29,8 @@ def task_for(root, post_id):
                 if file_digest(path) != row.get("sha256"):
                     raise ValueError("changed")
             except (ValueError, OSError):
-                row.update(status="error", message="File phục hồi thiếu hoặc đã thay đổi; render lại.")
+                row.update(status="error", auto_recovery_pending=False,
+                           message="File phục hồi thiếu hoặc đã thay đổi; render lại.")
         return row
 
 
@@ -38,15 +41,20 @@ def _update(root, post_id, **changes):
         write_json(_state_file(root), rows)
 
 
-def start_task(root, post, *, render=None):
+def start_task(root, post, *, render=None, auto_action=None):
     root = Path(root).resolve()
     key = (str(root), post["id"])
     with _LOCK:
         if key in _ACTIVE:
+            if auto_action:
+                _update(root, post["id"], auto_action=auto_action, auto_recovery_pending=True)
             return task_for(root, post["id"])
         previous = task_for(root, post["id"])
         if previous and previous.get("status") == "ready":
-            return previous
+            if auto_action:
+                _update(root, post["id"], auto_action=auto_action, auto_recovery_pending=True)
+                threading.Thread(target=complete_auto_recovery, args=(root, post["id"]), daemon=True).start()
+            return task_for(root, post["id"])
         if len(_ACTIVE) >= 2:
             raise ValueError("Đang render hai clip phục hồi; chờ một clip hoàn tất rồi thử lại.")
         rows = read_json(_state_file(root), {})
@@ -54,6 +62,8 @@ def start_task(root, post, *, render=None):
                 "original_filename": post.get("media_file") or post.get("clip_filename"),
                 "video_id": str(post.get("meta_upload_video_id") or post.get("meta_video_id") or ""),
                 "message": "Đang kiểm tra nguồn gốc và mốc cắt...", "created_at": datetime.now().isoformat(timespec="seconds")}
+        if auto_action:
+            task.update(auto_action=auto_action, auto_recovery_pending=True)
         rows[post["id"]] = task
         write_json(_state_file(root), rows)
         _ACTIVE.add(key)
@@ -102,9 +112,49 @@ def _render_task(root, post, task, render):
                 title=meta.get("video_title") or "Video phục hồi", source_url=meta.get("youtube_url") or "",
                 message="MP4 đã kiểm tra. Xem trước rồi chọn clip này để tạo lịch thay thế." +
                         (" Mốc cắt cũ vượt nguồn; đã chọn đoạn hợp lệ trong video gốc." if adjusted else ""))
+        threading.Thread(target=complete_auto_recovery, args=(root, post["id"]), daemon=True).start()
     except Exception as exc:
         from web.meta_diagnostics import safe_error
         _update(root, post["id"], status="error", message=safe_error(exc))
     finally:
         with _LOCK:
             _ACTIVE.discard((str(root), post["id"]))
+
+
+def complete_auto_recovery(root, post_id):
+    """Finish a persisted one-click action after the MP4 becomes ready."""
+    from web import app as api
+    key = (str(Path(root).resolve()), post_id)
+    with _LOCK:
+        if key in _AUTO_ACTIVE:
+            return
+        _AUTO_ACTIVE.add(key)
+    try:
+        with api.app.app_context():
+            while True:
+                task = task_for(root, post_id)
+                if not task or task.get("status") != "ready" or not task.get("auto_recovery_pending"):
+                    return
+                body = {"confirm_replace_failed_video": True, "video_id": task["video_id"],
+                        "filename": task["filename"], **task["auto_action"]}
+                response = api.api_replace_failed_video(post_id, _body=body)
+                response = response[0] if isinstance(response, tuple) else response
+                result = response.get_json()
+                if result.get("success"):
+                    _update(root, post_id, auto_recovery_pending=False, replacement_post_id=result.get("post_id"),
+                            message=result.get("message") or "Đã tạo bài thay thế và đưa Content vào hàng đợi.")
+                    return
+                if result.get("busy"):
+                    _update(root, post_id, message="MP4 đã xong; đang chờ worker để tạo bài thay thế...")
+                    time.sleep(1)
+                    continue
+                _update(root, post_id, auto_recovery_pending=False, auto_recovery_error=result.get("error"),
+                        message="MP4 đã xong nhưng chưa tạo được bài thay thế: " + str(result.get("error") or ""))
+                return
+    except Exception as exc:
+        from web.meta_diagnostics import safe_error
+        _update(root, post_id, auto_recovery_pending=False, auto_recovery_error=safe_error(exc),
+                message="MP4 đã xong nhưng chưa tạo được bài thay thế: " + safe_error(exc))
+    finally:
+        with _LOCK:
+            _AUTO_ACTIVE.discard(key)

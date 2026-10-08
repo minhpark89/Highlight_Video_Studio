@@ -6,14 +6,16 @@ from typing import Any
 
 # These sequences are characteristic of UTF-8 decoded as a legacy single-byte codec.
 _MARKERS = ("Ã", "Â", "Ä", "Ð", "Ñ", "áº", "á»", "â€", "â€™", "â€œ", "â€“", "â€¦", "�")
-_TOKEN_RE = re.compile(r"\S+")
+_TOKEN_RE = re.compile(r"[^ \t\r\n]+")
 # UTF-8 decoded through cp1252 and then latin1 can mix characters from both
 # byte mappings (e.g. á»‹: the final byte is cp1252's ‹).
 _REVERSE_CP1252 = {bytes([byte]).decode("cp1252"): byte for byte in range(256)
                    if byte not in (0x81, 0x8d, 0x8f, 0x90, 0x9d)}
 _REVERSE_CP1252.update({chr(byte): byte for byte in (0x81, 0x8d, 0x8f, 0x90, 0x9d)})
 # File identities and links must continue to address the existing on-disk records.
-_IDENTITY_KEYS = frozenset({"id", "job_id", "filename", "youtube_url", "url"})
+_IDENTITY_KEYS = frozenset({"id", "job_id", "filename", "clip_filename", "media_file", "path", "folder_binding",
+                          "youtube_url", "url", "token", "page_token", "access_token", "api_key",
+                          "password", "secret", "sha256", "source_sha256"})
 
 
 def mojibake_marker_score(value: str) -> int:
@@ -37,6 +39,10 @@ def repair_mojibake_text(value: str) -> str:
     if not isinstance(value, str) or mojibake_marker_score(value) == 0:
         return value
 
+    # v1.2.8 sanitize_error used split(), which turned the NBSP byte in
+    # "BÃ i" into a normal space. Recover the known app diagnostic prefix;
+    # arbitrary whitespace/text is never guessed or reconstructed.
+    value = value.replace("BÃ i public", "Bài public").replace("bÃ i public", "bài public")
     best = value
     best_score = mojibake_marker_score(value)
     for codec in ("cp1252", "latin1", "mixed"):
@@ -70,7 +76,7 @@ def repair_mojibake(value: Any) -> Any:
     if isinstance(value, str):
         return repair_mojibake_text(value)
     if isinstance(value, dict):
-        return {key: item if key in _IDENTITY_KEYS else repair_mojibake(item)
+        return {key: item if key in _IDENTITY_KEYS or key.endswith(("_id", "_ids", "_url", "_urls", "_path", "_sha256", "_file", "_dir", "_filename")) else repair_mojibake(item)
                 for key, item in value.items()}
     if isinstance(value, list):
         return [repair_mojibake(item) for item in value]

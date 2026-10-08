@@ -38,6 +38,8 @@ COMMENT_METADATA = ("first_comment_source", "first_comment_profile_id", "first_c
 
 
 def sanitize_error(value, limit=400):
+    from core.text_encoding import repair_mojibake_text
+    value = repair_mojibake_text(str(value or ""))
     text = _SECRET_RE.sub(lambda match: match.group(1) + "=[redacted]", str(value or ""))
     return " ".join(text.split())[:limit]
 
@@ -677,7 +679,7 @@ def _apply_to_posts(item):
     wanted = set(item["post_ids"])
     comments_to_queue = []
     for post in posts:
-        if post.get("id") not in wanted:
+        if post.get("id") not in wanted or post.get("local_archived_at"):
             continue
         if post.get("content_frozen_at"):
             # An explicit CMS repair may update verification/error fields while
@@ -812,7 +814,7 @@ def _apply_failure_to_posts(item):
     posts_file = DATA_ROOT / "posts.json"
     posts = load_posts_file(posts_file)
     for post in posts:
-        if post.get("id") not in item["post_ids"]:
+        if post.get("id") not in item["post_ids"] or post.get("local_archived_at"):
             continue
         if post.get("content_frozen_at") and not post.get("website_retried_at"):
             continue

@@ -1370,11 +1370,11 @@
       const data = await resp.json();
       if (data.status === 'ok' && data.rules) {
         const r = data.rules;
-        const slotsArr = (r.slots && r.slots.length > 0) ? r.slots : ['08:00', '11:30', '20:30'];
+        const slotsArr = (r.slots && r.slots.length > 0) ? r.slots : ['11:30', '19:30'];
         if (document.getElementById('sched-slots')) document.getElementById('sched-slots').value = slotsArr.join(', ');
         if (document.getElementById('sched-stagger-min')) document.getElementById('sched-stagger-min').value = r.stagger_min || 5;
         if (document.getElementById('sched-stagger-max')) document.getElementById('sched-stagger-max').value = r.stagger_max || 15;
-        if (document.getElementById('sched-max-posts')) document.getElementById('sched-max-posts').value = r.max_posts_per_page_day || 4;
+        if (document.getElementById('sched-max-posts')) document.getElementById('sched-max-posts').value = r.max_posts_per_page_day || 2;
         if (document.getElementById('sched-auto-comment')) document.getElementById('sched-auto-comment').checked = (r.auto_comment !== false);
         if (document.getElementById('sched-include-web')) document.getElementById('sched-include-web').checked = (r.include_website_link !== false);
         if (document.getElementById('sched-folder-mode')) {
@@ -1423,10 +1423,10 @@
     const rawSlots = document.getElementById('sched-slots') ? document.getElementById('sched-slots').value : '';
     const slots = rawSlots.split(',').map(s => s.trim()).filter(s => s);
     const body = {
-      slots: slots.length ? slots : ['08:00', '11:30', '20:30'],
+      slots: slots.length ? slots : ['11:30', '19:30'],
       stagger_min: parseInt(document.getElementById('sched-stagger-min')?.value || 5, 10),
       stagger_max: parseInt(document.getElementById('sched-stagger-max')?.value || 15, 10),
-      max_posts_per_page_day: parseInt(document.getElementById('sched-max-posts')?.value || 4, 10),
+      max_posts_per_page_day: parseInt(document.getElementById('sched-max-posts')?.value || 2, 10),
       auto_comment: document.getElementById('sched-auto-comment') ? document.getElementById('sched-auto-comment').checked : true,
       include_website_link: document.getElementById('sched-include-web') ? document.getElementById('sched-include-web').checked : true,
       folder_binding_mode: document.getElementById('sched-folder-mode')?.value || 'round_robin'

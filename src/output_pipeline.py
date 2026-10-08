@@ -24,6 +24,8 @@ from web.posts_store import load_posts_file, save_posts_file, _LOCK as POSTS_LOC
 
 ROOT = canonical_data_root(allow_repo_fallback=Path(__file__).resolve().parent.parent)
 _LOCK = threading.RLock()
+DEFAULT_DAILY_SLOTS = ("11:30", "19:30")
+DEFAULT_POSTS_PER_DAY = 2
 _THREAD = None
 _OBSERVED = {}
 _STATUS = {"alive": False, "last_cycle_at": "", "error": ""}
@@ -101,8 +103,8 @@ def sync_group_daily_plan(previous, group, root=None):
     root = Path(root or ROOT)
     gid = str(group["id"])
     config = group.get("schedule_config") or {}
-    times = normalize_daily_slots(config.get("times") or ["11:30", "19:30"])
-    old_times = normalize_daily_slots((previous or {}).get("schedule_config", {}).get("times") or ["11:30", "19:30"])
+    times = normalize_daily_slots(config.get("times") or list(DEFAULT_DAILY_SLOTS))
+    old_times = normalize_daily_slots((previous or {}).get("schedule_config", {}).get("times") or list(DEFAULT_DAILY_SLOTS))
     if times == old_times and config.get("stagger_minutes", 15) == ((previous or {}).get("schedule_config") or {}).get("stagger_minutes", 15):
         return None
     with _LOCK:
@@ -140,7 +142,7 @@ def save_plan(plan, pages, groups, root=None):
     page_map = {str(p["page_id"]): p for p in pages}
     if not selected or selected - page_map.keys():
         raise ValueError("Select existing Pages or Page groups for daily posting")
-    slots = plan.get("slots") or ["11:30", "19:30"]
+    slots = plan.get("slots") or list(DEFAULT_DAILY_SLOTS)
     normalized = normalize_daily_slots(slots)
     limit = plan.get("posts_per_day", len(normalized))
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= len(set(normalized)):
@@ -166,7 +168,7 @@ def save_plan(plan, pages, groups, root=None):
               "updated_at": datetime.now().isoformat(timespec="seconds")}
     if len(group_ids) == 1 and stored["id"] == f"group:{group_ids[0]}":
         stored["group_schedule_times"] = normalize_daily_slots(
-            (group_map[group_ids[0]].get("schedule_config") or {}).get("times") or ["11:30", "19:30"])
+            (group_map[group_ids[0]].get("schedule_config") or {}).get("times") or list(DEFAULT_DAILY_SLOTS))
     with _LOCK:
         saved = settings(root)
         saved["plans"] = [p for p in saved["plans"] if p["id"] != stored["id"]] + [stored]
@@ -258,8 +260,14 @@ def reserve_recovery(replacement, original, posts, root=None):
     the existing worker recover an interruption before the JSON queue save.
     """
     root = Path(root or ROOT)
-    sha = replacement["source_sha256"]
+    from src.content_packages import scheduled_video_path
+    from src.video_recovery_media import file_digest
+    selected = scheduled_video_path(root / "output", replacement["media_file"])
     with _LOCK, _connect(root) as db:
+        sha = file_digest(selected)
+        if (sha != replacement.get("replacement_video_sha256")
+                or sha != replacement.get("source_sha256")):
+            raise ValueError("MP4 đã thay đổi sau khi duyệt; kiểm tra lại clip và Content trước khi tạo lịch.")
         prior = db.execute("SELECT * FROM sources WHERE sha256=?", (sha,)).fetchone()
         permitted = {original["id"], replacement["id"]}
         if prior and prior["published"]:
@@ -268,8 +276,6 @@ def reserve_recovery(replacement, original, posts, root=None):
             raise ValueError("Video đã được giữ cho bài/nhóm khác; chọn clip chưa được phân bổ.")
         # Legacy rows may predate the hash ledger. Compare same-sized held
         # files before claiming an alias with a different basename.
-        from src.content_packages import scheduled_video_path
-        selected = scheduled_video_path(root / "output", replacement["media_file"])
         for other in posts:
             if other.get("id") in permitted or other.get("source_sha256") or not other.get("page_id") or other.get("status") in ("superseded", "cancelled"):
                 continue
@@ -333,10 +339,16 @@ def pressure(root=None):
     output.mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(output).free
     count = len([p for p in output.glob("*.mp4") if ".rendering." not in p.name])
-    reason = ("disk_pressure" if free < cfg["min_free_gb"] * 1024**3 else
-              "backlog_limit" if count >= cfg["max_backlog"] else "")
-    return {"paused": bool(reason), "reason": reason, "backlog": count,
-            "free_gb": round(free / 1024**3, 2), "max_backlog": cfg["max_backlog"]}
+    disk_blocked = free < cfg["min_free_gb"] * 1024**3
+    backlog_blocked = count >= cfg["max_backlog"]
+    # A full output directory is a safety stop for intake, not a reason to
+    # strand jobs that were already accepted. Render jobs write hidden temp
+    # files and can finish while the publisher drains completed MP4s.
+    reason = "disk_pressure" if disk_blocked else "backlog_limit" if backlog_blocked else ""
+    return {"paused": bool(reason), "reason": reason,
+            "disk_blocked": disk_blocked, "backlog_blocked": backlog_blocked,
+            "backlog": count, "free_gb": round(free / 1024**3, 2),
+            "max_backlog": cfg["max_backlog"]}
 
 
 def _metadata(path, jobs):
@@ -426,7 +438,8 @@ def process_once(*, root=None, pages=None, groups=None, token_groups=None, now=N
         return {"imported": 0, "assigned": 0, "disabled": True}
     output = (root / "output").resolve()
     output.mkdir(parents=True, exist_ok=True)
-    jobs = _read(root / "jobs.json", [])
+    from src.job_store import load as load_job_rows
+    jobs = load_job_rows(root / "jobs.json")
     imported = assigned = 0
     with _LOCK, POSTS_LOCK, _connect(root) as db:
         posts = load_posts_file(root / "posts.json")
@@ -471,7 +484,11 @@ def process_once(*, root=None, pages=None, groups=None, token_groups=None, now=N
                     if intake_post and intake_post.get("output_pipeline") and not intake_post.get("page_id"):
                         intake_post.update({"status": "superseded", "superseded_by": post["id"]})
         scanned = 0
+        from src.media_quality_gate import short_clip_errors
+        invalid_clips = short_clip_errors(jobs)
         for path in sorted(output.glob("*.mp4"), key=lambda p: p.stat().st_mtime):
+            if path.name in invalid_clips:
+                continue
             if ".rendering." in path.name or not path.resolve().is_relative_to(output):
                 continue
             signature = (path.stat().st_size, path.stat().st_mtime_ns)

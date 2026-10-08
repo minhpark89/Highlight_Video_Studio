@@ -139,6 +139,12 @@ def _get_whisper_model(update_status=None):
 
 
 def _transcribe_whisper(audio_path, update_status=None, **options):
+    from src.long_transcription import INFERENCE_LOCK
+    with INFERENCE_LOCK:
+        return _transcribe_whisper_once(audio_path, update_status, **options)
+
+
+def _transcribe_whisper_once(audio_path, update_status=None, **options):
     """Consume lazy inference inside the CUDA guard; discard partial GPU output."""
     global _WHISPER_CUDA_FAILED
     model, device, compute_type = _get_whisper_model(update_status)
@@ -230,17 +236,31 @@ def _parse_ytdlp_json3(path: Path):
     with open(path, "r", encoding="utf-8") as handle:
         payload = json.load(handle)
     items = []
-    for event in payload.get("events", []):
+    events = payload.get("events", [])
+    for event_index, event in enumerate(events):
         segments = event.get("segs") or []
         text = "".join(str(part.get("utf8") or "") for part in segments)
         text = re.sub(r"\s+", " ", text).strip()
         if not text:
             continue
-        items.append({
+        item = {
             "start": float(event.get("tStartMs", 0)) / 1000.0,
             "duration": max(float(event.get("dDurationMs", 0)) / 1000.0, 0.1),
             "text": text,
-        })
+        }
+        # JSON3 automatic captions contain per-word offsets. Preserve them;
+        # a plain multi-word cue with no offsets must remain segment timing.
+        if any("tOffsetMs" in part for part in segments) and all(len(str(part.get("utf8") or "").split()) <= 1 for part in segments):
+            end = item["start"] + item["duration"]
+            if event_index + 1 < len(events):
+                next_start = float(events[event_index + 1].get("tStartMs", 0)) / 1000
+                if next_start > item["start"]:
+                    end = min(end, next_start)
+            timed = [(str(part.get("utf8") or "").strip(), item["start"] + float(part.get("tOffsetMs", 0)) / 1000)
+                     for part in segments if str(part.get("utf8") or "").strip()]
+            item["words"] = [{"word": word, "start": start, "end": timed[index + 1][1] if index + 1 < len(timed) else end}
+                             for index, (word, start) in enumerate(timed)]
+        items.append(item)
     return items
 
 
@@ -314,249 +334,59 @@ def _chrome_cookie_specs():
 
 
 def download_video_and_audio(url: str, job_id: str, update_status=None):
-    """
-    Tải video siêu tốc bằng yt-dlp với 8 luồng song song.
-    Mặc định: Tải trực tiếp siêu tốc KHÔNG dùng cookie để đạt tốc độ tối đa và không phụ thuộc trình duyệt.
-    Fallback: Nếu gặp bot-check/HTTP 403, dùng Chrome profile của đúng thư mục cài hiện tại.
-    """
-    if update_status:
-        update_status("Đang tải video siêu tốc bằng yt-dlp đa luồng (8 connections)...")
-    
-    out_video = DOWNLOADS_DIR / f"{job_id}.mp4"
-    out_audio = TEMP_DIR / f"{job_id}.mp3"
-    
-    base_args = []
-    if NODE_BIN and Path(NODE_BIN).exists():
-        base_args.extend(["--js-runtimes", f"node:{NODE_BIN}"])
+    from src.media_download import download
+    return download(sys.modules[__name__], url, job_id, update_status)
 
-    def try_download(use_fallback=False, cookie_spec=None):
-        dl_args = list(base_args)
-        if use_fallback:
-            if cookie_spec:
-                dl_args.extend(["--cookies-from-browser", cookie_spec])
-            elif COOKIES_FILE.is_file():
-                dl_args.extend(["--cookies", str(COOKIES_FILE)])
-
-        info_cmd = [YT_DLP_BIN, "--dump-json", "--no-warnings"] + dl_args + [url]
-        info_proc = subprocess.run(info_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180, creationflags=NO_WINDOW)
-        video_title = "YouTube Video"
-        duration = 0
-        if info_proc.returncode == 0 and info_proc.stdout:
-            try:
-                info = json.loads(info_proc.stdout.strip().split("\n")[0])
-                video_title = info.get("title", video_title)
-                duration = info.get("duration", 0)
-            except Exception:
-                pass
-
-        cmd = [
-            YT_DLP_BIN,
-            "-N", "8",
-            "--concurrent-fragments", "8",
-            "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
-            "--merge-output-format", "mp4",
-            "-o", str(out_video),
-            "--no-playlist"
-        ] + dl_args + [url]
-        res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800, creationflags=NO_WINDOW)
-        return res, video_title, duration
-
-    # Bước 1: Tải trực tiếp siêu tốc (Không cookies)
-    res, video_title, duration = try_download(use_fallback=False)
-    
-    # Bước 2: Kiểm tra nếu gặp lỗi bot check hoặc 403, kích hoạt fallback Chrome Local Profile
-    if res.returncode != 0 or not out_video.exists():
-        err_msg = res.stderr or ""
-        is_bot_check = any(k in err_msg.lower() for k in ["sign in to confirm", "bot", "403", "forbidden", "login"])
-        cookie_specs = _chrome_cookie_specs()
-        if is_bot_check or cookie_specs or COOKIES_FILE.is_file():
-            if update_status:
-                update_status(f"Thử lại YouTube bằng cookie Chrome profile: {cookie_specs[0] if cookie_specs else COOKIES_FILE}...")
-            fallback_specs = cookie_specs or ([None] if COOKIES_FILE.is_file() else [])
-            last_error = err_msg
-            for cookie_spec in fallback_specs:
-                res_fb, fb_title, fb_duration = try_download(use_fallback=True, cookie_spec=cookie_spec)
-                if res_fb.returncode == 0 and out_video.exists():
-                    res = res_fb
-                    if fb_title and fb_title != "YouTube Video":
-                        video_title = fb_title
-                    if fb_duration:
-                        duration = fb_duration
-                    break
-                last_error = res_fb.stderr or last_error
-            else:
-                raise RuntimeError(f"yt-dlp tải video thất bại kể cả khi dùng cookie đăng nhập Chrome: {last_error}")
-        else:
-            raise RuntimeError(f"yt-dlp tải video thất bại: {res.stderr}")
-
-    cmd_audio = [
-        "ffmpeg", "-y", "-i", str(out_video),
-        "-vn", "-acodec", "libmp3lame", "-ar", "16000", "-ac", "1", "-q:a", "2",
-        str(out_audio)
-    ]
-    audio_result = subprocess.run(cmd_audio, capture_output=True, timeout=300, creationflags=NO_WINDOW)
-    if audio_result.returncode != 0 or not out_audio.exists() or out_audio.stat().st_size == 0:
-        details = audio_result.stderr.decode("utf-8", errors="replace") if isinstance(audio_result.stderr, bytes) else str(audio_result.stderr or "")
-        raise RuntimeError(f"FFmpeg không trích xuất được audio: {details[-1200:]}")
-    
-    return {
-        "video_path": str(out_video),
-        "audio_path": str(out_audio),
-        "title": video_title,
-        "duration": duration
-    }
 
 def get_word_level_transcription(audio_path: str, start_time: float, duration: float, update_status=None):
-    """Cắt đoạn audio ngắn tương ứng với clip rồi dùng faster-whisper (CUDA float16) trích xuất từng từ kèm timestamp"""
+    from src.caption_timing import transcribe_slice
     try:
-        from faster_whisper import WhisperModel
-    except Exception:
-        WhisperModel = None
-    clip_audio_tmp = TEMP_DIR / f"sub_slice_{int(time.time()*1000)}.mp3"
-    
-    # Cắt chính xác đoạn audio ngắn này để Whisper nhận diện cực nhanh (chỉ mất 1-2s trên GPU)
-    cmd_cut = [
-        "ffmpeg", "-y",
-        "-ss", str(start_time),
-        "-t", str(duration),
-        "-i", str(audio_path),
-        "-acodec", "copy",
-        str(clip_audio_tmp)
-    ]
-    subprocess.run(cmd_cut, capture_output=True, creationflags=NO_WINDOW)
-
-    words = []
-    try:
-        segments, _ = _transcribe_whisper(str(clip_audio_tmp), update_status, word_timestamps=True, beam_size=1)
-        for s in segments:
-            if s.words:
-                for w in s.words:
-                    word_clean = w.word.strip()
-                    if word_clean:
-                        words.append({
-                            "word": word_clean,
-                            "start": float(w.start),
-                            "end": float(w.end)
-                        })
-    except Exception as e:
-        print(f"[Whisper word transcription error]: {e}")
+        return transcribe_slice(audio_path, start_time, duration, sys.modules[__name__], update_status)
+    except Exception as exc:
         if update_status:
-            update_status(f"Whisper phụ đề lỗi: {e}")
-    finally:
-        if clip_audio_tmp.exists():
-            try:
-                clip_audio_tmp.unlink()
-            except Exception:
-                pass
+            update_status("Speech alignment unavailable; using estimated segment timing: " + str(exc))
+        return []
 
-    return words
 
 def format_ass_time(seconds: float) -> str:
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = seconds % 60
-    cs = int((s - int(s)) * 100)
-    return f"{h}:{m:02d}:{int(s):02d}.{cs:02d}"
+    from src.captions import ass_time
+    return ass_time(seconds)
 
-def transcript_segments_to_words(segments, clip_start: float, clip_duration: float):
-    """Create clip-relative word timing from transcript segments.
 
-    YouTube captions already contain reliable segment timing. Reusing it avoids
-    loading Whisper once for every rendered clip and guarantees subtitles on a
-    clean installation whenever captions were available for highlight analysis.
-    """
+def transcript_segments_to_words(segments, clip_start: float, clip_duration: float, *, exact_only=False):
+    """Slice absolute source word times; never squeeze pre-cut words into a clip."""
+    from src.captions import normalize_words
     clip_end = clip_start + clip_duration
     words = []
     for segment in segments or []:
         try:
-            seg_start = float(segment.get("start", 0.0))
-            seg_end = seg_start + max(0.0, float(segment.get("duration", 0.0)))
+            seg_start = float(segment.get("start", 0))
+            seg_end = seg_start + max(0, float(segment.get("duration", 0)))
             text = str(segment.get("text") or "").strip()
-        except (TypeError, ValueError, AttributeError):
-            continue
-        if not text or seg_end <= clip_start or seg_start >= clip_end:
-            continue
+            if not math.isfinite(seg_start) or not math.isfinite(seg_end) or not text or seg_end <= clip_start or seg_start >= clip_end:
+                continue
+            source_words = segment.get("words") or []
+            if not source_words:
+                if exact_only:
+                    return []
+                tokens = text.split()
+                step = (seg_end - seg_start) / len(tokens)
+                source_words = [{"word": token, "start": seg_start + index * step,
+                                 "end": seg_start + (index + 1) * step} for index, token in enumerate(tokens)]
+            for item in source_words:
+                start, end = float(item["start"]), float(item["end"])
+                if end > clip_start and start < clip_end:
+                    words.append({"word": str(item["word"]), "start": max(0, start - clip_start),
+                                  "end": min(clip_duration, end - clip_start)})
+        except (ValueError, TypeError, KeyError, AttributeError):
+            if exact_only:
+                return []
+    return normalize_words(words, clip_duration)
 
-        tokens = [token for token in re.findall(r"[^\s]+", text) if token.strip()]
-        if not tokens:
-            continue
-        visible_start = max(seg_start, clip_start)
-        visible_end = min(max(seg_end, visible_start + 0.2), clip_end)
-        step = max(0.08, (visible_end - visible_start) / len(tokens))
-        for index, token in enumerate(tokens):
-            word_start = visible_start + index * step
-            word_end = min(visible_end, word_start + step)
-            words.append({
-                "word": token,
-                "start": max(0.0, word_start - clip_start),
-                "end": max(0.1, word_end - clip_start),
-            })
-    return words
 
-def generate_karaoke_ass(words, ass_path: str, style_name="hormozi_yellow"):
-    """Tạo file phụ đề ASS với hiệu ứng chạy chữ Karaoke (Hormozi style) nổi bật"""
-    active_color = "&H0022FFFF&" # Vàng neon nổi bật
-    inactive_color = "&H00FFFFFF&" # Trắng tinh
-    if style_name == "clean_white":
-        active_color = "&H0000FFFF&"
-    elif style_name == "neon_green":
-        active_color = "&H0033FF00&"
-
-    header = f"""[Script Info]
-Title: Highlight Video Karaoke
-ScriptType: v4.00+
-WrapStyle: 0
-ScaledBorderAndShadow: yes
-YCbCr Matrix: TV.709
-PlayResX: 1080
-PlayResY: 1920
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,82,{inactive_color},&H0000FFFF,&H00000000,&H90000000,-1,0,0,0,100,100,1,0,1,6,3,2,60,60,300,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-    if not words:
-        with open(ass_path, "w", encoding="utf-8") as f:
-            f.write(header)
-        return ass_path
-
-    # Nhóm 3-4 từ thành 1 cụm hiển thị (chunk) giúp người xem đọc lướt dễ dàng
-    GROUP_SIZE = 3
-    lines = []
-    clean_words = []
-    for w in words:
-        w_text = re.sub(r"[^\w'\-]", "", w["word"]).strip().upper()
-        if w_text:
-            clean_words.append({
-                "word": w_text,
-                "start": max(0.0, float(w["start"])),
-                "end": max(float(w["start"]) + 0.1, float(w["end"]))
-            })
-
-    for i in range(0, len(clean_words), GROUP_SIZE):
-        chunk = clean_words[i:i + GROUP_SIZE]
-        if not chunk:
-            continue
-        for idx, active_item in enumerate(chunk):
-            t_start = format_ass_time(active_item["start"])
-            t_end = format_ass_time(active_item["end"])
-            
-            # Tô màu từ đang nói (Active Karaoke word)
-            parts = []
-            for j, item in enumerate(chunk):
-                if j == idx:
-                    parts.append(r"{\c" + active_color + r"\b1\fscx112\fscy112}" + item["word"] + r"{\fscx100\fscy100\c" + inactive_color + r"\b0}")
-                else:
-                    parts.append(r"{\c" + inactive_color + r"}" + item["word"])
-            full_line = " ".join(parts)
-            lines.append(f"Dialogue: 0,{t_start},{t_end},Default,,0,0,0,,{full_line}")
-
-    with open(ass_path, "w", encoding="utf-8") as f:
-        f.write(header + "\n".join(lines) + "\n")
-    return ass_path
+def generate_karaoke_ass(words, ass_path: str, style_name="hormozi_yellow", *, width=1080, height=1920):
+    from src.captions import write_ass
+    return write_ass(words, ass_path, style_name, width=width, height=height)
 
 def transcribe_local_whisper(audio_path: str, update_status=None):
     """Transcribe a video with verified CUDA or a portable CPU fallback."""
@@ -566,17 +396,9 @@ def transcribe_local_whisper(audio_path: str, update_status=None):
         raise RuntimeError(
             "Video không có phụ đề YouTube và bộ nhận diện giọng nói faster-whisper chưa được cài đặt."
         ) from exc
-    segments, info = _transcribe_whisper(audio_path, update_status, beam_size=1)
-    results = []
-    for s in segments:
-        results.append({
-            "start": s.start,
-            "duration": s.end - s.start,
-            "text": s.text.strip()
-        })
-    if update_status:
-        update_status(f"Whisper hoàn tất: {len(results)} đoạn transcript.")
-    return results
+    from src.long_transcription import transcribe
+    return transcribe(audio_path, sys.modules[__name__], update_status)
+
 
 def _fallback_highlights(transcript_items, num_clips=3, target_length="auto", video_duration=None):
     """Build exactly the requested number of usable clips when the LLM fails or under-returns."""
@@ -628,6 +450,7 @@ def _fallback_highlights(transcript_items, num_clips=3, target_length="auto", vi
 
 
 def _ensure_highlight_count(clips, transcript_items, num_clips=3, target_length="auto", video_duration=None):
+    from src.render_quality import seconds
     try:
         requested = max(1, min(10, int(num_clips)))
     except (TypeError, ValueError):
@@ -635,14 +458,16 @@ def _ensure_highlight_count(clips, transcript_items, num_clips=3, target_length=
     result = []
     for clip in clips or []:
         try:
-            start = float(clip.get("start", clip.get("start_time")))
-            end = float(clip.get("end", clip.get("end_time")))
+            start = seconds(clip.get("start", clip.get("start_time")))
+            end = seconds(clip.get("end", clip.get("end_time")))
             if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
                 continue
             if video_duration is not None:
                 if start >= video_duration:
                     continue
                 end = min(end, video_duration)
+            if end - start < min(15, video_duration or 15):
+                continue
             result.append({**clip, "start": start, "start_time": start, "end": end, "end_time": end})
         except (TypeError, ValueError, AttributeError):
             continue
@@ -694,7 +519,7 @@ def ask_llm_for_highlights(transcript_items, *args, num_clips=3, target_length="
     lines = []
     for item in transcript_items:
         m, s = divmod(int(item['start']), 60)
-        lines.append(f"[{m:02d}:{s:02d}] {item['text']}")
+        lines.append(f"[{float(item['start']):.2f} seconds | {m:02d}:{s:02d}] {item['text']}")
     full_text = "\n".join(lines)
     
     if len(full_text) > 35000:
@@ -712,6 +537,7 @@ TIÊU CHÍ LỌC:
 - Thời lượng video thật: {video_duration if video_duration is not None else 'the transcript timeline'} giây. Mọi mốc cắt phải nằm trong video này; không tạo timestamp bên ngoài video.
 
 ĐỊNH DẠNG TRẢ VỀ: Trả về duy nhất một JSON Array hợp lệ, không giải thích gì thêm:
+start_time và end_time là tổng số giây, không phải phút.giây. Ví dụ 13:08 là 788 giây, không phải 13.08.
 [
   {{
     "start_time": 12.5,
@@ -746,8 +572,9 @@ Dưới đây là transcript có timestamp:
         normalized_clips = []
         raw_list = clips if isinstance(clips, list) else [clips]
         for c in raw_list:
-            s_time = float(c.get("start_time", c.get("start", 0.0)))
-            e_time = float(c.get("end_time", c.get("end", s_time + 45.0)))
+            from src.render_quality import seconds
+            s_time = seconds(c.get("start_time", c.get("start", 0.0)))
+            e_time = seconds(c.get("end_time", c.get("end", s_time + 45.0)))
             h_title = c.get("hook_title", c.get("title", "Highlight Clip"))
             c_summary = c.get("summary", c.get("reason", ""))
             v_score = int(c.get("viral_score", 88))
@@ -803,14 +630,22 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
         update_status(f"Đang phân tích lời thoại và tạo phụ đề chạy chữ ({subtitle_style})...")
 
     # 1. Tạo phụ đề ASS Karaoke từ đoạn audio
-    ass_path = TEMP_DIR / f"{Path(output_path).stem}.ass"
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    ass_path = TEMP_DIR / f"{Path(output_path).stem}.{uuid.uuid4().hex}.ass"
     words = []
     if subtitle_style and subtitle_style != "none":
-        words = transcript_segments_to_words(kwargs.get("all_segments"), start_time, duration)
-        if not words and audio_path and Path(audio_path).exists():
-            words = get_word_level_transcription(audio_path, start_time, duration, update_status=update_status)
+        segments = kwargs.get("all_segments")
+        words = transcript_segments_to_words(segments, start_time, duration, exact_only=True)
+        timing = kwargs.get("subtitle_timing") or "accurate"
+        if not words and timing != "fast":
+            words = get_word_level_transcription(source_video, start_time, duration, update_status=update_status)
+        if not words:
+            words = transcript_segments_to_words(segments, start_time, duration)
+            if words and update_status:
+                update_status("Phụ đề dùng thời gian ước lượng theo câu; chưa có timestamp từng từ từ audio.")
         if words:
-            generate_karaoke_ass(words, str(ass_path), style_name=subtitle_style)
+            width, height = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080)}.get(aspect_ratio, (1920, 1080))
+            generate_karaoke_ass(words, str(ass_path), style_name=subtitle_style, width=width, height=height)
 
     if update_status:
         update_status(f"Đang render video 9:16 ({duration:.1f}s) qua GPU (auto)...")
@@ -821,7 +656,7 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
             vf = "split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=20[bg];[b]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2"
         else:
             # Crop 9:16 ở giữa khung hình (1080x1920)
-            vf = "scale=-1:1920,crop=1080:1920:(in_w-1080)/2:0"
+            vf = "scale=1080:1920:force_original_aspect_ratio=increase:force_divisible_by=2,crop=1080:1920"
     elif aspect_ratio == "1:1":
         vf = "crop=min(in_w\\,in_h):min(in_w\\,in_h),scale=1080:1080"
     else:
@@ -831,13 +666,18 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
 
     # Ghép filter phụ đề ASS nếu có. Video nguồn thường đã burn caption sẵn;
     # che mờ vùng caption của nguồn để tránh hai lớp chữ chồng nhau sau khi crop 9:16.
-    if ass_path.exists() and ass_path.stat().st_size > 300:
+    if words and ass_path.exists():
         if aspect_ratio == "9:16" and pipeline_cfg.get("source_caption_cleanup", True):
-            vf = f"{vf},drawbox=x=0:y=ih*0.70:w=iw:h=ih*0.22:color=black@0.90:t=fill"
+            # Original burned-in captions can touch the bottom edge. Cover the
+            # entire remaining band before drawing our new word-timed captions.
+            vf = f"{vf},drawbox=x=0:y=ih*0.70:w=iw:h=ih*0.30:color=black:t=fill"
         # Đường dẫn cho FFmpeg trên Windows cần escape dấu hai chấm và gạch chéo
-        ass_str = str(ass_path).replace("\\", "/").replace(":", "\\:")
-        vf = f"{vf},subtitles='{ass_str}'"
+        from src.captions import FONTS_DIR
+        ass_str = str(ass_path).replace("\\", "/").replace(":", "\\:").replace("'", "'\\\\''")
+        fonts_str = str(FONTS_DIR).replace("\\", "/").replace(":", "\\:").replace("'", "'\\\\''")
+        vf = f"{vf},subtitles=filename='{ass_str}':fontsdir='{fonts_str}'"
     configured = str(pipeline_cfg.get("encoder") or "auto").lower()
+    vf += ",setsar=1,setpts=PTS-STARTPTS"
     env_encoder = os.environ.get("HIGHLIGHT_ENCODER", "").lower()
     encoder = configured if configured in ENCODER_CODECS and configured != "auto" else (env_encoder or _PROFILE_ENCODER or "cpu")
     if encoder not in ENCODER_CODECS:
@@ -848,8 +688,8 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
     def build_command(selected_encoder):
         selected_codec = ENCODER_CODECS[selected_encoder]
         command = [
-            "ffmpeg", "-y", "-ss", str(start_time), "-t", str(duration),
-            "-i", str(source_video), "-vf", vf, "-c:v", selected_codec,
+            "ffmpeg", "-y", "-ss", str(start_time), "-i", str(source_video), "-t", str(duration),
+            "-vf", vf, "-r", "30", "-fps_mode", "cfr", "-c:v", selected_codec,
         ]
         if selected_encoder == "cpu":
             command.extend(["-preset", "veryfast", "-crf", crf])
@@ -859,7 +699,8 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
             command.extend(["-preset", "veryfast", "-global_quality", crf])
         else:
             command.extend(["-quality", "speed", "-qp_i", crf, "-qp_p", crf])
-        command.extend(["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output_path)])
+        command.extend(["-af", "asetpts=PTS-STARTPTS,aresample=async=1:first_pts=0",
+                        "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output_path)])
         return command
 
     if update_status:
@@ -881,7 +722,8 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
             temporary_output.unlink(missing_ok=True)
             raise RuntimeError(f"FFmpeg render thất bại: {rendered.stderr}")
     try:
-        probe_video(temporary_output, allow_rendering=True)
+        from src.render_quality import validate_render
+        validate_render(temporary_output, duration)
     except Exception:
         temporary_output.unlink(missing_ok=True)
         raise
@@ -889,7 +731,3 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
     os.replace(temporary_output, final_output)
 
     return final_output
-
-
-
-

@@ -88,6 +88,7 @@ def test_real_english_revalidation_does_not_rewrite_existing_article(repair):
     article = old_article()
     article['title'] = 'Bodycam: Unpacking the Hype, Visual Realism, and Gaming Implications'
     article['description'] = '<p>Even ideal weapon builds depend heavily on smart movement discipline and engagement distance management.</p>' * 45 + \
+        '<img src="https://img.test/hero.jpg"><img src="https://img.test/one.jpg"><img src="https://img.test/two.jpg">' + \
         f'<iframe src="https://www.youtube-nocookie.com/embed/{YOUTUBE_ID}" title="Original video"></iframe>'
     repair.read_existing_article.return_value = article
     generated = packages.generate_package('Official launch trailer', mode='no_llm', article_url=URL)

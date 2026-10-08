@@ -7,9 +7,9 @@ class YouTubeEmbedPublishTests(unittest.TestCase):
         from core.website_article_service import WebsiteArticleService, WebsiteServiceError
         service = WebsiteArticleService.__new__(WebsiteArticleService)
         service.cfg = mock.Mock(timeout=3)
-        article = ("<section><h2>Original video summary</h2>" + ("source context " * 620) +
+        article = ("<section><h2>Original video summary</h2><p>" + ("source context " * 620) + "</p>" +
                    "<img src='https://img.test/hero.jpg'><img src='https://img.test/one.jpg'>" +
-                   "<img src='https://img.test/two.jpg'>Full Uncut Footage</section>")
+                   "<img src='https://img.test/two.jpg'>Full Uncut Footage<iframe src='https://www.youtube-nocookie.com/embed/2GdRyatht4E'></iframe></section>")
         with mock.patch("core.website_article_service.requests.get", return_value=mock.Mock(
             status_code=200, url="https://example.test/blog/article", text=article
         )):

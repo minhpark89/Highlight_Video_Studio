@@ -1,18 +1,20 @@
 /* Verified stock selection and a local render fallback. No upload on selection. */
 let recoveryCandidates = [], recoveryOffset = 0, recoveryNext = null, recoveryRenderTimer = null;
+let recoveryInventoryGeneration = 0;
 function recoverySize(bytes) { return (Number(bytes || 0) / 1048576).toFixed(1) + ' MB'; }
 function recoveryCard(item) {
   const info = item.duration ? `${Number(item.duration).toFixed(1)} giây · ${Number(item.width)}×${Number(item.height)} · ${recoverySize(item.size)}` : '';
   return `<label style="display:block;border:1px solid ${item.valid ? '#475569' : '#7f1d1d'};border-radius:8px;padding:10px;margin:8px 0;overflow-wrap:anywhere;">
     <input type="radio" name="recovery-video-choice" value="${escapeHtml(item.filename)}" ${item.valid ? '' : 'disabled'} onchange="chooseRecoveryVideo(this.value)">
     <b>${escapeHtml(item.title || item.filename)}</b><div>${escapeHtml(info)}</div>
-    <small>${escapeHtml(item.filename)}</small><div style="color:${item.valid ? '#86efac' : '#fca5a5'};">${item.valid ? 'MP4 đã kiểm tra' + (item.same_file ? ' · File hiện tại; nếu Meta vẫn từ chối, dùng render lại.' : '') : escapeHtml(item.reason)}</div>
+    <small>${escapeHtml(item.filename)}</small><div style="color:${item.valid ? '#86efac' : '#fca5a5'};">${item.valid ? 'MP4 đã kiểm tra' + (item.ready_content ? ' · Website/First Comment sẵn' : '') + (item.same_file ? ' · File hiện tại; nếu Meta vẫn từ chối, dùng render lại.' : '') : escapeHtml(item.reason)}</div>
     ${item.source_url ? `<a href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener">Xem video gốc</a>` : ''}</label>`;
 }
 async function mountRecoveryVideos(body, postId) {
   clearTimeout(recoveryRenderTimer); recoveryCandidates = []; recoveryOffset = 0;
   const container = document.createElement('div'); container.style = 'margin-top:16px;';
-  container.innerHTML = `<div style="color:#fbbf24;margin-bottom:8px;">Chọn clip đã kiểm tra trong kho. App chuẩn bị Content, Website có embed video gốc và First Comment đúng clip trước khi đăng.</div>
+  container.innerHTML = `<div style="color:#fbbf24;margin-bottom:8px;">Chọn Đăng ngay hoặc lên lịch rồi bấm Phục hồi nhanh. App ưu tiên clip có Website/First Comment sẵn, chỉ render khi kho không có clip phù hợp, rồi tự chuẩn bị bài theo lựa chọn. Có thể chọn thủ công và xem trước bên dưới.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;"><button type="button" class="btn btn-primary btn-sm" id="recovery-auto" onclick="autoRecoverVideo()">⚡ Tự chọn &amp; phục hồi nhanh</button></div>
     <div id="recovery-stock-status" role="status"></div><div id="recovery-stock-list"></div>
     <div style="display:flex;gap:8px;"><button type="button" id="recovery-prev" class="btn btn-outline btn-sm" onclick="loadRecoveryVideos(Math.max(0,recoveryOffset-12))">Trước</button><button type="button" id="recovery-next" class="btn btn-outline btn-sm" onclick="loadRecoveryVideos(recoveryNext)">Xem thêm</button></div>
     <input id="meta-replacement-file" type="hidden"><div id="recovery-selected" style="margin:10px 0;color:#86efac;"></div>
@@ -23,7 +25,59 @@ async function mountRecoveryVideos(body, postId) {
   body.appendChild(container);
   document.getElementById('meta-replace-failed').style.display = '';
   document.getElementById('meta-replace-failed').disabled = true;
+  trackRecoveryOperation(postId);
   await loadRecoveryVideos(0, postId);
+}
+
+async function autoRecoverVideo() {
+  if (metaFinishBusy || !currentMetaDiagnosis?.diagnosis?.can_replace_failed_video) return;
+  const postId = currentMetaDiagnosisPost;
+  const mode = document.getElementById('meta-replacement-mode')?.value || 'app_queue';
+  const schedule = document.getElementById('meta-replacement-schedule')?.value || null;
+  if (mode === 'meta_scheduled' && !schedule) {
+    recoveryFeedback('Chọn giờ Meta giữ lịch trước.', true);
+    return;
+  }
+  const preferred = recoveryCandidates
+    .filter(row => row.valid && !row.same_file)
+    .sort((a, b) => (a.ready_content ? 0 : 1) - (b.ready_content ? 0 : 1)
+      || (a.same_source ? 0 : 1) - (b.same_source ? 0 : 1)
+      || String(a.filename || '').localeCompare(String(b.filename || '')))[0];
+  const payload = {mode, schedule_time: schedule, render_if_missing: true,
+    background: !preferred};
+  if (preferred) payload.filename = preferred.filename;
+  setRecoveryBusy(true);
+  recoveryFeedback(preferred
+    ? 'Đang dùng MP4 đã kiểm tra: ' + preferred.filename + '\u2026'
+    : 'Chưa thấy clip phù hợp trong trang đầu; đang tìm trong kho');
+  let accepted = false;
+  try {
+    let response = await fetch('/api/posts/' + encodeURIComponent(postId) + '/auto-recover', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    let data = await response.json();
+    // Keep a verified filename when a publisher cycle temporarily owns the lock.
+    if (!response.ok && data.busy && preferred) {
+      payload.background = true;
+      response = await fetch('/api/posts/' + encodeURIComponent(postId) + '/auto-recover', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      data = await response.json();
+    }
+    if (!recoveryIsVisible(postId)) return;
+    if (!response.ok || !data.success) throw new Error(data.error || 'Chưa phục hồi được');
+    accepted = acceptRecoveryResult(data, postId);
+    if (!accepted && data.render_started) showRecoveryRenderTask(data.task, postId);
+    if (!accepted && data.post_id) trackReplacementPost(data.post_id, postId);
+  } catch (error) {
+    if (recoveryIsVisible(postId)) recoveryFeedback(error.message, true);
+  } finally {
+    if (!accepted && recoveryIsVisible(postId)) setRecoveryBusy(false);
+  }
 }
 function chooseRecoveryVideo(filename) {
   const item = recoveryCandidates.find(row => row.filename === filename && row.valid);
@@ -33,18 +87,20 @@ function chooseRecoveryVideo(filename) {
   const preview = document.getElementById('recovery-preview');
   preview.src = '/api/posts/' + encodeURIComponent(currentMetaDiagnosisPost) + '/recovery-preview?filename=' + encodeURIComponent(filename);
   preview.style.display = 'block';
-  document.getElementById('meta-replace-failed').disabled = false;
+  setRecoveryBusy(metaFinishBusy);
   document.querySelectorAll('input[name="recovery-video-choice"]').forEach(input => { input.checked = input.value === filename; });
 }
 async function loadRecoveryVideos(offset, postId = currentMetaDiagnosisPost) {
   if (offset == null || postId !== currentMetaDiagnosisPost) return;
-  const status = document.getElementById('recovery-stock-status'); if (!status) return;
+  const generation = ++recoveryInventoryGeneration;
+  const status = document.getElementById('recovery-stock-status');
+  if (!status) return;
   status.textContent = 'Đang kiểm tra MP4, thời lượng và nguồn của 12 clip...';
   document.getElementById('recovery-next').disabled = true;
   try {
-    const response = await fetch('/api/posts/' + encodeURIComponent(postId) + '/recovery-videos?offset=' + offset);
-    const data = await response.json(); if (postId !== currentMetaDiagnosisPost || !document.getElementById('recovery-stock-list')) return;
-    if (!response.ok || !data.success) throw new Error(data.error || 'Không đọc được kho');
+    const url = '/api/posts/' + encodeURIComponent(postId) + '/recovery-videos?offset=' + offset;
+    const data = await recoveryJson(url);
+    if (generation !== recoveryInventoryGeneration || !recoveryIsVisible(postId)) return;
     recoveryOffset = data.offset; recoveryNext = data.next_offset;
     const rendered = recoveryCandidates.filter(row => row.rendered);
     recoveryCandidates = [...data.candidates, ...rendered];
@@ -55,7 +111,17 @@ async function loadRecoveryVideos(offset, postId = currentMetaDiagnosisPost) {
     const selected = document.getElementById('meta-replacement-file').value;
     document.querySelectorAll('input[name="recovery-video-choice"]').forEach(input => { input.checked = input.value === selected; });
     if (data.render_task) showRecoveryRenderTask(data.render_task, postId);
-  } catch (error) { if (postId === currentMetaDiagnosisPost) status.textContent = error.message; }
+  } catch (error) {
+    if (generation !== recoveryInventoryGeneration || !recoveryIsVisible(postId)) return;
+    const message = error.name === 'AbortError' ? 'Kho phản hồi quá chậm; vui lòng thử lại.' : error.message;
+    status.textContent = message + ' ';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn btn-outline btn-sm';
+    retry.textContent = 'Thử lại';
+    retry.addEventListener('click', () => loadRecoveryVideos(offset, postId));
+    status.appendChild(retry);
+  }
 }
 function showRecoveryRenderTask(task, postId) {
   if (postId !== currentMetaDiagnosisPost) return;
@@ -64,12 +130,17 @@ function showRecoveryRenderTask(task, postId) {
   const active = ['queued', 'running'].includes(task.status);
   document.getElementById('recovery-render').disabled = active;
   clearTimeout(recoveryRenderTimer);
+  if (task.replacement_post_id) {
+    trackReplacementPost(task.replacement_post_id, postId);
+    document.getElementById('recovery-rendered-choice').innerHTML = '<div style="color:#86efac;">Đã tạo bài thay thế; Content đang được xác minh trước khi đăng.</div>';
+    return;
+  }
   if (task.status === 'ready') {
     const candidate = {...task, valid: true, rendered: true};
     recoveryCandidates = [...recoveryCandidates.filter(row => row.filename !== candidate.filename), candidate];
     document.getElementById('recovery-rendered-choice').innerHTML = recoveryCard(candidate);
   }
-  if (active) recoveryRenderTimer = setTimeout(() => pollRecoveryRender(postId), 2000);
+  if (active || task.auto_recovery_pending) recoveryRenderTimer = setTimeout(() => pollRecoveryRender(postId), 2000);
 }
 async function pollRecoveryRender(postId) {
   if (postId !== currentMetaDiagnosisPost || document.getElementById('modal-meta-diagnosis').style.display === 'none') return;

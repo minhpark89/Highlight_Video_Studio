@@ -53,7 +53,8 @@ def test_parallel_workers_preserve_results_upload_ids_and_concurrent_metadata(tm
     assert load_publishing_settings(tmp_path)["posting_threads"] == threads
 
 
-def test_workers_share_neither_page_nor_token_and_honor_cooldown(tmp_path):
+@pytest.mark.parametrize("force_due", [False, True])
+def test_workers_share_neither_page_nor_token_and_honor_cooldown(tmp_path, force_due):
     from web import scheduled_publisher as worker
     path = tmp_path / "posts.json"
     rows = [
@@ -77,7 +78,7 @@ def test_workers_share_neither_page_nor_token_and_honor_cooldown(tmp_path):
          mock.patch.object(worker, "_publish_claimed_post", side_effect=publish) as called, \
          mock.patch.object(worker, "remove_posted_clip_file", return_value=False):
         vault.return_value.get_token_by_id.side_effect = entry
-        result = worker.process_scheduled_posts_once(now=datetime(2026, 10, 1, 11))
+        result = worker.process_scheduled_posts_once(now=datetime(2026, 10, 1, 11), force_due=force_due)
     assert result["claimed"] == 1
     assert called.call_count == 1
     assert next(row for row in result["posts"] if row["id"] == "cooldown")["status"] == "scheduled"

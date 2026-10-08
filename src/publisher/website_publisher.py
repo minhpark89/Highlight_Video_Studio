@@ -274,6 +274,8 @@ def get_clip_metadata(clip_filename: str) -> dict:
         if not candidate:
             return False
         path = Path(candidate).expanduser()
+        if path.name.lower() != requested_name:
+            return False
         if path.is_absolute():
             return (requested.is_file()
                     and path.parent.resolve(strict=False) == (jobs_file.parent / "output").resolve(strict=False)
@@ -285,32 +287,32 @@ def get_clip_metadata(clip_filename: str) -> dict:
 
     if jobs_file.exists():
         try:
-            with open(jobs_file, "r", encoding="utf-8", errors="ignore") as f:
-                jobs = json.load(f)
-                matches = []
-                for j in jobs if isinstance(jobs, list) else []:
-                    if not isinstance(j, dict):
-                        continue
-                    for c in j.get("clips", []):
-                        if isinstance(c, dict) and _clip_matches(c.get("filename")):
-                            matches.append((j, c))
-                            break
-                if len(matches) == 1:
-                    matched_job, c = matches[0]
-                    meta["job_id"] = matched_job.get("id") or ""
-                    meta["clip_index"] = c.get("clip_index") or c.get("index") or ""
-                    meta["youtube_url"] = matched_job.get("youtube_url") or ""
-                    meta["clip_start"] = c.get("start", c.get("start_time"))
-                    meta["clip_end"] = c.get("end", c.get("end_time"))
-                    meta["clip_title"] = c.get("title") or ""
-                    meta["source_video_path"] = matched_job.get("video_path") or ""
-                    meta["description"] = matched_job.get("description") or ""
-                    meta["source_transcript_excerpt"] = matched_job.get("source_transcript_excerpt") or ""
-                    vt = (matched_job.get("video_title") or "").strip()
-                    if vt and not re.search(r'^(video highlight|job_\d+|clip_\d+)', vt, re.IGNORECASE):
-                        meta["video_title"] = vt
-                elif len(matches) > 1:
-                    logger.warning("Ambiguous clip metadata for %s in %s", requested, jobs_file)
+            from src.job_store import load as load_job_rows
+            jobs = load_job_rows(jobs_file)
+            matches = []
+            for j in jobs if isinstance(jobs, list) else []:
+                if not isinstance(j, dict):
+                    continue
+                for c in j.get("clips", []):
+                    if isinstance(c, dict) and _clip_matches(c.get("filename")):
+                        matches.append((j, c))
+                        break
+            if len(matches) == 1:
+                matched_job, c = matches[0]
+                meta["job_id"] = matched_job.get("id") or ""
+                meta["clip_index"] = c.get("clip_index") or c.get("index") or ""
+                meta["youtube_url"] = matched_job.get("youtube_url") or ""
+                meta["clip_start"] = c.get("start", c.get("start_time"))
+                meta["clip_end"] = c.get("end", c.get("end_time"))
+                meta["clip_title"] = c.get("title") or ""
+                meta["source_video_path"] = matched_job.get("video_path") or ""
+                meta["description"] = matched_job.get("description") or ""
+                meta["source_transcript_excerpt"] = matched_job.get("source_transcript_excerpt") or ""
+                vt = (matched_job.get("video_title") or "").strip()
+                if vt and not re.search(r'^(video highlight|job_\d+|clip_\d+)', vt, re.IGNORECASE):
+                    meta["video_title"] = vt
+            elif len(matches) > 1:
+                logger.warning("Ambiguous clip metadata for %s in %s", requested, jobs_file)
         except Exception:
             pass
 
@@ -1202,8 +1204,13 @@ def repair_existing_website_article(article_url, clip_filename, *, content_facto
         needs_repair = False
     except ValueError:
         needs_repair = True
-    from src.article_format import word_count
-    rewrite_article = needs_repair or bool(metadata.get("regenerate_text")) or word_count(old_body) < 600
+    from core.article_quality import article_quality
+    try:
+        article_quality(old_body, minimum_words=600, minimum_images=3)
+        quality_repair = False
+    except WebsiteServiceError:
+        quality_repair = True
+    rewrite_article = needs_repair or bool(metadata.get("regenerate_text")) or quality_repair
     if rewrite_article or not package_is_english(cached) or not cached.get("article_html"):
         progress("generating_text")
         source["description"] = _source_video_summary(source, source["article_title"])

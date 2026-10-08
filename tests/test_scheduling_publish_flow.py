@@ -1398,6 +1398,8 @@ class SchedulerWorkerHardeningTests(unittest.TestCase):
     def test_ui_has_worker_status_overdue_and_manual_trigger(self):
         root = Path(__file__).resolve().parent.parent
         html = (root / "web" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('/static/scheduler_feedback.js', html)
+        html += (root / "web/static/scheduler_feedback.js").read_text(encoding="utf-8")
         self.assertIn("/api/scheduler/status", html)
         self.assertIn("/api/scheduler/run-due", html)
         self.assertIn("scheduler-overdue-banner", html)

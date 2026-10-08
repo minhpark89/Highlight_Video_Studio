@@ -417,7 +417,8 @@ class TokenVault:
         status_info = self.verify_token(entry.get("token", ""))
         entry["status"] = status_info.get("status", "ERROR")
         entry["error_msg"] = status_info.get("error", "")
-        entry["owner_name"] = status_info.get("owner_name", entry.get("owner_name", ""))
+        if status_info.get("owner_name"):
+            entry["owner_name"] = status_info["owner_name"]
         entry["pages_count"] = len(status_info.get("pages", []))
         entry["last_checked"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for field in ("owner_id", "identity_valid", "verification_level", "permissions_status", "granted_permissions"):

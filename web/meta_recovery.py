@@ -11,8 +11,15 @@ def can_refresh_existing(post):
     state = post.get("auto_finish_state")
     if state is None and post.get("meta_finish_recovery_attempts"):
         state = post.get("meta_finish_recovery_state") or "unknown"
-    return bool(not post.get("meta_cancel_requested") and post.get("status") in ("processing", "meta_scheduled") and post.get("meta_upload_video_id")
-                and state not in ("sending", "accepted", "unknown", "requesting"))
+    status = post.get("status")
+    failed_with_existing_upload = status == "failed" and post.get("retry_stage") in (
+        "meta_processing", "meta_video_rejected", "meta_schedule_rejected", "facebook_publish"
+    )
+    return bool(not post.get("meta_cancel_requested") and not post.get("local_archived_at") and
+                not post.get("outcome_unknown") and
+                (status in ("processing", "meta_scheduled") or failed_with_existing_upload) and
+                post.get("meta_upload_video_id") and
+                state not in ("sending", "accepted", "unknown", "requesting"))
 
 
 def can_retry_existing(post, seen):

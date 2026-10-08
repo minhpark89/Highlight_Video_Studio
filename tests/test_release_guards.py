@@ -398,7 +398,7 @@ class ReleaseGuardTests(unittest.TestCase):
             {"start": 12.0, "duration": 2.0, "text": "viral subtitle"},
         ], clip_start=10.0, clip_duration=5.0)
         self.assertEqual([item["word"] for item in words], [
-            "before", "clip", "starts", "viral", "subtitle"
+            "clip", "starts", "viral", "subtitle"
         ])
         self.assertGreaterEqual(words[0]["start"], 0.0)
         self.assertLessEqual(words[-1]["end"], 5.0)

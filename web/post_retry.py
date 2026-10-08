@@ -13,7 +13,7 @@ REMOTE_FIELDS = ("meta_upload_video_id", "meta_video_id", "meta_post_id", "post_
 
 def can_retry_without_upload(post):
     if (post.get("status") != "failed" or not post.get("retryable") or post.get("outcome_unknown")
-            or post.get("meta_cancel_requested") or any(post.get(k) for k in REMOTE_FIELDS)):
+            or post.get("meta_cancel_requested") or post.get("local_archived_at") or any(post.get(k) for k in REMOTE_FIELDS)):
         return False
     stage = post.get("retry_stage")
     if stage in ("meta_preflight", "local_video", "website_content", "invalid_media", "recovery_schedule"):

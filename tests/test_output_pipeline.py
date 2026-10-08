@@ -81,7 +81,7 @@ def test_default_manual_group_claims_correct_token_then_approves_meta_mode(intak
                      'page_ids': ['a'], 'page_token_bindings': {'a': 'group-token'}}]
     now = datetime(2026, 10, 5, 8)
     pipeline.save_plan({'daily': True, 'group_ids': ['chosen'], 'slots': ['19:30'],
-                        'publish_mode': 'meta_scheduled'}, pages, groups, root)
+                        'publish_mode': 'meta_scheduled', 'start_date': now.date().isoformat()}, pages, groups, root)
     assert scan(intake, pages=pages, groups=groups, token_groups=token_groups, now=now)['assigned'] == 1
     post = load_posts_file(root / 'posts.json')[0]
     assert post['status'] == 'preparing' and post['group_id'] == 'chosen'
@@ -203,7 +203,7 @@ def test_daily_plan_promotes_attached_text_only_cache_without_changing_package_i
     item.update(create_website_article=False, status='ready', website_status='not_configured',
                 website_video_status='youtube_embed_verified', error='stale', website_error='stale')
     packages._write(packages.QUEUE_FILE, [item])
-    pipeline.save_plan({'daily': True, 'page_ids': ['a'], 'slots': ['19:30']}, [{'page_id': 'a', 'token_id': 't'}], [], root)
+    pipeline.save_plan({'daily': True, 'page_ids': ['a'], 'slots': ['19:30'], 'start_date': '2026-10-06'}, [{'page_id': 'a', 'token_id': 't'}], [], root)
     pipeline.process_once(root=root, pages=[{'page_id': 'a', 'token_id': 't'}], now=datetime(2026, 10, 6, 8))
     saved = packages.get_package(item['id'])
     assert saved['create_website_article'] and saved['status'] == 'queued'
@@ -347,7 +347,8 @@ def test_daily_plan_waits_for_inventory_and_resumes_only_for_selected_groups(int
     groups = [{"id": "chosen", "page_ids": ["a"]}, {"id": "unchecked", "page_ids": ["outside"]}]
     now = datetime(2026, 10, 5, 8)
     plan = pipeline.save_plan({"daily": True, "group_ids": ["chosen"], "slots": ["11:30"],
-                              "approval_mode": "automatic", "publish_mode": "meta_scheduled"}, pages, groups, root)
+                              "approval_mode": "automatic", "publish_mode": "meta_scheduled",
+                              "start_date": now.date().isoformat()}, pages, groups, root)
     assert scan(intake, pages=pages, groups=groups, now=now)["assigned"] == 0
     (root / "output" / "clip.mp4").write_bytes(b"new inventory")
     assert scan(intake, pages=pages, groups=groups, now=now)["assigned"] == 1
@@ -484,7 +485,8 @@ def test_producer_exposes_clip_metadata_before_rendering_the_next_clip(intake, m
     monkeypatch.setattr(api, 'get_pipeline_tools', lambda: (
         lambda *args, **kw: {'video_path': root / 'source.mp4', 'audio_path': root / 'audio.wav', 'title': 'Original recording', 'duration': 100},
         lambda _: [{'text': 'The original recording', 'start': 0}], lambda *a, **kw: [],
-        lambda *a, **kw: [{'title': f'Highlight {i}', 'start': i, 'end': i+1} for i in (1,2)], render, lambda _: 'abcdefghijk'))
+        lambda *a, **kw: [{'title': f'Highlight {i}', 'start': i, 'end': i+20} for i in (1,21)],
+        render, lambda _: 'abcdefghijk'))
     api.run_job_pipeline(job)
     final = json.loads((root / 'jobs.json').read_text(encoding='utf-8'))[0]
     assert final['status'] == 'completed' and len(final['clips']) == 2, final
@@ -497,7 +499,8 @@ def test_assigned_daily_content_is_processed_before_unassigned_library_work(inta
     root, _clock = intake
     old = packages.enqueue_content_package(clip_filename='library.mp4', title='Library', mode='no_llm')
     pages = [{'page_id': 'a', 'token_id': 't'}]
-    pipeline.save_plan({'daily': True, 'page_ids': ['a'], 'slots': ['11:30']}, pages, [], root)
+    pipeline.save_plan({'daily': True, 'page_ids': ['a'], 'slots': ['11:30'],
+                        'start_date': '2026-10-05'}, pages, [], root)
     (root / 'output' / 'daily.mp4').write_bytes(b'daily video')
     scan(intake, pages=pages, now=datetime(2026,10,5,8))
     post = load_posts_file(root / 'posts.json')[0]

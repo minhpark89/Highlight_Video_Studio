@@ -503,32 +503,19 @@ class WebsiteArticleService:
 
     def verify_article_quality(self, article_url: str, *, minimum_words: int = 600,
                                minimum_images: int = 3, expected_images=None) -> Dict[str, Any]:
-        """Verify the public page still contains the required editorial blocks."""
+        """Check public editorial prose/assets; source binding is checked by embed verification."""
+        from core.article_quality import article_quality
         try:
             response = requests.get(article_url, allow_redirects=True, timeout=self.cfg.timeout)
         except requests.RequestException as exc:
-            raise WebsiteServiceError(f"KhÃ´ng xÃ¡c minh Ä‘Æ°á»£c cháº¥t lÆ°á»£ng bÃ i public: {exc}") from exc
+            raise WebsiteServiceError(f"Không xác minh được chất lượng bài public: {exc}") from exc
         if response.status_code != 200:
-            raise WebsiteServiceError(f"BÃ i public tráº£ HTTP {response.status_code}")
-        source = response.text or ""
-        article = re.search(r"<article\b[^>]*>(.*?)</article>", source, re.S | re.I)
-        if article:
-            source = article.group(1)
-        summary_start = source.find("Original video summary")
-        video_start = source.find("Full Uncut Footage", summary_start)
-        if summary_start < 0 or video_start < 0:
-            raise WebsiteServiceError("BÃ i public thiáº¿u pháº§n tÃ³m táº¯t hoáº·c video gá»‘c")
-        article_section = source[summary_start:video_start]
-        images = re.findall(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\']', source, flags=re.IGNORECASE)
-        image_count = len(set(images))
-        words = len(re.findall(r"\b[A-Za-z]+\b", re.sub(r"<[^>]+>", " ", article_section)))
-        if expected_images and any(image not in images for image in expected_images):
-            raise WebsiteServiceError("BÃ i public thiáº¿u má»™t hoáº·c nhiá»u áº£nh minh há»a Ä‘Ã£ gá»­i")
-        if image_count < minimum_images:
-            raise WebsiteServiceError(f"BÃ i public chá»‰ cÃ³ {image_count} áº£nh, cáº§n {minimum_images}")
-        if words < minimum_words:
-            raise WebsiteServiceError(f"BÃ i public chá»‰ cÃ³ {words} tá»«, cáº§n {minimum_words}")
-        return {"success": True, "url": response.url, "word_count": words, "image_count": image_count}
+            raise WebsiteServiceError(f"Bài public trả HTTP {response.status_code}")
+        expected_path = urlparse(article_url).path.rstrip("/")
+        if urlparse(str(response.url)).path.rstrip("/") != expected_path:
+            raise WebsiteServiceError("Website chuyển hướng sang trang khác; chưa xác minh được bài viết")
+        return {**article_quality(response.text or "", minimum_words=minimum_words,
+                    minimum_images=minimum_images, expected_images=expected_images), "url": response.url}
 
     def verify_article_english(self, article_url, *, public_html=None):
         """Check the rendered article, excluding scripts and navigation."""

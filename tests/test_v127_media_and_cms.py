@@ -70,7 +70,9 @@ def test_website_retry_revalidates_good_text_without_forcing_llm():
 def test_valid_cms_article_is_revalidated_without_rewrite_or_llm(tmp_path, monkeypatch):
     good = cp.fallback_package("Original recording")
     service = mock.Mock()
-    service.read_existing_article.return_value = {"title": HEADINGS[0], "description": good["article_html"] + "<h2>" + HEADINGS[2] + "</h2>"}
+    service.read_existing_article.return_value = {"title": HEADINGS[0], "description": good["article_html"] + "<h2>" + HEADINGS[2] + "</h2>" +
+        '<img src="https://img.test/hero.jpg"><img src="https://img.test/one.jpg"><img src="https://img.test/two.jpg">' +
+        '<iframe src="https://www.youtube-nocookie.com/embed/2GdRyatht4E"></iframe>'}
     monkeypatch.setattr(website, "get_website_config", lambda: ({}, tmp_path / "config.json"))
     monkeypatch.setattr(website, "WebsiteArticleService", lambda _: service)
     monkeypatch.setattr(website, "get_clip_metadata", lambda _: {"youtube_url": "https://youtu.be/2GdRyatht4E"})

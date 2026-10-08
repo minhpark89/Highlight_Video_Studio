@@ -60,13 +60,15 @@ def enqueue_first_comment(object_id, page_token, comment_text, due_at, token_id=
             "queue_id": item["id"], "due_at": item["due_at"]}
 
 
-def cancel_first_comment(post_id=None, queue_id=None, object_id=None):
+def cancel_first_comment(post_id=None, queue_id=None, object_id=None, *, blocking=True):
     """Stop pending comments for a cancelled schedule; retain posted history."""
     keys = {str(value) for value in (post_id, queue_id, object_id) if value}
     if not keys:
         return {"cancelled": 0}
     cancelled = 0
-    with _LOCK:
+    if not _LOCK.acquire(blocking=blocking):
+        return {"cancelled": 0, "pending": True}
+    try:
         # Corrupt data must block local removal rather than silently lose a queue.
         items = json.loads(QUEUE_FILE.read_text(encoding="utf-8")) if QUEUE_FILE.exists() else []
         if not isinstance(items, list):
@@ -81,6 +83,8 @@ def cancel_first_comment(post_id=None, queue_id=None, object_id=None):
                 cancelled += 1
         if cancelled:
             _save_unlocked(items)
+    finally:
+        _LOCK.release()
     return {"cancelled": cancelled}
 
 
@@ -99,6 +103,11 @@ def process_due_first_comments(poster, now=None, prepare=None):
                     readiness = prepare(item)
                 except Exception:
                     readiness = {"ready": False, "error": "Exact credential or publication verification unavailable."}
+                if readiness.get("cancelled"):
+                    item.update(status="cancelled", cancelled_at=current, page_token="",
+                                last_error=readiness.get("error") or "Operator removed the local post.")
+                    changed = True
+                    continue
                 if not readiness.get("ready"):
                     item["last_error"] = readiness.get("error", "Waiting for verified Reel publication.")
                     item["due_at"] = current + 60

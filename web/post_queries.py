@@ -6,6 +6,8 @@ REVIEW_STATUSES = {"preparing", "draft"}
 
 
 def queue_bucket(post):
+    if post.get("video_recovery_stock_claim") and not post.get("page_id") and post.get("status") == "superseded":
+        return "stock_used"
     if post.get("output_pipeline") and not post.get("page_id") and post.get("status") in REVIEW_STATUSES:
         return "stock"
     if post.get("status") in REVIEW_STATUSES:
@@ -21,7 +23,7 @@ def select_posts(posts, *, view="posts", bucket="all", group_id="", page_id="", 
     scoped = []
     for post in posts:
         kind = queue_bucket(post)
-        if view == "posts" and kind in ("stock", "preparing", "draft"):
+        if view == "posts" and kind in ("stock", "stock_used", "preparing", "draft"):
             continue
         if view == "review" and (kind not in REVIEW_STATUSES or not post.get("page_id") or not post.get("token_id")):
             continue

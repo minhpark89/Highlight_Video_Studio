@@ -106,10 +106,25 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.2.8"
+APP_VERSION = "1.3.0"
 
 @app.after_request
 def add_header(response):
+    # Queue files created by older desktop builds can contain UTF-8 decoded as
+    # a Windows code page.  Repair the response copy at the HTTP boundary so
+    # Draft/Content Studio/Posts all render clean text without rewriting the
+    # user's durable queue or changing IDs and filenames.
+    if response.mimetype == "application/json":
+        try:
+            payload = response.get_json(silent=True)
+            if payload is not None:
+                repaired = repair_mojibake(payload)
+                response.set_data(json.dumps(repaired, ensure_ascii=False, separators=(",", ":")))
+                response.headers["Content-Type"] = "application/json; charset=utf-8"
+        except (TypeError, ValueError, UnicodeError):
+            # A malformed/streaming response should retain Flask's original
+            # bytes; the endpoint's own error handling remains authoritative.
+            pass
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
@@ -239,7 +254,7 @@ def load_posts():
 
 
 def read_posts_snapshot():
-    return posts_snapshot(POSTS_FILE)
+    return [post for post in posts_snapshot(POSTS_FILE) if not post.get("local_archived_at")]
 
 
 def save_posts(posts):
@@ -256,54 +271,18 @@ from web.page_insights import PageInsightsService
 page_insights_service = PageInsightsService(BASE_DIR, token_vault, page_manager)
 
 
-JOBS_LOCK = threading.RLock()
+from src import job_store
+
+JOBS_LOCK = job_store.LOCK
+
 
 def load_jobs():
-    if not JOBS_FILE.exists():
-        return []
-    for _ in range(5):
-        try:
-            with open(JOBS_FILE, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read().strip()
-                if not content:
-                    time.sleep(0.05)
-                    continue
-                # Try standard json parse first
-                try:
-                    return json.loads(content)
-                except Exception:
-                    # Fallback to strict=False or raw_decode to prevent empty queue bug
-                    try:
-                        return json.loads(content, strict=False)
-                    except Exception:
-                        decoder = json.JSONDecoder()
-                        obj, _ = decoder.raw_decode(content)
-                        return obj
-        except Exception:
-            time.sleep(0.05)
-    return []
+    return job_store.load(JOBS_FILE)
+
 
 def save_jobs(jobs):
-    """Atomically save jobs without sharing one temp filename between workers."""
-    with JOBS_LOCK:
-        if not jobs and JOBS_FILE.exists() and JOBS_FILE.stat().st_size > 100:
-            return False
-        tmp_file = JOBS_FILE.with_name(
-            f"{JOBS_FILE.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
-        )
-        try:
-            with open(tmp_file, "w", encoding="utf-8") as handle:
-                json.dump(jobs, handle, indent=2, ensure_ascii=False)
-                handle.flush()
-                os.fsync(handle.fileno())
-            replace_with_retry(tmp_file, JOBS_FILE)
-            return True
-        finally:
-            try:
-                tmp_file.unlink(missing_ok=True)
-            except Exception:
-                pass
-    return False
+    return job_store.save(JOBS_FILE, jobs)
+
 
 def update_job_status(job_id, updates):
     # Read-modify-write is one critical section so simultaneous worker updates
@@ -344,7 +323,7 @@ def run_job_pipeline(job):
             extract_video_id,
         ) = get_pipeline_tools()
         # Bước 1: Tải video và audio
-        update_msg("Đang tải video và bóc tách âm thanh siêu tốc (-N 8)...", step=1)
+        update_msg("Đang kiểm tra video đã tải và tiếp tục tải nguồn nếu cần...", step=1)
         dl_res = download_video_and_audio(url, job_id, update_status=lambda m: update_msg(m, step=1))
         video_path = dl_res['video_path']
         audio_path = dl_res['audio_path']
@@ -383,18 +362,34 @@ def run_job_pipeline(job):
         from src.media_validation import probe_video
         duration = probe_video(video_path)["duration"] if Path(video_path).is_file() else float(duration or 0)
         update_job_status(job_id, {"duration": duration})
-        highlights = ask_llm_for_highlights(segments, num_clips=num_clips, video_duration=duration, target_length=job.get("clip_length", "auto"), criteria=job.get("highlight_criteria", "hook_viral"), hook_duration=job.get("hook_duration", 6), update_status=lambda m: update_msg(m, step=3))
+        from src.job_checkpoints import valid_plan, completed_clip
+        highlights = job.get("highlight_plan")
+        if not valid_plan(highlights, num_clips, duration):
+            highlights = ask_llm_for_highlights(
+                segments, num_clips=num_clips, video_duration=duration,
+                target_length=job.get("clip_length", "auto"), criteria=job.get("highlight_criteria", "hook_viral"),
+                hook_duration=job.get("hook_duration", 6), update_status=lambda m: update_msg(m, step=3))
         if not highlights:
             raise RuntimeError("AI không thể tìm thấy đoạn highlight phù hợp.")
+        update_job_status(job_id, {"highlight_plan": highlights})
 
         # Bước 4 & 5: Smart Reframe & Render từng clip (kèm Dynamic Subtitle)
         update_msg(f"Bắt đầu render {len(highlights)} clips highlight 9:16 (encoder tự động, tối đa {MAX_CONCURRENT_JOBS} job)...", step=4)
         rendered_clips = []
         for idx, h in enumerate(highlights, 1):
+            previous = completed_clip(job, idx, h, OUTPUT_DIR)
+            if previous:
+                rendered_clips.append(previous)
+                continue
             from src.output_pipeline import pressure
-            while pressure(BASE_DIR)["paused"]:
+            # The backlog limit pauses new intake, but it must not hold an
+            # already accepted job forever. Only a genuinely low disk volume
+            # is a hard render stop; completed MP4s can be drained in parallel.
+            while True:
                 state = pressure(BASE_DIR)
-                update_msg(f"Render tạm chờ: {state['backlog']} video trong output, còn {state['free_gb']} GB. App vẫn xử lý Content và bài đã có lịch.", step=4)
+                if not state.get("disk_blocked"):
+                    break
+                update_msg(f"Render tạm chờ: ổ đĩa còn {state['free_gb']} GB (ngưỡng an toàn). App vẫn xử lý Content và bài đã có lịch.", step=4)
                 time.sleep(5)
             update_msg(f"Đang render clip {idx}/{len(highlights)}: {h.get('title', 'Clip')}...", step=4)
             clip_file = render_highlight_clip(
@@ -408,6 +403,8 @@ def run_job_pipeline(job):
                 aspect_ratio=aspect_ratio,
                 reframe_mode=reframe_mode,
                 subtitle_style=subtitle_style,
+                subtitle_timing=job.get("subtitle_timing", "accurate"),
+                update_status=lambda m: update_msg(m, step=4),
                 all_segments=segments
             )
             if clip_file and clip_file.exists():
@@ -420,7 +417,8 @@ def run_job_pipeline(job):
                     "viral_score": h.get("viral_score", 85),
                     "start": h["start"],
                     "end": h["end"],
-                    "duration": round(h["end"] - h["start"], 1)
+                    "duration": round(h["end"] - h["start"], 1),
+                    "quality_verified": True
                 })
                 # Each complete clip can enter Content while the producer
                 # continues rendering the next one with the correct source.
@@ -640,6 +638,7 @@ def create_job():
             "aspect_ratio": data.get("aspect_ratio", "9:16"),
             "reframe_mode": data.get("reframe_mode", "face_center"),
             "subtitle_style": data.get("subtitle_style", "hormozi_yellow"),
+            "subtitle_timing": data.get("subtitle_timing", "accurate"),
             "highlight_criteria": data.get("highlight_criteria", "hook_viral"),
             "status": "queued",
             "step": 0,
@@ -664,6 +663,7 @@ def create_job():
 
 
 @app.route("/api/jobs/<job_id>/retry", methods=["POST"])
+@job_store.transaction
 def retry_job(job_id):
     jobs = load_jobs()
     found = False
@@ -681,6 +681,7 @@ def retry_job(job_id):
     return jsonify({"error": "Job not found"}), 404
 
 @app.route("/api/jobs/retry_failed", methods=["POST"])
+@job_store.transaction
 def retry_all_failed_jobs():
     jobs = load_jobs()
     count = 0
@@ -696,6 +697,7 @@ def retry_all_failed_jobs():
     return jsonify({"success": True, "count": count, "message": f"Requeued {count} failed jobs"})
 
 @app.route("/api/jobs/<job_id>", methods=["DELETE"])
+@job_store.transaction
 def delete_job(job_id):
     jobs = load_jobs()
     jobs = [j for j in jobs if j["id"] != job_id]
@@ -1199,7 +1201,7 @@ def api_dashboard_summary():
         tokens = token_vault.list_tokens(mask=True)
         groups = page_manager.list_groups()
         jobs = load_jobs()
-        data = overview(load_posts(), pages, tokens, groups, jobs)
+        data = overview(read_posts_snapshot(), pages, tokens, groups, jobs)
         data["insights"] = page_insights_service.summary(pages)
         data["mapping_health"] = page_manager.mapping_health()
         from multi_pc.publishing_settings import load_publishing_settings
@@ -3088,11 +3090,13 @@ def api_scheduler_status():
             from scheduled_publisher import sanitize_error
         return jsonify({"success": False, "error": sanitize_error(exc)}), 500
 
-    posts = load_posts()
+    from web.queue_readiness import schedule_readiness
+    posts = read_posts_snapshot()
+    tokens = {str(row["id"]): row for row in token_vault.list_tokens(mask=True)}
     now_dt = datetime.now()
     overdue = []
     for post in posts:
-        if post.get("status") not in ("scheduled", "publishing"):
+        if post.get("local_archived_at") or post.get("status") not in ("scheduled", "publishing"):
             continue
         raw_time = post.get("scheduled_time")
         if not raw_time:
@@ -3110,13 +3114,11 @@ def api_scheduler_status():
                 "status": post.get("status"),
                 "scheduled_time": post.get("scheduled_time"),
                 "late_seconds": late_seconds,
-                "actionable": post.get("status") == "scheduled",
-                "blocked_reason": (
-                    "publish outcome unknown; reconcile before retry"
-                    if post.get("status") == "publishing" else ""
-                ),
+                **schedule_readiness(post, tokens, now=now_dt),
             })
     status["overdue_count"] = len(overdue)
+    status["blocked_count"] = sum(not item["actionable"] for item in overdue)
+    status["actionable_count"] = sum(item["actionable"] for item in overdue)
     status["overdue_posts"] = overdue[:50]
     status["success"] = True
     from multi_pc.publishing_settings import load_publishing_settings, MAX_POSTING_THREADS
@@ -3143,6 +3145,32 @@ def api_scheduler_run_due():
     Reuses the same claim/duplicate guards as the background worker; no forced
     final actions and no publish-approval bypass.
     """
+    body = request.get_json(silent=True) or {}
+    if isinstance(body, dict) and body.get("background"):
+        from web.queue_readiness import schedule_readiness
+        from web.scheduled_publisher import request_publish_cycle
+        tokens = {str(row["id"]): row for row in token_vault.list_tokens(mask=True)}
+        blocked = []
+        ready = 0
+        now = datetime.now()
+        for post in read_posts_snapshot():
+            if post.get("status") != "scheduled" or post.get("local_archived_at"):
+                continue
+            try:
+                due = datetime.fromisoformat(str(post.get("scheduled_time")).replace(" ", "T"))
+                if due.timestamp() > now.timestamp():
+                    continue
+            except (ValueError, TypeError):
+                continue
+            state = schedule_readiness(post, tokens, now=now)
+            if state["actionable"]:
+                ready += 1
+            else:
+                blocked.append({"id": post["id"], **state})
+        if blocked and not ready:
+            return jsonify({"success": False, "blocked": blocked,
+                            "error": blocked[0]["blocked_reason"]}), 409
+        return jsonify({**request_publish_cycle(), "blocked": blocked}), 202
     try:
         try:
             from web.scheduled_publisher import process_scheduled_posts_once
@@ -3319,24 +3347,28 @@ def api_render_recovery(post_id):
 
 
 @app.route("/api/posts/<post_id>/replace-failed-video", methods=["POST"])
-def api_replace_failed_video(post_id):
+def api_replace_failed_video(post_id, _body=None):
     from web.scheduled_publisher import _cycle_lock
     from web.video_recovery import prepare_replacement
-    from src.video_recovery_media import checked_video
+    from src.video_recovery_media import checked_video, file_digest, reusable_content
     from src.publisher.website_publisher import get_clip_metadata
     from src import output_pipeline, content_packages
     from web.posts_store import _LOCK as posts_lock
-    body = request.get_json(silent=True) or {}
+    body = _body if _body is not None else (request.get_json(silent=True) or {})
     if not isinstance(body, dict) or body.get("confirm_replace_failed_video") is not True:
         return jsonify({"success": False, "error": "Cần xác nhận tạo lịch thay thế cho video lỗi."}), 400
+    if _body is None and body.get("background"):
+        return _queue_video_recovery(post_id, body, kind="replace")
     if not _cycle_lock.acquire(blocking=False):
-        return jsonify({"success": False, "error": "App đang xử lý bài; thử lại sau ít giây."}), 409
+        return jsonify({"success": False, "busy": True, "error": "App đang xử lý bài; thử lại sau ít giây."}), 409
     try:
         with output_pipeline._LOCK, posts_lock:
             posts = load_posts()
             post = next((p for p in posts if p.get("id") == post_id), None)
             if not post:
                 return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
+            if post.get("local_archived_at"):
+                return jsonify({"success": False, "error": "Bài đã được xóa khỏi danh sách app."}), 409
             video_id = str(post.get("meta_upload_video_id") or post.get("meta_video_id") or "")
             if str(body.get("video_id") or "") != video_id:
                 return jsonify({"success": False, "error": "Meta ID đã thay đổi; kiểm tra lại bài."}), 409
@@ -3348,11 +3380,15 @@ def api_replace_failed_video(post_id):
             seen, mapping = _inspect_post_meta(post)
             if not mapping:
                 return jsonify({"success": False, "error": "Sync Token đúng Page trước khi tạo lịch thay thế."}), 409
-            checked_video(OUTPUT_DIR, body.get("filename"), refresh=True)
             source = get_clip_metadata(body.get("filename"))
+            selected_path, _ = checked_video(OUTPUT_DIR, body.get("filename"), refresh=True)
+            reusable = reusable_content(body.get("filename"), file_digest(selected_path), source, content_packages.list_packages())
             replacement, created = prepare_replacement(posts, post, seen, OUTPUT_DIR,
                 filename=body.get("filename"), schedule_time=body.get("schedule_time"), mode=body.get("mode") or "app_queue",
                 content_policy="regenerate", source_metadata=source)
+            if reusable:
+                replacement.update(article_url=reusable["article_url"],
+                    recovery_reuse_package_id=reusable["id"], recovery_content_policy="reuse_verified")
             # Reserve first, then enqueue Content after the durable queue exists.
             # A restart can recover the intent from the same ledger.
             output_pipeline.reserve_recovery(replacement, post, posts, root=OUTPUT_DIR.parent)
@@ -3371,17 +3407,128 @@ def api_replace_failed_video(post_id):
         _cycle_lock.release()
 
 
+@app.route("/api/posts/<post_id>/auto-recover", methods=["POST"])
+def api_auto_recover_failed_video(post_id, _body=None):
+    """One-click recovery: reuse verified stock/content, otherwise start a local render."""
+    from src.video_recovery_media import inventory
+    from web.video_recovery_tasks import start_task
+    body = _body if _body is not None else (request.get_json(silent=True) or {})
+    if not isinstance(body, dict):
+        return jsonify({"success": False, "error": "Dữ liệu phục hồi không hợp lệ."}), 400
+    post = next((row for row in load_posts() if row.get("id") == post_id), None)
+    if not post:
+        return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
+    if post.get("local_archived_at"):
+        return jsonify({"success": False, "error": "Bài đã được xóa khỏi danh sách app."}), 409
+    if _body is None and body.get("background"):
+        return _queue_video_recovery(post_id, body)
+    existing = next((row for row in load_posts() if row.get("id") == post.get("replacement_post_id")), None)
+    if existing:
+        return api_replace_failed_video(post_id, _body={"confirm_replace_failed_video": True,
+            "video_id": str(post.get("meta_upload_video_id") or post.get("meta_video_id") or ""),
+            "filename": existing.get("media_file")})
+    mode = str(body.get("mode") or "app_queue")
+    schedule = body.get("schedule_time")
+    if mode not in ("app_queue", "meta_scheduled"):
+        return jsonify({"success": False, "error": "Chọn Đăng ngay bằng App hoặc Meta giữ lịch."}), 400
+    try:
+        if mode == "meta_scheduled":
+            from multi_pc.meta_scheduling import parse_meta_schedule_time
+            parse_meta_schedule_time(schedule)
+        elif schedule and datetime.fromisoformat(str(schedule).replace(" ", "T")).timestamp() <= datetime.now().timestamp():
+            raise ValueError("Chọn giờ đăng chưa qua hoặc để trống để Đăng ngay.")
+        if body.get("filename"):
+            filename = str(body["filename"])
+        else:
+            posts = load_posts()
+            filename, offset = "", 0
+            fallback = None
+            while True:
+                if _body is not None:
+                    from web.recovery_requests import progress
+                    progress(OUTPUT_DIR.parent, post_id, f"Đang kiểm tra kho: từ clip {offset + 1}.")
+                result = inventory(OUTPUT_DIR, post, posts, offset=offset, limit=12)
+                valid = [row for row in result["candidates"] if row.get("valid") and not row.get("same_file")]
+                valid.sort(key=lambda row: (not row.get("ready_content"), not row.get("same_source"), row.get("filename", "")))
+                if valid:
+                    if valid[0].get("ready_content"):
+                        filename = valid[0]["filename"]
+                        break
+                    if fallback is None or (valid[0].get("same_source") and not fallback.get("same_source")):
+                        fallback = valid[0]
+                if result["next_offset"] is None:
+                    break
+                offset = result["next_offset"]
+            if not filename and fallback:
+                filename = fallback["filename"]
+        if filename:
+            # Reuse the same guarded replacement path so claims/Meta checks are
+            # identical to the explicit picker action.
+            payload = {"confirm_replace_failed_video": True,
+                       "video_id": str(post.get("meta_upload_video_id") or post.get("meta_video_id") or ""),
+                       "filename": filename, "mode": mode, "schedule_time": schedule}
+            return api_replace_failed_video(post_id, _body=payload)
+        if body.get("render_if_missing", True) is not False:
+            seen, mapping = _inspect_post_meta(post)
+            from web.video_recovery import can_replace_failed_video
+            if not mapping or not can_replace_failed_video(post, seen):
+                return jsonify({"success": False, "error": "Meta chưa xác nhận video lỗi; hãy Kiểm tra Meta rồi thử lại."}), 409
+            task = start_task(OUTPUT_DIR.parent, post, auto_action={"mode": mode, "schedule_time": schedule})
+            return jsonify({"success": True, "render_started": True, "task": task,
+                            "message": "Kho chưa có clip đúng nguồn. App render từ video gốc rồi tự chuẩn bị Website/First Comment theo chế độ đăng đã chọn."}), 202
+        return jsonify({"success": False, "error": "Kho chưa có MP4 phù hợp với nguồn Website/First Comment."}), 409
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        return jsonify({"success": False, "error": sanitize_error(exc)}), 409
+
+
+def _queue_video_recovery(post_id, body, kind="auto"):
+    from web.recovery_requests import enqueue
+    try:
+        post = next((row for row in read_posts_snapshot() if row.get("id") == post_id), None)
+        if not post or post.get("local_archived_at"):
+            return jsonify({"success": False, "error": "Bài không còn trong danh sách app."}), 404
+        operation = enqueue(OUTPUT_DIR.parent, post_id, body, kind=kind)
+        return jsonify({"success": True, "accepted": True, "operation": operation,
+                        "message": operation["message"]}), 202
+    except (ValueError, OSError) as exc:
+        return jsonify({"success": False, "error": sanitize_error(exc)}), 409
+
+
+@app.route("/api/posts/<post_id>/recovery-operation", methods=["GET"])
+def api_recovery_operation(post_id):
+    from web.recovery_requests import operation_for
+    return jsonify({"success": True, "operation": operation_for(OUTPUT_DIR.parent, post_id)})
+
+
 def _enqueue_recovery_content(replacement, source=None):
     """Idempotent preparation, also resumed for interrupted requests at startup."""
     from src import content_packages as packages
     from src.publisher.website_publisher import get_clip_metadata
     source = source or get_clip_metadata(replacement["media_file"])
-    item = packages.ensure_content_package(clip_filename=replacement["media_file"], title=source.get("video_title") or replacement["title"],
+    reused_id = replacement.get("recovery_reuse_package_id")
+    if reused_id:
+        # Recheck byte/source binding after a restart, not just when the picker
+        # proposed it. retry_package revalidates the same URL without rerunning
+        # LLM when its English text and editorial assets are already complete.
+        from src.video_recovery_media import reusable_content, verify_recovery_digest
+        verify_recovery_digest(replacement, packages.scheduled_video_path(OUTPUT_DIR, replacement["media_file"]))
+        candidate = packages.get_package(reused_id)
+        reused = reusable_content(replacement["media_file"], replacement["source_sha256"], source, [candidate] if candidate else [])
+        if candidate and candidate.get("status") in ("queued", "running") and replacement["id"] in candidate.get("post_ids", []):
+            item = candidate
+        elif reused:
+            from web.recovery_content import attach_ready_package
+            item = attach_ready_package(packages, replacement, source)
+        else:
+            raise ValueError("Content đã chọn thay đổi hoặc không còn đúng nguồn; thử lại Website trước khi đăng.")
+    else:
+        item = None
+    item = item or packages.ensure_content_package(clip_filename=replacement["media_file"], title=source.get("video_title") or replacement["title"],
         summary=source.get("description") or "", video_url=replacement.get("video_url") or "", mode="auto",
         post_ids=[replacement["id"]], create_website_article=True, article_url=replacement.get("article_url") or "",
         source_job_id=source.get("job_id") or "", source_clip_id=str(source.get("clip_index") or ""),
         source_sha256=replacement.get("source_sha256") or "", first_comment_profile_id=replacement.get("first_comment_profile_id") or "")
-    if item.get("article_url") and item.get("status") not in ("queued", "running"):
+    if not reused_id and item.get("article_url") and item.get("status") not in ("queued", "running"):
         item = packages.retry_package(item["id"], repair_website=True, post_id=replacement["id"])
     posts = load_posts()
     row = next((p for p in posts if p.get("id") == replacement["id"]), None)
@@ -3391,6 +3538,8 @@ def _enqueue_recovery_content(replacement, source=None):
     if item.get("status") == "ready":
         with packages._POST_SYNC_LOCK:
             packages._apply_to_posts(item)
+        from web.scheduled_publisher import request_publish_cycle
+        request_publish_cycle()
     start_content_package_worker()
 
 
@@ -3469,7 +3618,18 @@ def api_recover_existing_post(post_id):
         if selected != previous:
             post.setdefault("meta_recovery_history", []).append({"from_token_id": previous, "to_token_id": selected,
                 "at": current.isoformat(), "video_id": post["meta_upload_video_id"]})
-        performed = _resume_complete_upload(post, seen, reel_poster, credential, posts, current, force_retry=True)
+        mode = str(body.get("mode") or ("meta_scheduled" if body.get("schedule_time") else "app_queue"))
+        if mode not in ("app_queue", "meta_scheduled"):
+            return jsonify({"success": False, "error": "Chọn Đăng ngay bằng App hoặc Meta giữ lịch."}), 400
+        schedule_epoch = None
+        if mode == "meta_scheduled":
+            from multi_pc.meta_scheduling import parse_meta_schedule_time
+            try:
+                schedule_epoch = parse_meta_schedule_time(body.get("schedule_time"))
+            except (TypeError, ValueError) as exc:
+                return jsonify({"success": False, "error": str(exc)}), 400
+        performed = _resume_complete_upload(post, seen, reel_poster, credential, posts, current,
+                                            force_retry=True, schedule_time=schedule_epoch)
         if not performed:
             return jsonify({"success": False, "error": "Không đủ điều kiện phục hồi; giữ nguyên bài để tiếp tục đối soát."}), 409
         state = post.get("auto_finish_state")
@@ -3568,10 +3728,11 @@ def api_finish_existing_upload(post_id):
 
 @app.route("/api/posts", methods=["GET"])
 def api_get_posts():
-    return jsonify(_enrich_post_rows(load_posts()))
+    return jsonify(_enrich_post_rows([post for post in load_posts() if not post.get("local_archived_at")]))
 
 
 def _enrich_post_rows(posts, *, audit_posts=None, catalog=None):
+    from web.queue_readiness import schedule_readiness
     from web.meta_handoff import handoff_eligibility
     from web.dashboard import post_bucket
     from web.meta_diagnostics import diagnose
@@ -3579,9 +3740,13 @@ def _enrich_post_rows(posts, *, audit_posts=None, catalog=None):
     from web.token_audit import token_audit
     catalog = token_vault.list_tokens(mask=True) if catalog is None else catalog
     audited = audit_posts if audit_posts is not None else posts
+    from web.post_lineage import annotate_lineage
+    annotate_lineage(posts, audited)
     token_audit(audited, page_manager.list_pages(), catalog, load_token_groups(), annotate_posts=posts)
     token_catalog = {str(item.get("id")): item for item in catalog if item.get("id")}
     for post in posts:
+        if post.get("status") in ("scheduled", "meta_handoff"):
+            post["queue_readiness"] = schedule_readiness(post, token_catalog)
         from web.video_recovery import can_replace_failed_video
         post["can_replace_failed_video"] = can_replace_failed_video(post, post.get("meta_observation") or {})
         post["can_retry_publish"] = (can_retry_without_upload(post) and post.get("retry_stage") in
@@ -3608,7 +3773,10 @@ def _enrich_post_rows(posts, *, audit_posts=None, catalog=None):
                     target = 0
                 post["meta_schedule_overdue"] = bool(target and target < time.time() - 90)
                 post["meta_schedule_late_seconds"] = max(0, int(time.time() - target)) if target else 0
-        post["can_handoff_meta"], post["meta_handoff_blocked_reason"] = handoff_eligibility(post, OUTPUT_DIR)
+        # This is advisory data for a paginated table. The handoff API repeats
+        # the full English check immediately before any Meta request.
+        post["can_handoff_meta"], post["meta_handoff_blocked_reason"] = handoff_eligibility(
+            post, OUTPUT_DIR, verify_text=False)
         media_file = post.get("media_file") or post.get("clip_filename")
         if media_file:
             post["local_video_url"] = f"/api/clips/play/{media_file}"
@@ -3816,6 +3984,33 @@ def api_save_post():
 
 @app.route("/api/posts/<post_id>", methods=["DELETE"])
 def api_delete_post(post_id):
+    # Hiding an unresolved Meta upload is a local operator action. Keep the
+    # full row as a tombstone (IDs, claims, receipts) instead of requiring the
+    # remote object to be terminal or forgetting an ambiguous upload.
+    body = request.get_json(silent=True) or {}
+    if isinstance(body, dict) and body.get("archive_local") is True:
+        from web.posts_store import _LOCK as posts_lock
+        with posts_lock:
+            posts = load_posts()
+            post = next((p for p in posts if p.get("id") == post_id), None)
+            if not post:
+                return jsonify({"success": False, "error": "Không tìm thấy bài."}), 404
+            if post.get("status") in ("processing", "failed") and any(post.get(k) for k in
+                    ("meta_upload_video_id", "meta_video_id", "meta_post_id", "outcome_unknown")):
+                post.setdefault("local_archived_at", datetime.now().astimezone().isoformat())
+                post["local_archive_reason"] = "operator_removed_from_list"
+                post["retryable"] = False
+                save_posts(posts)
+                archived = True
+            else:
+                archived = False
+        if archived:
+            # The comment worker holds its queue lock while reading posts.
+            # Cancel outside the posts lock, and let an already-sent request
+            # finish without delaying the operator's local removal.
+            _cancel_archived_first_comments(post_id)
+            return jsonify({"success": True, "archived": True,
+                "message": "Đã xóa khỏi danh sách app, giữ ID Meta và lịch sử chống trùng. App dừng thử đăng/comment tiếp; yêu cầu đã gửi và bài trên Meta vẫn giữ nguyên."})
     from web.scheduled_publisher import _cycle_lock
     if not _cycle_lock.acquire(blocking=False):
         return jsonify({"success": False, "error": "App đang xử lý bài; thử lại sau ít giây."}), 409
@@ -3865,6 +4060,24 @@ def api_delete_post(post_id):
         return jsonify({"success": True})
     finally:
         _cycle_lock.release()
+
+
+@app.route("/api/posts/archived", methods=["GET"])
+def api_archived_posts():
+    fields = ("id", "title", "page_name", "page_id", "local_archived_at", "media_file", "status",
+              "meta_upload_video_id", "meta_video_id", "article_url")
+    rows = [post for post in posts_snapshot(POSTS_FILE) if post.get("local_archived_at")]
+    rows.sort(key=lambda row: row["local_archived_at"], reverse=True)
+    return jsonify({"success": True, "total": len(rows),
+                    "items": [{key: row.get(key) for key in fields} for row in rows[:100]]})
+
+
+def _cancel_archived_first_comments(post_id):
+    from src.publisher.first_comment_queue import cancel_first_comment
+    try:
+        cancel_first_comment(post_id=post_id, blocking=False)
+    except Exception as exc:
+        app.logger.error("Archived First Comment cancellation failed: %s", sanitize_error(exc))
 
 
 @app.route("/api/posts/<post_id>/draft", methods=["PUT", "POST"])
@@ -4149,12 +4362,14 @@ def _distribute_batch():
         try:
             start = datetime.fromisoformat(str(data["start_time"])) if data.get("start_time") else None
             slots = data.get("daily_slots") or ([start.strftime("%H:%M")] if start else (group.get("schedule_config") or {}).get("times", ["11:30", "19:30"]))
+            requested_posts = data.get("posts_per_page")
+            posts_per_day = int(requested_posts) if requested_posts is not None else min(len(slots), 2)
             plan = save_plan({"id": f"group:{group['id']}", "enabled": True, "daily": True,
                               "approval_mode": data.get("approval_mode", "manual"),
                               "publish_mode": data.get("publish_mode") or
                                               ("meta_scheduled" if data.get("approval_mode") == "automatic" else "app_queue"),
                               "group_ids": [str(group["id"])], "slots": slots,
-                              "posts_per_day": int(data.get("posts_per_page", len(slots))),
+                              "posts_per_day": posts_per_day,
                               "stagger_minutes": int(data.get("stagger_minutes") or (group.get("schedule_config") or {}).get("stagger_minutes") or 15),
                               "start_date": start.date().isoformat() if start else datetime.now().date().isoformat(),
                               "token_group_id": data.get("token_group_id", ""),
@@ -4574,9 +4789,9 @@ SCHEDULE_RULES_FILE = BASE_DIR / "config" / "schedule_rules.json"
 def get_schedule_rules():
     if not SCHEDULE_RULES_FILE.exists():
         return {
-            "slots": ["07:00", "11:30", "17:00", "20:00"],
+            "slots": ["11:30", "19:30"],
             "stagger_minutes": 15,
-            "posts_per_day": 4,
+            "posts_per_day": 2,
             "auto_first_comment": True
         }
     try:
@@ -4584,9 +4799,9 @@ def get_schedule_rules():
         return json.loads(SCHEDULE_RULES_FILE.read_text(encoding="utf-8"))
     except Exception:
         return {
-            "slots": ["07:00", "11:30", "17:00", "20:00"],
+            "slots": ["11:30", "19:30"],
             "stagger_minutes": 15,
-            "posts_per_day": 4,
+            "posts_per_day": 2,
             "auto_first_comment": True
         }
 
@@ -4755,6 +4970,7 @@ def api_queue_resume():
     return jsonify({"success": True, "is_paused": False, "message": "Đã tiếp tục xử lý hàng đợi."})
 
 @app.route("/api/queue/clear", methods=["POST"])
+@job_store.transaction
 def api_queue_clear():
     jobs = load_jobs()
     cancelled_count = 0
@@ -4768,6 +4984,7 @@ def api_queue_clear():
     return jsonify({"success": True, "cancelled_count": cancelled_count, "message": f"Đã hủy {cancelled_count} jobs đang chờ."})
 
 @app.route("/api/jobs/<job_id>/cancel", methods=["POST"])
+@job_store.transaction
 def api_job_cancel(job_id):
     jobs = load_jobs()
     found = False
@@ -5624,8 +5841,14 @@ def api_content_studio_process():
 
 
 def _resume_recovery_content():
+    from web.recovery_requests import resume_pending
+    resume_pending(OUTPUT_DIR.parent)
     from src.output_pipeline import restore_recovery_intents
     restore_recovery_intents(OUTPUT_DIR.parent)
+    from web.video_recovery_tasks import read_json, _state_file, complete_auto_recovery
+    for post_id, task in read_json(_state_file(OUTPUT_DIR.parent), {}).items():
+        if task.get("status") == "ready" and task.get("auto_recovery_pending"):
+            threading.Thread(target=complete_auto_recovery, args=(OUTPUT_DIR.parent, post_id), daemon=True).start()
     for post in load_posts():
         if post.get("video_recovery_preparing") and post.get("status") == "preparing" and not post.get("content_package_id"):
             try:

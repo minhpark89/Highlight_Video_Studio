@@ -1,0 +1,33 @@
+.posts-filter-selected {
+  border-color: #38bdf8 !important;
+  color: #38bdf8 !important;
+  background: rgba(56, 189, 248, 0.12) !important;
+}
+
+#posts-load-feedback {
+  font-size: 12px;
+  color: #94a3b8;
+  min-height: 18px;
+  padding: 6px;
+}
+
+#posts-load-feedback.posts-load-error {
+  color: #fca5a5;
+}
+
+.posts-blocked {
+  color: #fbbf24;
+  font-size: 12px;
+  max-width: 250px;
+  white-space: normal;
+}
+
+.posts-blocked > div {
+  margin: 5px 0;
+}
+
+#recovery-stock-list input[type="radio"],
+#recovery-rendered-choice input[type="radio"] {
+  width: auto;
+  margin-right: 8px;
+}

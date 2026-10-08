@@ -12,7 +12,7 @@ def can_replace_failed_video(post, seen):
     video_id = str(post.get("meta_upload_video_id") or post.get("meta_video_id") or "")
     return bool(video_id and post.get("status") in ("processing", "failed")
                 and not post.get("replacement_post_id") and not post.get("post_fb_id")
-                and not post.get("meta_cancel_requested")
+                and not post.get("meta_cancel_requested") and not post.get("local_archived_at")
                 and seen.get("http_status") == 200 and str(seen.get("id")) == video_id
                 and not seen.get("error") and not seen.get("error_code")
                 and seen.get("copyright_matches") is False and seen.get("uploading_status") == "complete"
@@ -42,7 +42,7 @@ def prepare_replacement(posts, post, seen, output_dir, *, filename, schedule_tim
         publish_at = parse_meta_schedule_time(schedule_time)
     elif schedule_time:
         due = datetime.fromisoformat(str(schedule_time).replace(" ", "T"))
-        if due <= datetime.now():
+        if due.timestamp() <= datetime.now().timestamp():
             raise ValueError("Chọn giờ đăng mới chưa qua hoặc Đăng lại bằng App.")
         publish_at = due.timestamp()
     else:

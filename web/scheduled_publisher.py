@@ -23,6 +23,8 @@ SCHEDULER_HEARTBEAT_FILE = BASE_DIR / "data" / "scheduler_heartbeat.json"
 
 _FILE_LOCK = threading.Lock()
 _cycle_lock = threading.Lock()
+_wake_event = threading.Event()
+_urgent_event = threading.Event()
 CYCLE_INTERVAL_SECONDS = 20
 _active_posts = set()
 _active_posts_lock = threading.Lock()
@@ -60,7 +62,8 @@ _SECRET_PATTERNS = (
 
 def sanitize_error(message, limit=400):
     """Redact token-like values so operator-visible errors never leak credentials."""
-    text = str(message or "")
+    from core.text_encoding import repair_mojibake_text
+    text = repair_mojibake_text(str(message or ""))
     for pattern in _SECRET_PATTERNS:
         if pattern.groups >= 2:
             text = pattern.sub(lambda m: m.group(1) + "[redacted]", text)
@@ -197,7 +200,7 @@ def _requeue_safe_failures(posts, now_ts, current_dt):
     """Return retryable local failures to the scheduler without touching Meta."""
     changed = False
     for post in posts:
-        if post.get("status") != "failed" or not post.get("retryable"):
+        if post.get("local_archived_at") or post.get("status") != "failed" or not post.get("retryable"):
             continue
         if any(post.get(key) for key in ("meta_upload_video_id", "meta_video_id", "meta_post_id", "post_fb_id", "outcome_unknown")):
             continue
@@ -225,7 +228,7 @@ def _requeue_safe_failures(posts, now_ts, current_dt):
 
 
 def _resume_complete_upload(post, seen, poster, credential, posts, current_dt, *, force_retry=False,
-                            vault=None, manager=None):
+                            vault=None, manager=None, schedule_time=None):
     """Finish a remotely confirmed idle upload after its app due time.
 
     The same ID is used throughout. Persist a write-ahead marker before Finish;
@@ -233,9 +236,16 @@ def _resume_complete_upload(post, seen, poster, credential, posts, current_dt, *
     re-uploaded or blindly replayed after a restart.
     """
     upload_id = str(post.get("meta_upload_video_id") or "")
-    if post.get("meta_cancel_requested"):
+    if post.get("meta_cancel_requested") or post.get("local_archived_at"):
         return False
     now_ts = current_dt.timestamp()
+    if schedule_time is not None:
+        schedule_epoch = float(schedule_time)
+        post.update(publish_mode="meta_scheduled", meta_scheduled_publish_time=schedule_epoch,
+                    scheduled_time=datetime.fromtimestamp(schedule_epoch).strftime("%Y-%m-%d %H:%M:%S"),
+                    meta_schedule_status="verification_pending")
+    else:
+        schedule_epoch = None
     due = _parse_scheduled_time(post.get("scheduled_time"))
     if not upload_id or due is None or (due > current_dt and not force_retry):
         return False
@@ -305,22 +315,26 @@ def _resume_complete_upload(post, seen, poster, credential, posts, current_dt, *
         if overdue_native:
             result = poster.publish_existing_scheduled_reel(upload_id, credential["token"], credential["token_id"])
         else:
+            finish_kwargs = {"token_id": credential["token_id"]}
+            if schedule_epoch is not None:
+                finish_kwargs["schedule_time"] = schedule_epoch
             result = poster.finish_existing_reel(
                 post["page_id"], credential["token"], upload_id,
                 f"{post.get('title', '')}\n\n{post.get('content', '')}".strip(),
-                token_id=credential["token_id"],
+                **finish_kwargs,
             )
     except Exception:
         result = {"state": "unknown", "error": "Finish outcome unknown; reconciling the existing upload."}
     state = result.get("state") or "unknown"
     if isinstance(result.get("attempt"), dict):
         post["meta_last_publish_attempt"] = {**result["attempt"], "state": state}
-    post.update({"status": "processing", "publish_mode": "app_queue", "auto_finish_state": state,
+    post.update({"status": "processing", "publish_mode": "meta_scheduled" if schedule_epoch is not None else "app_queue", "auto_finish_state": state,
                  "auto_finish_error": sanitize_error(result.get("error")),
                  "outcome_unknown": state != "rejected", "meta_next_check_at": now_ts + 60,
                  "meta_schedule_status": "verification_pending", "retry_stage": "meta_processing",
                  "error": "Existing upload Finish sent; waiting for verified Meta publication."})
-    post.pop("meta_scheduled_publish_time", None)
+    if schedule_epoch is None:
+        post.pop("meta_scheduled_publish_time", None)
     if state == "rejected":
         delay = RETRY_BACKOFF_SECONDS[min(attempts - 1, len(RETRY_BACKOFF_SECONDS) - 1)]
         post["auto_finish_retry_at"] = now_ts + delay
@@ -385,7 +399,8 @@ def remove_posted_clip_file(clip_filename, posts):
     if any(root.glob(f".{candidate.stem}.rendering.*.mp4")):
         return False
     try:
-        jobs = json.loads((POSTS_FILE.parent / "jobs.json").read_text(encoding="utf-8"))
+        from src.job_store import load as load_job_rows
+        jobs = load_job_rows(POSTS_FILE.parent / "jobs.json")
         if any(job.get("status") == "running" and job.get("video_path") and
                Path(job["video_path"]).resolve() == candidate for job in jobs):
             return False
@@ -448,9 +463,9 @@ def _process_scheduled_posts_once(
     _requeue_safe_failures(posts, now_ts, current_dt)
     posts_by_id = {post.get("id"): post for post in posts}
     def prepare_first_comment(item):
-        linked_post = posts_by_id.get(item.get("post_id"))
-        if linked_post and linked_post.get("meta_cancel_requested"):
-            return {"ready": False, "error": "Operator requested cancellation; comment paused."}
+        linked_post = next((p for p in load_posts() if p.get("id") == item.get("post_id")), posts_by_id.get(item.get("post_id")))
+        if linked_post and (linked_post.get("meta_cancel_requested") or linked_post.get("local_archived_at")):
+            return {"ready": False, "cancelled": True, "error": "Operator requested cancellation; comment paused."}
         exact_token_id = str((linked_post or {}).get("meta_recovery_token_id") or item.get("token_id") or
                              (linked_post or {}).get("token_id") or "")
         page_token = item.get("page_token")
@@ -468,13 +483,18 @@ def _process_scheduled_posts_once(
             )
             if not check.get("verified"):
                 return {"ready": False, "error": "Waiting for independently verified Meta publication."}
+        latest = next((p for p in load_posts() if p.get("id") == item.get("post_id")), linked_post)
+        if latest and (latest.get("meta_cancel_requested") or latest.get("local_archived_at")):
+            return {"ready": False, "cancelled": True, "error": "Operator requested cancellation; comment paused."}
         return {"ready": bool(page_token), "page_token": page_token}
-    queue_result = process_due_first_comments(poster, now=int(current_dt.timestamp()), prepare=prepare_first_comment)
+    queue_result = {"changed": False, "completed": 0, "outcomes": []}
+    if not force_due:
+        queue_result = process_due_first_comments(poster, now=int(current_dt.timestamp()), prepare=prepare_first_comment)
     reconciled = 0
-    for post in posts:
+    for post in ([] if force_due else posts):
         if post.get("status") not in ("processing", "meta_scheduled") or not (post.get("meta_video_id") or post.get("meta_upload_video_id") or post.get("meta_post_id")):
             continue
-        if post.get("meta_cancel_requested"):
+        if post.get("meta_cancel_requested") or post.get("local_archived_at"):
             continue
         meta_scheduled = post.get("publish_mode") == "meta_scheduled" or bool(post.get("meta_scheduled_publish_time"))
         if meta_scheduled:
@@ -526,6 +546,9 @@ def _process_scheduled_posts_once(
                 if check.get("verified") or ((check.get("meta_observation") or {}).get("id") == str(candidate)
                         and (check.get("meta_observation") or {}).get("http_status") == 200):
                     break
+        latest = next((p for p in load_posts() if p.get("id") == post.get("id")), None)
+        if latest is None or latest.get("meta_cancel_requested") or latest.get("local_archived_at"):
+            continue
         post["meta_reconcile_attempts"] = (attempts + 1) if post.get("meta_reconcile_version") == 2 else 1
         post["meta_reconcile_version"] = 2
         post["meta_next_check_at"] = now_ts + (300 if meta_scheduled or attempts >= 5 else 60)
@@ -688,7 +711,7 @@ def _process_scheduled_posts_once(
         return str(post.get("token_id") or f"page:{post.get('page_id')}")
     reserved_tokens = {token_key(p) for p in posts if p.get("status") == "publishing"}
     reserved_pages = {str(p.get("page_id")) for p in posts if p.get("status") == "publishing"}
-    candidates = list(posts)
+    candidates = [post for post in posts if not post.get("local_archived_at")]
     rate_blocked = 0
     for _ in range(len(posts)):
         if len(selected_due) >= posting_threads:
@@ -700,10 +723,15 @@ def _process_scheduled_posts_once(
         token_id = str(due.get("token_id") or "")
         entry = token_vault.get_token_by_id(token_id) if token_id else None
         if entry and not credential_ready(entry):
+            from web.queue_readiness import credential_block
             reserved_tokens.add(token_id)
-            due["schedule_error"] = "Token đang cooldown hoặc Meta usage cao; app chờ quota, giữ nguyên token."
+            code, reason = credential_block(entry)
+            due["schedule_block_code"] = code
+            due["schedule_error"] = reason
             rate_blocked += 1
             continue
+        due.pop("schedule_block_code", None)
+        due.pop("schedule_error", None)
         selected_due.append(due)
         reserved_tokens.add(token_key(due))
         reserved_pages.add(str(due.get("page_id")))
@@ -830,6 +858,12 @@ def _publish_claimed_post(post, posts, poster, current_dt, token_vault, page_man
     video_error = "Video file unavailable at publish time"
     try:
         video_path = scheduled_video_path(OUTPUT_DIR, clip_filename)
+        from src.media_quality_gate import clip_error
+        reason = clip_error(video_path, post)
+        if reason:
+            post.update(status="failed", media_quality_error=reason, error=reason,
+                        retryable=False, retry_stage="media_quality")
+            return post
     except (ValueError, FileNotFoundError, OSError) as exc:
         video_path = None
         video_error = sanitize_error(exc)
@@ -1046,6 +1080,14 @@ def process_scheduled_posts_once(*args, **kwargs):
 _PROCESS_LEASE = ProcessLease("scheduled-publisher", BASE_DIR / "data", stale_after=180)
 
 
+def request_publish_cycle():
+    """Wake the existing owner; coalesce requests without spawning publishers."""
+    start_worker_thread(restart_dead=True)
+    _urgent_event.set()
+    _wake_event.set()
+    return {"success": True, "queued": True, "message": "Đã nhận yêu cầu; worker sẽ xử lý bài đủ điều kiện."}
+
+
 def scheduled_publisher_worker_loop():
     """Run publishing cycles continuously; all external calls remain in the cycle helper."""
     global _worker_started, _worker_waiting_for_lease
@@ -1066,11 +1108,14 @@ def scheduled_publisher_worker_loop():
             _PROCESS_LEASE.touch()
             result = {}
             try:
-                result = process_scheduled_posts_once()
+                urgent = _urgent_event.is_set()
+                _urgent_event.clear()
+                result = process_scheduled_posts_once(force_due=urgent)
                 if result.get("busy"):
                     # A manual run-due or a previous long cycle still holds the lock;
                     # do not touch the heartbeat or it would mask the real cycle result.
-                    pass
+                    if urgent:
+                        _urgent_event.set()
                 else:
                     _touch_heartbeat(True)
                     if result.get("claimed") or result.get("recovered"):
@@ -1078,7 +1123,9 @@ def scheduled_publisher_worker_loop():
             except Exception as exc:
                 _touch_heartbeat(False, exc)
                 _safe_log(f"[ScheduledPublisher] Loop Error: {sanitize_error(exc)}")
-            time.sleep(1 if result.get("handoff_pending") else CYCLE_INTERVAL_SECONDS)
+            retry_soon = result.get("handoff_pending") or _urgent_event.is_set()
+            _wake_event.wait(1 if retry_soon else CYCLE_INTERVAL_SECONDS)
+            _wake_event.clear()
     finally:
         _worker_started = False
         with _heartbeat_lock:

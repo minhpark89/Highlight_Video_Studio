@@ -5,7 +5,8 @@ from datetime import datetime
 
 
 def safe_error(value):
-    text = str(value or "")
+    from core.text_encoding import repair_mojibake_text
+    text = repair_mojibake_text(str(value or ""))
     text = re.sub(r"(?i)(access_token|page_token|authorization|api_key|password|token)[=:\s]+[^\s&\"',]+", r"\1=[redacted]", text)
     text = re.sub(r"EAA[A-Za-z0-9]{15,}", "[redacted]", text)
     return " ".join(text.split())[:500]
@@ -46,6 +47,10 @@ def diagnose(post, seen=None):
               "detail": "Bấm Kiểm tra Meta để đọc trạng thái hiện tại.", "can_finish_existing": False,
               "can_reschedule_existing": False,
               "video_id": upload_id or str(post.get("meta_video_id") or post.get("meta_post_id") or "")}
+    if post.get("local_archived_at"):
+        result.update(state="archived", message="Bài đã được xóa khỏi danh sách app",
+                      detail="ID Meta được giữ trong lịch sử; app dừng thử đăng và comment.")
+        return result
     def overdue():
         if post.get("meta_schedule_status") != "scheduled" and post.get("status") != "meta_scheduled":
             return False

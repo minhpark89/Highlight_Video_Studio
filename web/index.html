@@ -1089,6 +1089,7 @@
               <button class="btn btn-warning" onclick="clearScheduledPosts()" style="background: #f59e0b; color: #0f172a; font-weight: 700; border: none;">
                 <i class="bi bi-x-circle-fill"></i> Hủy lịch app
               </button>
+              <button class="btn btn-outline" onclick="loadArchivedPosts()" title="Xem ID Meta và lịch sử bài đã xóa khỏi danh sách">Lịch sử đã xóa</button>
               <button class="btn btn-outline" onclick="clearAllPosts()" style="color: #ef4444; border-color: #ef4444;" title="Xóa toàn bộ hàng đợi bài đăng">
                 <i class="bi bi-trash"></i> Xóa sạch hàng đợi
               </button>
@@ -1268,8 +1269,17 @@
                       <option value="hormozi_yellow" selected>🔥 Hormozi Style (Chữ đậm, highlight từ màu vàng)</option>
                       <option value="clean_white">⚪ Clean White (Chữ trắng viền đen tối giản)</option>
                       <option value="karaoke_cyan">💎 Cyan Modern (Hiệu ứng phát sáng cyan)</option>
+                      <option value="viral_anton">🎬 Anton (đậm, gọn, viral)</option>
+                      <option value="viral_condensed">⚡ Barlow Condensed (chữ hẹp, đọc nhanh)</option>
+                      <option value="viral_vietnam">✨ Be Vietnam Pro (tiếng Việt đẹp)</option>
                       <option value="none">🚫 Không chèn phụ đề</option>
                     </select>
+                    <label class="lbl" style="margin-top:8px;">Căn chữ theo lời thoại</label>
+                    <select id="subtitle_timing">
+                      <option value="accurate" selected>🎯 Chính xác từng từ (audio, có cache)</option>
+                      <option value="fast">⚡ Nhanh nhất (timestamp phụ đề gốc)</option>
+                    </select>
+                    <small style="display:block;color:#94a3b8;margin-top:4px;">Đổi font dùng lại timestamp đã cache. Chế độ nhanh ước lượng từng từ nếu nguồn chỉ có timestamp câu.</small>
                   </div>
                   <div class="col-6">
                     <label class="lbl">Tiêu chí lọc Highlight (AI Viral Filter)</label>
@@ -1715,7 +1725,7 @@
             <div style="display: flex; align-items: center; gap: 12px;">
               <span class="badge" style="background: rgba(37, 99, 235, 0.2); color: #60a5fa; font-weight: 700; font-size: 11.5px; padding: 6px 10px;"><i class="bi bi-clock-history"></i> QUY TẮC HIỆN HÀNH</span>
               <div style="font-size: 12.5px; color: #e2e8f0;">
-                Khung giờ vàng: <strong id="rule-display-slots" style="color: #38bdf8;">08:00, 11:30, 17:30, 20:30</strong> · Giãn cách (Stagger): <strong id="rule-display-stagger" style="color: #f59e0b;">15 phút</strong> · Chế độ: <strong style="color: #34d399;">1 Video : 1 Page</strong>
+                Khung giờ vàng: <strong id="rule-display-slots" style="color: #38bdf8;">11:30, 19:30</strong> · Giãn cách (Stagger): <strong id="rule-display-stagger" style="color: #f59e0b;">15 phút</strong> · Chế độ: <strong style="color: #34d399;">1 Video : 1 Page</strong>
               </div>
             </div>
             <button class="btn btn-sm btn-secondary" onclick="openScheduleRulesModal()"><i class="bi bi-pencil-square"></i> Cấu hình</button>
@@ -2141,7 +2151,7 @@
   // Robust Event Delegation Tab Switcher (Chống xung đột click)
   document.addEventListener('click', function(e) {
     var btn = e.target.closest('.nav-btn[data-pane]');
-    if (!btn) return;
+    if (!btn || btn.hasAttribute('onclick')) return;
     e.preventDefault();
     var paneId = btn.getAttribute('data-pane');
     if (paneId && typeof window.switchTab === 'function') {
@@ -2179,6 +2189,7 @@
       aspect_ratio: document.getElementById('aspect_ratio').value,
       reframe_mode: document.getElementById('reframe_mode').value,
       subtitle_style: document.getElementById('subtitle_style').value,
+      subtitle_timing: document.getElementById('subtitle_timing').value,
       highlight_criteria: document.getElementById('highlight_criteria').value
     };
     try {
@@ -4435,7 +4446,11 @@
       let rows = '';
       tokens.forEach((t, idx) => {
         const masked = t.token_masked || t.masked_token || 'EAAayhOu...';
-        const tName = t.name || `AutoPool ${idx + 1}`;
+        const canonicalTokenName = t.name || t.display_name || t.owner_name || t.id || '';
+        const tName = canonicalTokenName || `AutoPool ${idx + 1}`;
+        const rawOperatorLabel = String(t.operator_label || '').trim();
+        const legacyOperatorLabel = rawOperatorLabel && rawOperatorLabel !== canonicalTokenName && !/^test\s*2$/i.test(rawOperatorLabel)
+          ? ` \u00b7 Nh\u00e3n c\u0169: ${escapeHtml(rawOperatorLabel)}` : '';
         const pagesCount = t.pages_count || 0;
         const threads = t.max_threads || 10;
         const statusBadge = t.status === "ACTIVE" ? `<span class="badge" style="color:#34d399">ACTIVE</span>` : `<span class="badge" style="color:#f87171" title="${escapeHtml(t.error_msg || 'Meta rejected')}">ERROR</span>`;
@@ -4449,7 +4464,7 @@
                 <i class="bi bi-key-fill" style="color: #f59e0b;"></i>
                 <span>${tName}</span>
               </div>
-              <div style="font-size: 11px; color: #64748b;">${t.identity_verified ? 'Meta đã xác minh' : 'Chưa xác minh tên với Meta'} · Nhãn nhập: ${escapeHtml(t.operator_label || '')} · ID: ${t.id || 'system_user'}</div>
+              <div style="font-size: 11px; color: #64748b;">${tokenIdentityLabel(t)} \u00b7 ${escapeHtml(tName)}${legacyOperatorLabel} \u00b7 ID: ${t.id || 'system_user'}</div>
             </td>
             <td style="padding: 12px 16px;">
               <code style="font-family: monospace; font-size: 12px; color: #f59e0b; background: rgba(245, 158, 11, 0.1); padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(245, 158, 11, 0.2);">${masked}</code>
@@ -4681,11 +4696,13 @@
     const normalize = values => [...new Set((values || []).filter(t => /^\d{1,2}:\d{2}$/.test(String(t)))
       .map(t => String(t).padStart(5,'0')).filter(t => Number(t.slice(0,2)) < 24 && Number(t.slice(3)) < 60))].sort();
     const configured = normalize(group?.schedule_config?.times);
-    const times = configured.length ? configured : normalize(plan?.group_schedule_times || plan?.slots || ['11:30','19:30']);
+    const planTimes = normalize(plan?.slots || plan?.group_schedule_times);
+    const sourceTimes = configured.length ? configured : (planTimes.length ? planTimes : ['11:30','19:30']);
     const saved = normalize(plan?.group_schedule_times || plan?.slots);
-    const sameConfig = saved.join('|') === times.join('|');
-    const count = plan && sameConfig ? Math.min(times.length, Math.max(1, Number(plan.posts_per_day) || times.length)) : times.length;
-    return {times, count, stagger: group?.schedule_config?.stagger_minutes || plan?.stagger_minutes || 15};
+    const explicit = Number(group?.schedule_config?.posts_per_day || plan?.posts_per_day || 0);
+    const count = Math.min(sourceTimes.length, Math.max(1, explicit || 2));
+    const times = (planTimes.length && plan && plan.posts_per_day ? planTimes : sourceTimes).slice(0, count);
+    return {times, count: times.length, stagger: group?.schedule_config?.stagger_minutes || plan?.stagger_minutes || 15};
   }
   async function loadGroupDailyModalPlan(groupId, kind) {
     const state = {groupId:String(groupId), plan:null, loading:true};
@@ -5006,14 +5023,14 @@
       const data = await resp.json();
       if (data.status === 'ok' && data.rules) {
         const r = data.rules;
-        document.getElementById('loha-slot-input').value = (r.slots || ['08:00', '11:30', '20:30']).join(', ');
+        document.getElementById('loha-slot-input').value = (r.slots || ['11:30', '19:30']).join(', ');
         document.getElementById('loha-stagger-select').value = String(r.stagger_min || r.stagger_minutes || 15);
         document.getElementById('loha-auto-first-comment').checked = r.auto_comment !== false;
-        const slotsArr = (r.slots && r.slots.length > 0) ? r.slots : ['08:00', '11:30', '20:30'];
+        const slotsArr = (r.slots && r.slots.length > 0) ? r.slots : ['11:30', '19:30'];
         if (document.getElementById('sched-slots')) document.getElementById('sched-slots').value = slotsArr.join(', ');
         if (document.getElementById('sched-stagger-min')) document.getElementById('sched-stagger-min').value = r.stagger_min || 5;
         if (document.getElementById('sched-stagger-max')) document.getElementById('sched-stagger-max').value = r.stagger_max || 15;
-        if (document.getElementById('sched-max-posts')) document.getElementById('sched-max-posts').value = r.max_posts_per_page_day || 4;
+        if (document.getElementById('sched-max-posts')) document.getElementById('sched-max-posts').value = r.max_posts_per_page_day || 2;
         if (document.getElementById('sched-auto-comment')) document.getElementById('sched-auto-comment').checked = (r.auto_comment !== false);
         if (document.getElementById('sched-include-web')) document.getElementById('sched-include-web').checked = (r.include_website_link !== false);
         if (document.getElementById('sched-folder-mode')) {
@@ -5064,10 +5081,10 @@
     const rawSlots = document.getElementById('sched-slots') ? document.getElementById('sched-slots').value : '';
     const slots = rawSlots.split(',').map(s => s.trim()).filter(s => s);
     const body = {
-      slots: slots.length ? slots : ['08:00', '11:30', '20:30'],
+      slots: slots.length ? slots : ['11:30', '19:30'],
       stagger_min: parseInt(document.getElementById('sched-stagger-min')?.value || 5, 10),
       stagger_max: parseInt(document.getElementById('sched-stagger-max')?.value || 15, 10),
-      max_posts_per_page_day: parseInt(document.getElementById('sched-max-posts')?.value || 4, 10),
+      max_posts_per_page_day: parseInt(document.getElementById('sched-max-posts')?.value || 2, 10),
       auto_comment: document.getElementById('sched-auto-comment') ? document.getElementById('sched-auto-comment').checked : true,
       include_website_link: document.getElementById('sched-include-web') ? document.getElementById('sched-include-web').checked : true,
       folder_binding_mode: document.getElementById('sched-folder-mode')?.value || 'round_robin'
@@ -5925,7 +5942,7 @@
       document.getElementById('edit-group-folder').value = g.folder_path || g.folder_binding || 'D:\\Highlight_Video_Studio\\output';
 
       const sched = g.schedule_config || {};
-      const times = sched.times && sched.times.length ? sched.times.join(', ') : '07:00, 11:30, 17:00, 20:00';
+      const times = sched.times && sched.times.length ? sched.times.join(', ') : '11:30, 19:30';
       const stagger = sched.stagger_minutes || 15;
 
       document.getElementById('edit-group-times').value = times;
@@ -6276,6 +6293,7 @@
   let postsAutoRefreshTimer = null;
   let postsTableRequest = null;
   let postsTableGeneration = 0;
+  const postsTableCache = new Map();
   let postsSnapshot = [];
   let postsScheduleFilter = 'all';
   let postsPage = 1;
@@ -6303,7 +6321,7 @@
     const eligibleIds = new Set(eligible.map(p => p.id));
     for (const id of selectedMetaPosts) if (!eligibleIds.has(id)) selectedMetaPosts.delete(id);
     const counts = [['all', 'Tất cả', postsCounts.all || 0], ...Object.entries(postBucketLabels).map(([key,label]) => [key,label,postsCounts[key] || 0])];
-    document.getElementById('posts-schedule-summary').innerHTML = counts.map(([key, label, count]) => `<button class="btn btn-outline btn-sm" onclick="filterPostsSchedule('${key}')" aria-pressed="${postsScheduleFilter === key}" style="${postsScheduleFilter === key ? 'border-color:#38bdf8;color:#38bdf8;background:rgba(56,189,248,.12);' : ''}">${label} <b>${count}</b></button>`).join('');
+    renderPostFilters(counts);
     const chosen = document.getElementById('posts-handoff-selected');
     chosen.disabled = metaHandoffBusy || !selectedMetaPosts.size;
     chosen.innerHTML = `<i class="bi bi-cloud-arrow-up"></i> Đưa ${selectedMetaPosts.size} bài đã chọn lên Meta chờ`;
@@ -6320,7 +6338,12 @@
     selectAll.checked = !!visible.length && visible.every(p => selectedMetaPosts.has(p.id));
     selectAll.indeterminate = !selectAll.checked && visible.some(p => selectedMetaPosts.has(p.id));
   }
-  function filterPostsSchedule(filter) { postsScheduleFilter = filter; postsPage = 1; loadPostsTable({quiet:true}); }
+  function filterPostsSchedule(filter) {
+    postsScheduleFilter = filter;
+    postsPage = 1;
+    updateMetaHandoffControls();
+    loadPostsTable({quiet: true, useCache: true});
+  }
   function selectMetaPost(id, checked) {
     if (checked) selectedMetaPosts.add(id); else selectedMetaPosts.delete(id);
     updateMetaHandoffControls();
@@ -6436,79 +6459,11 @@
   let schedulerCycleActive = false;
 
   async function refreshSchedulerStatus() {
-    const textEl = document.getElementById('scheduler-status-text');
-    const bannerEl = document.getElementById('scheduler-overdue-banner');
-    if (!textEl) return;
-    try {
-      const res = await fetch('/api/scheduler/status');
-      const st = await res.json();
-      if (!st || st.success === false) {
-        textEl.innerHTML = '<i class="bi bi-exclamation-triangle-fill"></i> Không đọc được trạng thái';
-        textEl.style.color = '#f59e0b';
-        return;
-      }
-      const alive = st.thread_alive && st.last_cycle_ok !== false;
-      const waitingLease = !!st.waiting_for_lease;
-      const lastCycle = st.last_cycle_at ? st.last_cycle_at.substring(11, 19) : '--:--:--';
-      const overdueCount = st.overdue_count || 0;
-      schedulerCycleActive = !!st.cycle_active;
-      if (waitingLease) {
-        textEl.textContent = `Đang chờ worker · chu kỳ cuối ${lastCycle}`;
-        textEl.style.color = '#fbbf24';
-      } else if (alive) {
-        textEl.innerHTML = `<i class="bi bi-check-circle-fill"></i> Hoạt động · chu kỳ cuối ${lastCycle}`;
-        textEl.style.color = '#10b981';
-      } else {
-        textEl.innerHTML = `<i class="bi bi-exclamation-triangle-fill"></i> Có lỗi · chu kỳ cuối ${lastCycle}`;
-        textEl.style.color = '#ef4444';
-      }
-
-      postsOverdue.clear();
-      (st.overdue_posts || []).forEach(op => {
-        if (op.status === 'scheduled') postsOverdue.set(op.id, Math.max(0, Math.round((op.late_seconds || 0) / 60)));
-      });
-
-      if (bannerEl) {
-        if (overdueCount > 0) {
-          const lateMin = Math.max(...(st.overdue_posts || []).map(op => Math.round((op.late_seconds || 0) / 60)));
-          bannerEl.style.display = 'block';
-          bannerEl.innerHTML = schedulerCycleActive
-            ? `<i class="bi bi-hourglass-split"></i> <b>${overdueCount} bài đang chờ lượt</b> (trễ nhất ~${lateMin} phút). Worker đang xử lý bài trước và sẽ tự chạy tiếp.`
-            : `<i class="bi bi-alarm-fill"></i> <b>${overdueCount} bài đã quá hạn</b> (trễ nhất ~${lateMin} phút). <button onclick="runDuePostsNow()" style="background:#ef4444;color:#fff;border:none;padding:3px 10px;border-radius:6px;font-weight:700;cursor:pointer;">Chạy bài đến hạn</button>`;
-        } else if (st.last_error) {
-          bannerEl.style.display = 'block';
-          bannerEl.innerHTML = `<i class="bi bi-bug-fill"></i> Lỗi chu kỳ gần nhất: ${escapeHtml(st.last_error)}`;
-        } else {
-          bannerEl.style.display = 'none';
-          bannerEl.innerHTML = '';
-        }
-      }
-    } catch (e) {
-      textEl.innerHTML = '<i class="bi bi-wifi-off"></i> Mất kết nối máy chủ';
-      textEl.style.color = '#ef4444';
-    }
+    return refreshSchedulerView();
   }
 
   async function runDuePostsNow() {
-    const btn = document.getElementById('run-due-btn');
-    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="bi bi-arrow-repeat spin"></i> Đang chạy...'; }
-    try {
-      const res = await fetch('/api/scheduler/run-due', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        showToast(`Đã xử lý: ${data.claimed || 0} bài đến hạn, khôi phục ${data.recovered || 0} bài kẹt.`);
-      } else if (data.busy) {
-        showToast('Worker đang xử lý bài khác; bài này vẫn giữ trong hàng chờ và sẽ tự chạy tiếp.', 'info');
-      } else {
-        showToast('Lỗi: ' + (data.error || 'không xác định'), 'error');
-      }
-    } catch (e) {
-      showToast('Lỗi kết nối: ' + e.message, 'error');
-    } finally {
-      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-lightning-charge-fill"></i> Chạy bài đến hạn'; }
-      refreshSchedulerStatus();
-      loadPostsTable();
-    }
+    return requestDuePosts();
   }
   window.refreshSchedulerStatus = refreshSchedulerStatus;
   window.runDuePostsNow = runDuePostsNow;
@@ -6575,15 +6530,51 @@
       target.innerHTML = `<table class="table" style="font-size:12px;width:100%;"><thead><tr><th>Token / ID</th><th>Page cấu hình</th><th>Page trong nhóm</th><th>Page có bài</th><th>Đã đăng</th><th>Đang chờ</th><th>Lỗi</th></tr></thead><tbody>${data.tokens.map(row => `<tr><td><strong>${escapeHtml(row.name)}</strong><br><small>${escapeHtml(row.token_id)}</small>${!row.vault_present ? '<br><span style="color:#fbbf24">Không còn trong Vault</span>' : ''}</td><td><details><summary>${row.configured_pages} Page</summary>${pageList(row.configured_page_ids)}</details></td><td><details><summary>${row.group_assigned_pages} Page</summary>${pageList(row.group_page_ids)}</details></td><td><details><summary>${row.posting_pages} Page · ${row.posts} bài</summary>${pageList(row.posting_page_ids)}</details></td><td>${row.published}</td><td>${row.pending}</td><td>${row.failed}</td></tr>`).join('')}</tbody></table>${data.unknown_posts ? `<div style="color:#fbbf24">${data.unknown_posts} bài cũ chưa lưu Token ID.</div>` : ''}`;
     } catch (e) { if (target) target.textContent = 'Thống kê token: ' + e.message; }
   }
-  async function loadPostsTable({quiet = false} = {}) {
+  function applyCachedPostsTable(cached, token) {
+    const payload = cached.payload || {};
+    const tbody = document.getElementById('posts-table-body');
+    if (!tbody) return;
+    const posts = Array.isArray(payload.items) ? payload.items : [];
+    postsPage = payload.page || 1;
+    postsCounts = payload.counts || {};
+    postsSnapshot = posts;
+    const pageLabel = document.getElementById('posts-page-label');
+    if (pageLabel) pageLabel.textContent = `Trang ${payload.page || postsPage}/${payload.pages || 1} · ${payload.total || 0} bài`;
+    const picker = document.getElementById('posts-token-filter');
+    if (picker) {
+      const tokenOptions = '<option value="">Tất cả Token</option>' + (payload.tokens || []).map(t => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)} · ${escapeHtml(t.id)}</option>`).join('');
+      if (picker.innerHTML !== tokenOptions) picker.innerHTML = tokenOptions;
+      picker.value = token;
+    }
+    if (cached.html != null) tbody.innerHTML = cached.html;
+    updateMetaHandoffControls();
+    showNewMetaPostErrors(posts);
+  }
+
+  async function loadPostsTable({quiet = false, useCache = false} = {}) {
     const tbody = document.getElementById('posts-table-body');
     if (!tbody) return;
     const token = document.getElementById('posts-token-filter')?.value || '';
     const requestKey = JSON.stringify([postsScheduleFilter, token, postsPage]);
     if (quiet && postsTableRequest?.key === requestKey) return;
+    if (!quiet) postsTableCache.clear();
     postsTableRequest?.controller.abort();
     const request = {key:requestKey, controller:new AbortController(), generation:++postsTableGeneration};
     postsTableRequest = request;
+    request.timeout = setTimeout(() => {
+      request.timedOut = true;
+      request.controller.abort();
+    }, 15000);
+    showPostsLoading(true);
+
+    const cached = useCache && postsTableCache.get(requestKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      applyCachedPostsTable(cached, token);
+      clearTimeout(request.timeout);
+      if (postsTableRequest === request) postsTableRequest = null;
+      showPostsLoading(false);
+      return;
+    }
 
     if (!quiet && !tbody.querySelector('tr[data-post-id]')) tbody.innerHTML = `
       <tr>
@@ -6605,7 +6596,8 @@
       postsSnapshot = posts;
       const pageLabel = document.getElementById('posts-page-label'); if (pageLabel) pageLabel.textContent = `Trang ${payload.page || postsPage}/${payload.pages || 1} · ${payload.total || 0} bài`;
       const picker = document.getElementById('posts-token-filter');
-      picker.innerHTML = '<option value="">Tất cả Token</option>' + (payload.tokens || []).map(t => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)} · ${escapeHtml(t.id)}</option>`).join('');
+      const tokenOptions = '<option value="">Tất cả Token</option>' + (payload.tokens || []).map(t => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)} · ${escapeHtml(t.id)}</option>`).join('');
+      if (picker.innerHTML !== tokenOptions) picker.innerHTML = tokenOptions;
       picker.value = token;
       updateMetaHandoffControls();
       showNewMetaPostErrors(posts);
@@ -6695,7 +6687,7 @@
         } else if (p.status === 'publishing') {
           statusBadge = '<span style="background: rgba(56,189,248,0.15); color: #38bdf8; border: 1px solid rgba(56,189,248,0.4); padding: 3px 8px; border-radius: 6px; font-weight: 700; font-size: 11px;"><i class="bi bi-arrow-repeat spin"></i> Đang đăng...</span>';
         } else if (p.status === 'superseded') {
-          statusBadge = `<span style="color:#94a3b8;font-size:11px;">Video lỗi đã thay thế</span><div style="font-size:10px;color:#64748b;">Lịch mới: ${escapeHtml(p.replacement_post_id || '')}</div>`;
+          statusBadge = supersededPostBadge(p);
         } else if (p.status !== 'scheduled') {
           statusBadge = `<span style="color:#94a3b8;font-size:11px;">Trạng thái khác: ${escapeHtml(String(p.status || 'chưa xác định'))}</span>`;
         } else {
@@ -6709,6 +6701,9 @@
           if (p.status === 'scheduled' && !p.can_handoff_meta) statusBadge += `<div style="color:#94a3b8;font-size:11px;white-space:normal;max-width:220px;margin-top:5px;">${escapeHtml(p.meta_handoff_blocked_reason || '')}</div>`;
           if (p.meta_handoff_error) statusBadge += `<div style="color:#fbbf24;font-size:11px;white-space:normal;max-width:220px;">Chưa giao Meta: ${escapeHtml(p.meta_handoff_error)}</div>`;
         }
+
+        if (p.queue_readiness?.blocked_reason) statusBadge = scheduledReadinessBadge(p);
+        else statusBadge += mediaQualityBadge(p);
 
         let commentSnippet = '';
         if (safeComment) {
@@ -6808,7 +6803,7 @@
               ${p.can_retry_publish ? `<button class="btn btn-primary btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="retryPublishPost(this.dataset.postId)" style="margin-bottom:6px;white-space:nowrap;"><i class="bi bi-arrow-repeat"></i> Đăng lại bằng App</button>` : ''}
               ${p.can_handoff_meta ? `<button class="btn btn-primary btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="handoffMetaPosts(false,this.dataset.postId)" style="white-space:nowrap;margin-bottom:6px;" ${metaHandoffBusy ? 'disabled' : ''}><i class="bi bi-cloud-arrow-up"></i> Đưa lên Meta chờ</button>` : ''}
               ${p.status === 'meta_scheduled' ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="cancelMetaPosts(this.dataset.postId)" style="white-space:nowrap;margin-bottom:6px;color:#fca5a5;border-color:rgba(239,68,68,.4);" ${metaHandoffBusy ? 'disabled' : ''} title="Đọc đúng trạng thái Meta rồi hủy lịch; chỉ xóa app sau khi Meta xác nhận"><i class="bi bi-cloud-slash"></i> ${p.meta_cancel_requested ? 'Kiểm tra hủy & xóa app' : 'Hủy Meta & xóa app'}</button>` : `
-              <button class="btn btn-outline btn-sm" onclick="deletePostItem('${p.id}')" ${(['meta_handoff','publishing','meta_scheduled'].includes(p.status) || (p.status === 'processing' && !p.can_replace_failed_video)) ? 'disabled' : ''} style="color: #ef4444; border-color: rgba(239,68,68,0.3); padding: 4px 8px;" title="Xóa khỏi hàng đợi local; không hủy lịch Meta">
+              <button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(p.id)}" onclick="deletePostItem(this.dataset.postId)" ${['meta_handoff','publishing','meta_scheduled'].includes(p.status) ? 'disabled' : ''} style="color: #ef4444; border-color: rgba(239,68,68,0.3); padding: 4px 8px;" title="Xóa khỏi danh sách app; giữ lịch sử và ID Meta chống trùng">
                 <i class="bi bi-trash"></i>
               </button>
               `}
@@ -6826,7 +6821,7 @@
         for (const row of [...next.children]) {
           const old = current.get(row.dataset.postId);
           if (old) {
-            if (old.innerHTML !== row.innerHTML) old.innerHTML = row.innerHTML;
+            patchPostRow(old, row);
             current.delete(row.dataset.postId);
             if (old !== cursor) tbody.insertBefore(old, cursor);
             cursor = old.nextElementSibling;
@@ -6836,12 +6831,19 @@
         }
         for (const old of current.values()) old.remove();
       } else tbody.innerHTML = html;
+      postsTableCache.set(requestKey, {payload, html: tbody.innerHTML, expiresAt: Date.now() + 15000});
     } catch (e) {
-      if (e.name === 'AbortError' || postsTableRequest !== request) return;
+      if (postsTableRequest !== request || (e.name === 'AbortError' && !request.timedOut)) return;
+      if (request.timedOut) e = new Error('Máy chủ phản hồi chậm; bấm Làm mới để thử lại.');
       console.error(e);
-      if (!quiet) tbody.innerHTML = `<tr><td colspan="8" style="color: #ef4444; padding: 20px; text-align: center;">Lỗi tải bài đăng: ${escapeHtml(e.message)}</td></tr>`;
+      showPostsLoading(false, 'Không tải được danh sách: ' + e.message);
+      request.failed = true;
     } finally {
-      if (postsTableRequest === request) postsTableRequest = null;
+      clearTimeout(request.timeout);
+      if (postsTableRequest === request) {
+        postsTableRequest = null;
+        if (!request.failed) showPostsLoading(false);
+      }
     }
   }
 
@@ -6859,9 +6861,9 @@
   }
 
   async function deletePostItem(postId) {
-    if (!confirm('Xóa bài này khỏi app? Với bài đã có Meta ID, app phải xác minh video lỗi và chưa đăng trước; ID lỗi cũ được lưu trong lịch sử.')) return;
+    if (!confirm('Xóa bài này khỏi danh sách app? Bài chờ xác minh Meta được lưu vào lịch sử chống trùng, dừng thử đăng/comment tiếp. Yêu cầu đã gửi và bài trên Meta vẫn giữ nguyên.')) return;
     try {
-      const res = await fetch(`/api/posts/${postId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/posts/${encodeURIComponent(postId)}`, { method: 'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({archive_local:true}) });
       if (res.ok) {
         const data = await res.json(); if (data.message) showToast(data.message);
         loadPostsTable();
@@ -6869,6 +6871,16 @@
     } catch (err) {
       alert('Lỗi: ' + err.message);
     }
+  }
+
+  async function loadArchivedPosts() {
+    const response = await fetch('/api/posts/archived');
+    const data = await response.json();
+    const modal = document.getElementById('modal-meta-diagnosis');
+    document.getElementById('meta-diagnosis-body').innerHTML = `<b>${Number(data.total || 0)} bài đã xóa khỏi danh sách app</b><p>ID Meta và lịch sử được giữ để chống trùng. Yêu cầu đã gửi và bài trên Meta vẫn giữ nguyên.</p>` + (data.items || []).map(p => `<div style="padding:10px 0;border-top:1px solid #334155;"><strong>${escapeHtml(p.title || p.media_file || p.id)}</strong><div>${escapeHtml(p.page_name || p.page_id || '')} · ${escapeHtml(p.status || '')}</div><div>Meta ID: ${escapeHtml(p.meta_upload_video_id || p.meta_video_id || '')}</div><small>${escapeHtml(p.local_archived_at || '')}</small></div>`).join('');
+    for (const id of ['meta-replace-failed','meta-finish-existing','meta-recover-existing','meta-sync-existing']) document.getElementById(id).style.display = 'none';
+    currentMetaDiagnosis = null; currentMetaDiagnosisPost = ''; clearTimeout(recoveryRenderTimer);
+    modal.style.display = 'flex';
   }
 
   async function retryLocalMedia(postId) {
@@ -7630,9 +7642,9 @@
             1. Khung giờ đăng cố định trong ngày (Golden Hours):
           </label>
           <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-            <input type="text" id="loha-slot-input" class="form-control form-control-sm" placeholder="08:00, 11:30, 17:30, 20:30" value="08:00, 11:30, 17:30, 20:30" style="background: #0b1329; border-color: #23304d; font-family: monospace;">
+            <input type="text" id="loha-slot-input" class="form-control form-control-sm" placeholder="11:30, 19:30" value="11:30, 19:30" style="background: #0b1329; border-color: #23304d; font-family: monospace;">
           </div>
-          <div style="font-size: 11px; color: #64748b;">Nhập các khung giờ cách nhau bởi dấu phẩy (Ví dụ: 08:00, 11:30, 17:30, 20:30).</div>
+          <div style="font-size: 11px; color: #64748b;">Nhập tối đa hai khung giờ cách nhau bởi dấu phẩy (Ví dụ: 11:30, 19:30).</div>
         </div>
 
         <!-- Độ giãn cách (Stagger / Jitter) -->
@@ -7942,7 +7954,7 @@
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
         <div>
           <label style="display: block; font-size: 12px; font-weight: 700; color: #94a3b8; margin-bottom: 6px;">Khung giờ đăng trong ngày:</label>
-          <input type="text" id="edit-group-times" value="07:00, 11:30, 17:00, 20:00" placeholder="07:00, 11:30, 17:00, 20:00" style="width: 100%; background: #0b1120; border: 1px solid #334155; border-radius: 8px; padding: 10px; color: #fff; font-family: monospace; font-size: 13px;">
+          <input type="text" id="edit-group-times" value="11:30, 19:30" placeholder="11:30, 19:30" style="width: 100%; background: #0b1120; border: 1px solid #334155; border-radius: 8px; padding: 10px; color: #fff; font-family: monospace; font-size: 13px;">
           <div style="font-size: 11px; color: #64748b; margin-top: 4px;">Cách nhau bằng dấu phẩy (,)</div>
         </div>
         <div>
@@ -8123,6 +8135,11 @@
         <button class="btn btn-primary" id="meta-recover-existing" style="display:none;" onclick="recoverExistingPost()">Đồng bộ quyền và thử đăng lại</button>
         <button class="btn btn-primary" id="meta-finish-existing" style="display:none;" onclick="finishExistingUpload()">Hoàn tất video đã upload</button>
         <button class="btn btn-primary" id="meta-replace-failed" style="display:none;" onclick="replaceFailedVideo()">Tạo lịch lại bằng video đã sửa</button>
+        <span id="meta-recovery-choice" style="display:none;align-items:center;gap:6px;flex-wrap:wrap;width:100%;">
+          <label for="meta-recovery-mode" style="color:#cbd5e1;font-size:12px;">Cách đăng lại</label>
+          <select id="meta-recovery-mode" class="form-control" style="width:auto;min-width:180px;"><option value="app_queue">Đăng ngay bằng App</option><option value="meta_scheduled">Meta giữ lịch</option></select>
+          <input id="meta-recovery-schedule" type="datetime-local" class="form-control" style="display:none;width:auto;" aria-label="Giờ đăng lại">
+        </span>
       </div>
     </div>
   </div>
@@ -8242,7 +8259,7 @@
   let currentMetaDiagnosisPost=null,currentMetaDiagnosis=null,metaFinishBusy=false;
   async function openMetaDiagnosis(postId){
     if(metaFinishBusy) return; currentMetaDiagnosisPost=postId;currentMetaDiagnosis=null;
-    document.getElementById('modal-meta-diagnosis').style.display='flex';const body=document.getElementById('meta-diagnosis-body');body.textContent='Đang đọc trạng thái hiện tại trên Meta...';document.getElementById('meta-finish-existing').style.display='none';document.getElementById('meta-recover-existing').style.display='none';document.getElementById('meta-replace-failed').style.display='none';document.getElementById('meta-sync-existing').style.display='none';
+    document.getElementById('modal-meta-diagnosis').style.display='flex';const body=document.getElementById('meta-diagnosis-body');body.textContent='Đang đọc trạng thái hiện tại trên Meta...';document.getElementById('meta-finish-existing').style.display='none';document.getElementById('meta-recover-existing').style.display='none';document.getElementById('meta-replace-failed').style.display='none';document.getElementById('meta-sync-existing').style.display='none';document.getElementById('meta-recovery-choice').style.display='none';
     try{
       const response=await fetch('/api/posts/'+encodeURIComponent(postId)+'/meta-diagnosis'); const data=await response.json();
       if(postId!==currentMetaDiagnosisPost) return;
@@ -8266,6 +8283,12 @@
         document.getElementById('meta-recover-existing').style.display=diag.can_retry_existing ? '' : 'none';
         document.getElementById('meta-recover-existing').textContent=diag.state === 'schedule_overdue' ? 'Đồng bộ quyền và đăng video đã quá giờ' : 'Đồng bộ quyền và thử đăng lại';
         document.getElementById('meta-sync-existing').style.display=diag.can_sync_existing ? '' : 'none';
+        const recoveryChoice=document.getElementById('meta-recovery-choice');
+        recoveryChoice.style.display=diag.can_retry_existing ? 'flex' : 'none';
+        const recoveryMode=document.getElementById('meta-recovery-mode');
+        const recoverySchedule=document.getElementById('meta-recovery-schedule');
+        recoveryMode.onchange=()=>{ recoverySchedule.style.display=recoveryMode.value==='meta_scheduled' ? '' : 'none'; };
+        recoverySchedule.value=nextLocalScheduleTime();
       }
       const result=document.createElement('div'); result.id='meta-recovery-result'; result.setAttribute('role','status'); result.style='margin-top:12px;color:#cbd5e1;white-space:pre-line;'; body.appendChild(result);
       document.getElementById('meta-finish-existing').style.display=(diag.can_finish_existing || diag.can_reschedule_existing) ? '' : 'none';
@@ -8297,12 +8320,16 @@
     const tokenId=document.getElementById('meta-recovery-token')?.value;
     if(!tokenId){showToast('Chọn Token quản lý Page để phục hồi.');return;}
     const videoId=currentMetaDiagnosis.diagnosis.video_id;
-    if(!confirm(`Đồng bộ quyền Page và thử đăng ngay video ${videoId} bằng Token đã chọn?\nApp giữ nguyên video và tiếp tục xác minh kết quả.`)) return;
+    const mode=document.getElementById('meta-recovery-mode')?.value || 'app_queue';
+    const schedule= document.getElementById('meta-recovery-schedule')?.value || '';
+    if(mode==='meta_scheduled' && !schedule){showToast('Chọn giờ Meta giữ lịch.');return;}
+    const action=mode==='meta_scheduled' ? `đặt Meta giữ lịch lúc ${schedule.replace('T',' ')}` : 'đăng ngay bằng App';
+    if(!confirm(`Đồng bộ quyền Page và ${action} video ${videoId} bằng Token đã chọn?\nApp giữ nguyên video, không upload lại và tiếp tục xác minh kết quả.`)) return;
     metaFinishBusy=true; const button=document.getElementById('meta-recover-existing');button.disabled=true;
     const feedback=document.getElementById('meta-recovery-result');feedback.textContent='Đang đồng bộ quyền Page và kiểm tra video...';
     try{
       const response=await fetch('/api/posts/'+encodeURIComponent(currentMetaDiagnosisPost)+'/recover-existing',{
-        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_existing_upload:true,video_id:videoId,token_id:tokenId})});
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_existing_upload:true,video_id:videoId,token_id:tokenId,mode,...(mode==='meta_scheduled'?{schedule_time:schedule}:{})})});
       const data=await response.json(); if(!response.ok || !data.success) throw new Error(data.error || 'Chưa phục hồi được bài.');
       currentMetaDiagnosis.last_publish_attempt=data.last_publish_attempt || currentMetaDiagnosis.last_publish_attempt;
       feedback.style.color=data.accepted ? '#4ade80' : '#fbbf24';feedback.textContent=data.message;
@@ -8324,26 +8351,15 @@
       document.getElementById('meta-diagnosis-body').textContent=data.message;button.style.display='none';loadDashboard();loadPostsTable({quiet:true});
     }catch(error){document.getElementById('meta-diagnosis-body').textContent=error.message;}finally{metaFinishBusy=false;button.disabled=false;}
   }
-  async function replaceFailedVideo(){
-    if(metaFinishBusy || !currentMetaDiagnosis?.diagnosis?.can_replace_failed_video) return;
-    const filename=document.getElementById('meta-replacement-file')?.value.trim();
-    const schedule=document.getElementById('meta-replacement-schedule')?.value;
-    const mode=document.getElementById('meta-replacement-mode')?.value || 'app_queue';
-    if(!filename || (mode === 'meta_scheduled' && !schedule)){showToast('Chọn MP4 đã sửa và giờ đăng mới.');return;}
-    if(!confirm('Dùng clip đã chọn để thay bài lỗi? App chuẩn bị và xác minh Content, Website và First Comment đúng nguồn trước khi đăng; ID lỗi cũ được giữ trong lịch sử.')) return;
-    metaFinishBusy=true;const button=document.getElementById('meta-replace-failed');button.disabled=true;
-    const feedback=document.getElementById('meta-recovery-result');feedback.textContent='Đang xác minh Meta và MP4 đã sửa...';
-    try{
-      const response=await fetch('/api/posts/'+encodeURIComponent(currentMetaDiagnosisPost)+'/replace-failed-video',{
-        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_replace_failed_video:true,
-          video_id:currentMetaDiagnosis.diagnosis.video_id,filename,mode,schedule_time:schedule || null})});
-      const data=await response.json();if(!response.ok || !data.success) throw new Error(data.error || 'Chưa tạo được lịch thay thế');
-      feedback.textContent=data.message || 'Lịch thay thế đã được tạo.';button.style.display='none';
-      currentMetaDiagnosis.diagnosis.can_replace_failed_video=false;loadDashboard();loadPostsTable({quiet:true});
-    }catch(error){feedback.textContent=error.message;}finally{metaFinishBusy=false;button.disabled=false;}
+  async function replaceFailedVideo() {
+    return submitSelectedRecovery();
   }
   document.addEventListener('DOMContentLoaded',()=>{loadDashboard();setInterval(()=>{if(document.getElementById('pane-dashboard')?.classList.contains('active')) loadDashboard();},30000);});
 </script>
+<link rel="stylesheet" href="/static/posts_interactions.css">
+<script src="/static/posts_interactions.js"></script>
+<script src="/static/scheduler_feedback.js"></script>
+<script src="/static/recovery_tracking.js"></script>
 <script src="/static/video_recovery.js"></script>
 <script src="/static/group_review.js"></script>
 </body>
