@@ -1,2 +1,5 @@
 # Preserve the pinned upstream-derived dictionary digest across Windows clones.
 src/data/english_heading_words.txt -text
+
+# Preserve byte-verified upstream font-license digests across Windows clones.
+web/static/fonts/*-OFL.txt -text
