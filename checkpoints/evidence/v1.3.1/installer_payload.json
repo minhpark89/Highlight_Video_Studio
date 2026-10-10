@@ -1,0 +1,482 @@
+﻿{
+    "size":  683063808,
+    "source_identity":  {
+                            "build_channel":  "desktop-test",
+                            "product_name":  "Highlight Desktop Test",
+                            "built_at_utc":  "2026-10-10T12:16:21.4075167Z",
+                            "source_commit":  "d1e5df7dc81796412922650b682abbf7d606cce8",
+                            "source_dirty":  true,
+                            "meta_graph_api_version":  "v24.0",
+                            "port":  "ephemeral-loopback-never-5080",
+                            "prerelease_build":  "1.3.1",
+                            "bind_host":  "127.0.0.1",
+                            "app_version":  "1.3.1"
+                        },
+    "runtime_state_absent":  true,
+    "offline_test_summary":  [
+                                 "42 passed in 4.46s",
+                                 "26 passed, 10 subtests passed in 1.21s",
+                                 "79 passed in 3.75s",
+                                 "62 passed in 2.55s",
+                                 "64 passed, 2 skipped in 4.67s",
+                                 "22 passed in 1.78s",
+                                 "42 passed, 12 subtests passed in 4.02s",
+                                 "84 passed in 3.70s",
+                                 "44 passed in 2.35s",
+                                 "22 passed in 5.62s",
+                                 "7 passed in 1.65s",
+                                 "7 passed in 1.25s",
+                                 "Release built: E:\\OPENCLAW\\BOB\\source-worktree\\release\\Highlight_Desktop_Test_Setup_v1.3.1.exe",
+                                 "SHA256: 465c1aa322f7da8c75e37d49ea07c84031bd3f9aec8e10dc04ea6a20ad9af5e4"
+                             ],
+    "packaged_files":  [
+                           {
+                               "sha256":  "0936864f82026173283c3692f5e896d49f3b2a7c4dc4d2eac5c6bc6a591ca1a2",
+                               "file":  "src/media_download.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "2243654328c82a5ca7f9a3d80ad6692879b1e3696746f032f3cabf6ffacd5663",
+                               "file":  "core/article_quality.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "a9003a146d1e59326268fca032172b9e2d558b83058c5be361cdfb7a57eec398",
+                               "file":  "src/content_builder.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "bdfe95ee30db05e381b2fb9246b1e0000f4db5103e3c5ee414c1341d5469b3c3",
+                               "file":  "multi_pc/local_launcher.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "48dd2871b0d4ac4e4fb94a2e6344c01712b8b869ec2e09216c8dc6dd279192aa",
+                               "file":  "web/static/recovery_tracking.js",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "d45857f2a209c3db13fec2f4dc65a953005d7d194625584e232e0be7fd79b2f5",
+                               "file":  "multi_pc/connector.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "66a3be1190a46d463e84a46c3017994f360ded57bc5d3d46c7c02ecbeccb6091",
+                               "file":  "src/job_store.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "e1d7e1bc28e6a8eb591e3f7168215069d55ba15106eb61c4364989db87b1e331",
+                               "file":  "src/research.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "cd2915e962f2703a4c16b3921483748337adc26dd0c997fbcdfa71a25b09eef1",
+                               "file":  "src/media_validation.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "c649919621895c2d25444cdbf0356436956954e4f3710f9e85cc124cc20ddf40",
+                               "file":  "multi_pc/profile_cache.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "f9609c0d1c7ebf822475478763258425ed8bec8ef9b6d2b4d77d15634f3278f2",
+                               "file":  "multi_pc/publishing_settings.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "209e45d6970f344121a27ec2c39bdadafa02f0e3b81dae0021f12d9993aaa4d4",
+                               "file":  "web/templates/index.html",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "9c8bafac7887f893406a2c5a0a5df808f909c8e58df9f34535610533f45cc6c4",
+                               "file":  "src/publisher/meta_reel_poster.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "0a16938f3d447b3c39beb515eb80c1075d240e93825a0d75941e0fc7b9109033",
+                               "file":  "web/meta_recovery.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "6eff4534f3b6e00b31cee9ef917c11322e8607a9244ba564681729a6ace8097e",
+                               "file":  "web/static/group_review.js",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "feb1a7624c0c4600a18e509218485637ce0dd6cb85207c89e7720adeb43d8723",
+                               "file":  "web/meta_handoff.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "2b274a5a0d38fd790a73f9d605e8264a486495131fb511dc1b6980fe876b30c2",
+                               "file":  "web/post_retry.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "8b8efe9683fde1f779819d1799ed1a77e23af5567784b9138f82e569e6c54d00",
+                               "file":  "web/static/posts_interactions.css",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "776e393df9aae5ade4fb8573e2fcb62eeef8c79aac74350bcd1c6d15eaf47c12",
+                               "file":  "web/app.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "fc11cbec7ed20ad1ea415c3c7030b746afc8877ca8a821b1ca6c951a99c3c43a",
+                               "file":  "web/post_queries.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "3c259937d0587f3917ab4b39ec77ef53898843d4c10660d973e031b0257faf21",
+                               "file":  "web/posts_store.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "0db7802f25fef15a93294e006320e2c8ebe3acd6724fff58961b9229c1bd5cae",
+                               "file":  "src/text_llm_diagnostics.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "0bb180f695033adff4d651aaa52a891a4431d848898c7106aa3e9b5e316eedc5",
+                               "file":  "core/text_encoding.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "c7122989e84e44823e6cecb5107763a836b8c89e74fd0707c742ac7d7693fd46",
+                               "file":  "core/website_article_service.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "65bd92a545eb4d5132e2480003daff38206bcf4ffabdf91632fcea5d1f2f81d8",
+                               "file":  "src/captions.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "67e9d3b2e882607e430481acd47cc7ad8c2596008436ba7725f0adc1128b90fd",
+                               "file":  "web/recovery_content.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "8b292d7b9b46fb18cf6d3656b72c0140b52ddd5c281bf81f31bbbc2454086402",
+                               "file":  "web/static/posts_interactions.js",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "44eea7ae552519f4edb43472602a6524d05c295a4662f4b0975e2865b7041545",
+                               "file":  "multi_pc/__init__.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "8a1ee6fed8d4cacb4ddaa0fbe39a63da966c191f277877e2118c571fbeef856f",
+                               "file":  "multi_pc/data_root.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "7edf609558bd811e1f8daeeed927fd2f6247eafc022c81fdb74beea19676d752",
+                               "file":  "src/download_process.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "afbe8dd0b952f6c7f9b081d358c62ccb7e44902d5f9bc447f9587a746d7d636c",
+                               "file":  "src/caption_timing.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "cc5376cdd6b2fff46f219d5651ee206a0e333c52d4f98b68d89de28b50c7e6a7",
+                               "file":  "src/llm_response.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "c02c46b538bec234b159c21ef11b1933ebcd03dc01158330f06893e54ade9a0b",
+                               "file":  "src/publisher/schedule_media.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab",
+                               "file":  "web/static/fonts/Anton-Regular.ttf",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "9bab9bfbfa111f0edf61984a4cb0bb54454e53da96d7b4b32135c2204f5e2e60",
+                               "file":  "src/publisher/meta_preflight.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "63cc3577823829822bb617976df56b31a1382f71cd680b28c1cbfd4ccbb766df",
+                               "file":  "src/english_text.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "964f0c61e5146803db068ed0f29fbfc356061b51a6fadc9371ee21dada047098",
+                               "file":  "multi_pc/meta_scheduling.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "31aeaf0bd544416b8abfd3e53d4373f6fb92f22ed8c6a0b961515d1e03985dd6",
+                               "file":  "web/page_insights.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "f5478d08a03c0e59ca786e5d30764117a0de2f3efcbb34e5b441c1369a6207e1",
+                               "file":  "core/__init__.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "93ad2cd5953a61d1671e7920017db5a9ed6eb12c26dca4775eb724a2d052375e",
+                               "file":  "web/test_tdz.js",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "e74b750df582c608f35db467b711b2b60d2217618e85e60b72b42dfd00446cab",
+                               "file":  "web/static/fonts/BarlowCondensed-Black.ttf",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "eb9f96af996463420aff8a134e549f480371400a4341e567a1c3d04fe0ddf6be",
+                               "file":  "multi_pc/hardware.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "8a62205b5670d3b9881d3352416772ccfa460c538dc3d686009753bf9676fe92",
+                               "file":  "web/video_recovery_tasks.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "44dbfa01553d227bec76ba6446c5618870a76a4a3297f41630dde859d0650d02",
+                               "file":  "web/static/fonts/BeVietnamPro-ExtraBold.ttf",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "1ed1d88c0eed40f57d1099b867346d3d2d5b2ff3ff5e8119460c75ab219034f3",
+                               "file":  "src/media_quality_gate.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "9db1753a9c10fa151917d82722e2263df889c5223cd9e49be4b80864db0d3fa2",
+                               "file":  "src/fallback_comments.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "827b9d40af249c2dbc433ecb9750d74fde675a4f9c5ba711cbb911fdc2722897",
+                               "file":  "web/video_recovery.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "c91eea431be22ccf098d3f109606639aa5fa4e320a6e84936223b92d54453f58",
+                               "file":  "web/token_audit.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "9f4f8906653f10da6ec01dc760434a0cde65fc2a22ae9b3b91d1e9c3f601ff42",
+                               "file":  "src/publisher/page_manager.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "d1f020984e976b178c5acf0f81a500dff348c427ddaad2f4066674670eacc546",
+                               "file":  "src/first_comment_profiles.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "6b2a0021369fa791b1c6375c1b4a5acde35f00fab4d463202581d470acd8b53e",
+                               "file":  "src/render_quality.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "16c3a80c9b19eb8e1c61036c352d58914fcededd23a2a089f67f38c57f07424b",
+                               "file":  "src/publisher/first_comment_queue.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "d3508ca1e5f2e67d89472334191844dc3dfb212cbf7f1b7e3e6844938c8cb560",
+                               "file":  "multi_pc/environment.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "220e0a113086e408da99b171ee7dd9b9b5fedca855fd3b3d7e943c95c30473d9",
+                               "file":  "web/meta_diagnostics.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "e9bd38e0c8ed74b3acb95f5bf14376fb3dc5d30d16760338d425772d9d4af2b2",
+                               "file":  "multi_pc/posting_schedule.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "9101d891554f2962f6e3d4ae08de5cad61c0b8b992a89d155ed80fc7521c82af",
+                               "file":  "src/publisher/website_publisher.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "a1efedb1524152199a3b7a8d1fcca5bc6987785e2170bd2473271daf8442b1a5",
+                               "file":  "src/output_scheduling.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "83647c5a914b6da5f58b84afa6b4f13f717b1142739149ce361ad0412e421955",
+                               "file":  "multi_pc/adapter.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "a23de9810400a646bc9eccb6bb80dfa30338291b102e66aa50460b088ea995b3",
+                               "file":  "web/post_lineage.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "e9af4717912714a1384076f7821ddda1d53ebd285860fc1c009ce8704a781933",
+                               "file":  "web/dashboard.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "42e184b54b3d3edc86801a26b83d42c5cb4bb0ab6b9f021d706689b8ed87552b",
+                               "file":  "web/static/video_recovery.js",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "f59216737bb409486c54cb13c83a334f295817ce70a576c9125b491bd8f20467",
+                               "file":  "src/pipeline.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "718e6917dfe9ce6f96b95869e6e6b91817bcb1cd4cf17bc2d30675ffcbb61df8",
+                               "file":  "multi_pc/concurrency.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "819c709b835c85709c77e8a19330635a156536f7beccf0fd020d98ab656ab23b",
+                               "file":  "multi_pc/control_plane.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "d3feb379863079816f9bcce5a79f041c0a9252934f81c753c8eb46d184ef6305",
+                               "file":  "multi_pc/json_io.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "30f34408897a11d43c976551e36e708d361ce52707614f18a089a5781f24e76c",
+                               "file":  "multi_pc/credentials.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "7dd3eec8d5b009a29daa9eb35e1ccd40a9787912279288b23a6c58ebc9a55222",
+                               "file":  "web/recovery_requests.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "a71d55dfc2d63a13f19cbd5991c75c5c64ecaeb38ef823a91ae02a62dd81514e",
+                               "file":  "src/publisher/meta_api.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "01f8e235d2cb7e236b934bf49d0d5c9de3b313d6a5cf1ba911911dce1f789ca7",
+                               "file":  "web/full_script.js",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "ae3726beaa1a9bdb6a15228e41297481c212590d3625a0201f3df22f199cb403",
+                               "file":  "src/publisher/hook_generator.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "261a23c09bb4a3d15daab10a560e9c8be2e12ec76aaf372a90f3636875dbb829",
+                               "file":  "web/queue_readiness.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "4d68b6efcc315e0f85496aa23508d201149dab917bb388ec2bdd831f7f849db0",
+                               "file":  "multi_pc/connector_main.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "4bad58206f48f64062ada8746544beadec7090e8845f957a5ccbe2b81c984928",
+                               "file":  "src/job_checkpoints.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "08c21f5ce4d733dd2054a6b19eb92a06f21dea54be4c8b02d5d1bed9c92b15cb",
+                               "file":  "web/static/scheduler_feedback.js",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "a9cc324df32716b61f4c70d54e835e0a79e48263745e942e98c38da821764a8b",
+                               "file":  "src/output_pipeline.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "209e45d6970f344121a27ec2c39bdadafa02f0e3b81dae0021f12d9993aaa4d4",
+                               "file":  "web/index.html",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "4dcdfc1edcc5d384722edb0dacf858fb13676189cefc222ef1546bf157894187",
+                               "file":  "src/publisher/token_vault.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "5a2e633d00a30fee4ab1ce1dca2ba4b452a477ac0724a107a2e65f8c40ec4ab6",
+                               "file":  "web/scheduled_publisher.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "121a444adadef8e83aae56f3e739d8a5dba4b9e76e93ad43634ace89fb506f87",
+                               "file":  "multi_pc/security.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "2d9794d367161aaff5485a364ca1acf9879a83e48ba93a1cf2e65f0b58a5a928",
+                               "file":  "src/content_packages.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "cc262d6705fd9bfbb9c93f368709c87a7c4b898b595d8bbc59437966014d30fd",
+                               "file":  "src/article_format.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "354cd506102b063469508a7cd10f564682393e9275c05e68a8c554fdc6154712",
+                               "file":  "src/long_transcription.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "73a9e2f81acdb5f1b19d8152cf0de30acf36e41e70835414234456f30068c29b",
+                               "file":  "src/video_recovery_media.py",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "977d13fc15f371ae39f8427e129a7d24c3ae3f160b4eff09c1e0683ffc3a23b3",
+                               "file":  "web/static/fonts/provenance.json",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "ee67e6ee22790b7929f1a3769ca2801d565c64b5a9096942c1adf5596de9c9e4",
+                               "file":  "web/static/fonts/anton-OFL.txt",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "186d750eb496a4c17a76385f82be6aea2ac1cf2de074a811d63786cf374ea73f",
+                               "file":  "web/static/fonts/barlowcondensed-OFL.txt",
+                               "matches_source":  true
+                           },
+                           {
+                               "sha256":  "6b7f8f73609a25ea78c891e34cf37b06f8a676b7ea986e941e43b009110f2a85",
+                               "file":  "web/static/fonts/bevietnampro-OFL.txt",
+                               "matches_source":  true
+                           }
+                       ],
+    "meta_graph_api_version":  "v24.0",
+    "local_build_only":  true,
+    "published":  false,
+    "installed_in_active_runtime":  false,
+    "setup":  "E:\\OPENCLAW\\BOB\\source-worktree\\release\\Highlight_Desktop_Test_Setup_v1.3.1.exe",
+    "browser_checks":  [
+                           "Release pytest gate completed",
+                           "Template parity is covered by the release test suite"
+                       ],
+    "success":  true,
+    "credential_seeds_empty":  true,
+    "javascript_syntax_verified":  true,
+    "sha256":  "465c1aa322f7da8c75e37d49ea07c84031bd3f9aec8e10dc04ea6a20ad9af5e4"
+}

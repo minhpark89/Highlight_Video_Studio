@@ -1,0 +1,20 @@
+﻿{
+    "summary":  [
+                    "42 passed in 4.46s",
+                    "26 passed, 10 subtests passed in 1.21s",
+                    "79 passed in 3.75s",
+                    "62 passed in 2.55s",
+                    "64 passed, 2 skipped in 4.67s",
+                    "22 passed in 1.78s",
+                    "42 passed, 12 subtests passed in 4.02s",
+                    "84 passed in 3.70s",
+                    "44 passed in 2.35s",
+                    "22 passed in 5.62s",
+                    "7 passed in 1.65s",
+                    "7 passed in 1.25s",
+                    "Release built: E:\\OPENCLAW\\BOB\\source-worktree\\release\\Highlight_Desktop_Test_Setup_v1.3.1.exe",
+                    "SHA256: 465c1aa322f7da8c75e37d49ea07c84031bd3f9aec8e10dc04ea6a20ad9af5e4"
+                ],
+    "source":  "build/logs/v1.3.1-versioned-build.stdout.log",
+    "success":  true
+}

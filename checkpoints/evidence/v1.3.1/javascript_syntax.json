@@ -1,0 +1,8 @@
+﻿{
+    "command":  "node --check",
+    "files":  [
+                  "web/static/posts_interactions.js",
+                  "web/static/recovery_tracking.js"
+              ],
+    "success":  true
+}

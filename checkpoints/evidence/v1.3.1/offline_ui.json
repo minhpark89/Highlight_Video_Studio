@@ -1,0 +1,8 @@
+﻿{
+    "checks":  [
+                   "Release pytest gate completed",
+                   "Template parity is covered by the release test suite"
+               ],
+    "scope":  "automated offline release verification",
+    "success":  true
+}
