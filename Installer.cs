@@ -19,7 +19,7 @@ internal sealed class InstallerForm : Form
 
     internal InstallerForm()
     {
-        Text = TestProductName + " v1.3.0 - Installer";
+        Text = TestProductName + " v1.3.1 - Installer";
         ClientSize = new Size(620, 355);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;

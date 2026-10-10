@@ -1,5 +1,5 @@
-﻿param(
-    [string]$Version = "1.3.0",
+param(
+    [string]$Version = "1.3.1",
     [string]$PreviewRevision = "",
     [string]$BuildChannel = "desktop-test",
     [switch]$SkipTests,
