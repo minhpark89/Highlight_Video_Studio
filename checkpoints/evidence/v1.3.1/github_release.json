@@ -1,0 +1,34 @@
+﻿{
+    "id":  408943916,
+    "tag_name":  "v1.3.1",
+    "name":  "Highlight Desktop Test v1.3.1",
+    "prerelease":  true,
+    "html_url":  "https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.3.1",
+    "target_commitish":  "d1e5df7dc81796412922650b682abbf7d606cce8",
+    "published_at":  "2026-10-10T12:38:32Z",
+    "assets":  [
+                   {
+                       "name":  "CODEX_CHECKPOINT_v1.3.1.md",
+                       "size":  398,
+                       "state":  "uploaded",
+                       "digest":  "sha256:6601f42755fcab90acb45bca52cbdcfeffb5dff17d4b04a256e9272440c974c3",
+                       "browser_download_url":  "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.3.1/CODEX_CHECKPOINT_v1.3.1.md"
+                   },
+                   {
+                       "name":  "Highlight_Desktop_Test_Setup_v1.3.1.exe",
+                       "size":  683063808,
+                       "state":  "uploaded",
+                       "digest":  "sha256:465c1aa322f7da8c75e37d49ea07c84031bd3f9aec8e10dc04ea6a20ad9af5e4",
+                       "browser_download_url":  "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.3.1/Highlight_Desktop_Test_Setup_v1.3.1.exe"
+                   },
+                   {
+                       "name":  "Highlight_Desktop_Test_Setup_v1.3.1.sha256",
+                       "size":  107,
+                       "state":  "uploaded",
+                       "digest":  "sha256:9c7226298a7c59dc2ac0beaff94ac4e001f70ebad878f100b9362dbad5114657",
+                       "browser_download_url":  "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.3.1/Highlight_Desktop_Test_Setup_v1.3.1.sha256"
+                   }
+               ],
+    "public_sha_status":  200,
+    "public_sha_body":  "465c1aa322f7da8c75e37d49ea07c84031bd3f9aec8e10dc04ea6a20ad9af5e4  Highlight_Desktop_Test_Setup_v1.3.1.exe"
+}
