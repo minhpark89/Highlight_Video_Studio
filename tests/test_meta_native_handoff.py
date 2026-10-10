@@ -15,6 +15,14 @@ def meta_response(payload, status=200):
     response.json.return_value = payload
     return response
 
+@pytest.fixture(autouse=True)
+def mock_video_probe(monkeypatch):
+    """Keep Meta protocol tests independent of the host FFprobe installation."""
+    monkeypatch.setattr(
+        "src.publisher.meta_reel_poster.probe_video",
+        lambda path: {"size": Path(path).stat().st_size},
+    )
+
 
 @pytest.mark.parametrize("finish", [requests.Timeout("fixture"), ValueError("fixture"), [], None])
 def test_ambiguous_finish_preserves_upload_id_and_prevents_retry(tmp_path, finish):

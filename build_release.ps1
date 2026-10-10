@@ -36,11 +36,21 @@ function Assert-BuildCleanupPath([string]$TargetPath) {
 }
 
 if (-not (Test-Path -LiteralPath $csc)) { throw "C# compiler not found: $csc" }
+if (-not (Test-Path -LiteralPath $ToolSource)) { throw "Tool source folder not found: $ToolSource" }
+$ToolSource = (Resolve-Path -LiteralPath $ToolSource).Path
+foreach ($tool in @("ffmpeg.exe", "ffprobe.exe", "node.exe", "yt-dlp.exe")) {
+    if (-not (Test-Path -LiteralPath (Join-Path $ToolSource $tool))) {
+        throw "Missing binary in tool source: $tool"
+    }
+}
 
-if (-not $SkipTests) {
-    Push-Location $root
-    try {
-        $testGroups = @(
+$testPath = $env:PATH
+$env:PATH = "$ToolSource;$testPath"
+try {
+    if (-not $SkipTests) {
+        Push-Location $root
+        try {
+            $testGroups = @(
             @("tests/test_multi_pc_hardware.py", "tests/test_multi_pc_local_mvp.py", "tests/test_multi_pc_phase1.py"),
             ,@("tests/test_release_guards.py"),
             @("tests/test_page_token_sync.py", "tests/test_parallel_publishing.py", "tests/test_posting_schedule.py"),
@@ -54,12 +64,16 @@ if (-not $SkipTests) {
             ,@("tests/test_v1210_queue_recovery.py"),
             ,@("tests/test_v130_desktop_recovery_and_schedule.py")
         )
-        foreach ($group in $testGroups) {
-            & python -m pytest @group -q --no-header
-            if ($LASTEXITCODE -ne 0) { throw "Release tests failed (pytest $LASTEXITCODE); use -SkipTests only to debug" }
+            foreach ($group in $testGroups) {
+                & python -m pytest @group -q --no-header
+                if ($LASTEXITCODE -ne 0) { throw "Release tests failed (pytest $LASTEXITCODE); use -SkipTests only to debug" }
+            }
         }
+        finally { Pop-Location }
     }
-    finally { Pop-Location }
+}
+finally {
+    $env:PATH = $testPath
 }
 if (-not (Test-Path -LiteralPath $IconSource)) { throw "Icon not found: $IconSource" }
 New-Item -ItemType Directory -Force -Path $stage, $release | Out-Null

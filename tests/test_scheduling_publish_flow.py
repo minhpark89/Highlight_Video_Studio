@@ -293,7 +293,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {}),
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"success": True, "video_id": "video-1", "permalink_url": "https://facebook.test/reel/video-1"}),
             ]
-            with mock.patch("src.publisher.meta_reel_poster.requests.post", side_effect=responses) as post:
+            with mock.patch("src.publisher.meta_reel_poster.probe_video", return_value={"size": video.stat().st_size}), mock.patch("src.publisher.meta_reel_poster.requests.post", side_effect=responses) as post:
                 result = MetaReelPoster().publish_reel("page-1", "page-token", video)
         self.assertTrue(result["success"])
         self.assertEqual(result["video_id"], "video-1")
@@ -312,7 +312,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {}),
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"success": True}),
             ]
-            with mock.patch("src.publisher.meta_reel_poster.requests.post", side_effect=responses):
+            with mock.patch("src.publisher.meta_reel_poster.probe_video", return_value={"size": video.stat().st_size}), mock.patch("src.publisher.meta_reel_poster.requests.post", side_effect=responses):
                 result = MetaReelPoster().publish_reel("page-1", "page-token", video)
         self.assertFalse(result["success"])
         self.assertTrue(result["outcome_unknown"])
@@ -327,7 +327,7 @@ class SchedulingPublishFlowTests(unittest.TestCase):
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {}),
                 mock.Mock(status_code=200, ok=True, headers={}, json=lambda: {"success": True, "message": "Video is Processing...check upload status", "post_id": "122117668215471152"}),
             ]
-            with mock.patch("src.publisher.meta_reel_poster.requests.post", side_effect=responses) as post:
+            with mock.patch("src.publisher.meta_reel_poster.probe_video", return_value={"size": video.stat().st_size}), mock.patch("src.publisher.meta_reel_poster.requests.post", side_effect=responses) as post:
                 result = MetaReelPoster().publish_reel("page-1", "page-token", video, first_comment="Do not send")
         self.assertFalse(result["success"])
         self.assertTrue(result["processing"])

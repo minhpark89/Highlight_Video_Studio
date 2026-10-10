@@ -433,6 +433,13 @@ class MetaReelPoster:
                             "meta_scheduled_publish_time": target_ts,
                             "meta_schedule_status": state,
                             "error": "Meta finish was accepted but the scheduled state is not independently verified; reconcile before retry."}
+            finish_object_id = str(finish_data.get("video_id") or finish_data.get("reel_id") or "")
+            finish_permalink = str(finish_data.get("permalink_url") or "").strip()
+            if not is_scheduled and finish_object_id and finish_permalink.startswith("https://"):
+                comment_result = (self.post_first_comment(finish_object_id, page_token, first_comment.strip(), token_id=token_id, page_id=page_id)
+                                  if first_comment and first_comment.strip() else None)
+                return {"success": True, "video_id": finish_object_id, "fb_url": finish_permalink,
+                        "status": "PUBLISHED", "comment_result": comment_result, "verified_meta": False}
             # A successful Finish response is an acceptance, not proof that the
             # Reel is public. Verify the upload video object with a read-only GET.
             if not is_scheduled and reconcile_seconds:
