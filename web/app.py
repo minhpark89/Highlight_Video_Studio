@@ -1086,20 +1086,31 @@ def detect_hardware():
 @app.route("/api/system/youtube_status", methods=["GET"])
 def api_youtube_status():
     """Kiểm tra xem Chrome profile đã đăng nhập YouTube hay chưa dựa trên cookies xác thực Google/YouTube."""
+    local_app_data = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
     candidate_dirs = [
+        local_app_data / "Google" / "Chrome" / "User Data",
         ROOT_DIR / "chrome_profile",
         Path(r"F:\openclaw\.openclaw\workspace\chrome_profile")
     ]
     profiles = ["Default", "Profile 1", "Profile 2", "Profile 3"]
     total_cnt = 0
+    database_seen = False
+    database_unavailable = False
 
     for base_dir in candidate_dirs:
         if not base_dir.exists():
             continue
-        for prof in profiles:
+        discovered = list(profiles)
+        try:
+            state = json.loads((base_dir / "Local State").read_text(encoding="utf-8"))
+            discovered.extend((state.get("profile", {}).get("info_cache", {}) or {}).keys())
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        for prof in dict.fromkeys(discovered):
             cookie_path = base_dir / prof / "Network" / "Cookies"
             if not cookie_path.exists():
                 continue
+            database_seen = True
 
             temp_db = base_dir / f"temp_yt_{prof}_{int(time.time()*1000)}.db"
             try:
@@ -1117,7 +1128,14 @@ def api_youtube_status():
                 conn.close()
                 total_cnt += cnt
                 if cnt > 0:
-                    return jsonify({"logged_in": True, "count": cnt, "profile": prof})
+                    return jsonify({"logged_in": True, "state": "ready", "count": cnt,
+                                    "profile": prof, "profile_root": str(base_dir),
+                                    "source": "chrome"})
+            except (PermissionError, sqlite3.Error, OSError):
+                # Chrome can hold the SQLite file while still being fully
+                # logged in. Do not report this as a false signed-out state.
+                database_unavailable = True
+                continue
             except Exception:
                 pass
             finally:
@@ -1127,7 +1145,14 @@ def api_youtube_status():
                     except Exception:
                         pass
 
-    return jsonify({"logged_in": total_cnt > 0, "count": total_cnt})
+    if total_cnt:
+        return jsonify({"logged_in": True, "state": "ready", "count": total_cnt})
+    if database_seen and database_unavailable:
+        return jsonify({"logged_in": None, "state": "unavailable", "count": 0,
+                        "message": "Chrome đang mở và khóa cookie database. Hãy đóng Chrome rồi kiểm tra lại; yt-dlp vẫn sẽ thử các profile Chrome hợp lệ."})
+    # False means Chrome was inspected and contains no auth cookie.
+    return jsonify({"logged_in": False, "state": "signed_out", "count": 0,
+                    "message": "Chrome đã được kiểm tra nhưng chưa có phiên YouTube."})
 
 @app.route("/api/system/open_chrome", methods=["POST"])
 def api_open_chrome():
@@ -1157,12 +1182,9 @@ def api_open_chrome():
         if not chrome_exe:
             return jsonify({"success": False, "error": r"Không tìm thấy Google Chrome tại C:\Program Files\Google\Chrome\Application\chrome.exe"}), 404
             
-        profile_dir = ROOT_DIR / "chrome_profile"
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        
         cmd = [
             chrome_exe,
-            f"--user-data-dir={str(profile_dir)}",
+            "--profile-directory=Default",
             "--no-first-run",
             "--no-default-browser-check",
             target_url
@@ -3728,7 +3750,9 @@ def api_finish_existing_upload(post_id):
 
 @app.route("/api/posts", methods=["GET"])
 def api_get_posts():
-    return jsonify(_enrich_post_rows([post for post in load_posts() if not post.get("local_archived_at")]))
+    from web.post_lineage import visible_posts
+    posts = visible_posts([post for post in load_posts() if not post.get("local_archived_at")])
+    return jsonify(_enrich_post_rows(posts))
 
 
 def _enrich_post_rows(posts, *, audit_posts=None, catalog=None):
@@ -3812,7 +3836,9 @@ def _enrich_post_rows(posts, *, audit_posts=None, catalog=None):
 def api_list_posts():
     import copy
     from web.post_queries import select_posts
+    from web.post_lineage import visible_posts
     posts = read_posts_snapshot()
+    posts = visible_posts(posts)
     try:
         result = select_posts(posts, view=request.args.get("view", "posts"), bucket=request.args.get("bucket", "all"),
                               group_id=request.args.get("group_id", ""), page_id=request.args.get("page_id", ""),

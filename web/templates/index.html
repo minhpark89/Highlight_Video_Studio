@@ -14,6 +14,14 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
   <style>
+    .subtitle-preview-card{margin-top:10px;padding:10px 12px;border:1px solid rgba(56,189,248,.25);border-radius:12px;background:linear-gradient(135deg,rgba(15,23,42,.92),rgba(30,41,59,.7));}
+    .subtitle-preview-label{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;}
+    .subtitle-preview{min-height:44px;display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 8px;border-radius:9px;background:linear-gradient(135deg,#111827,#1e293b);font-size:18px;font-weight:900;letter-spacing:.02em;text-align:center;text-shadow:0 2px 4px #000;transition:color .18s,background .18s,filter .18s;}
+    .subtitle-preview span{color:#fff}.subtitle-preview b{color:#ffe600}.subtitle-preview em{font-style:normal;color:#22d3ee}
+    .subtitle-preview-caption{display:block;margin-top:6px;color:#cbd5e1;font-size:11px;text-align:center;}
+    .subtitle-preview-clean_white{font-weight:600;letter-spacing:.01em}.subtitle-preview-clean_white b,.subtitle-preview-clean_white em{color:#fff}.subtitle-preview-clean_white{background:#020617;}
+    .subtitle-preview-karaoke_cyan b,.subtitle-preview-karaoke_cyan em{color:#22d3ee;text-shadow:0 0 10px #06b6d4}.subtitle-preview-neon_green b,.subtitle-preview-neon_green em{color:#4ade80;text-shadow:0 0 10px #22c55e}
+    .subtitle-preview-viral_anton{font-family:Impact,"Arial Black",sans-serif}.subtitle-preview-viral_anton b,.subtitle-preview-viral_anton em{color:#facc15}.subtitle-preview-viral_condensed{font-family:"Arial Narrow",Arial,sans-serif;letter-spacing:.04em}.subtitle-preview-viral_condensed b,.subtitle-preview-viral_condensed em{color:#86efac}.subtitle-preview-viral_vietnam{font-weight:700}.subtitle-preview-viral_vietnam b,.subtitle-preview-viral_vietnam em{color:#f0abfc}.subtitle-preview-none{opacity:.58;filter:grayscale(1)}
     *, *::before, *::after {
       box-sizing: border-box;
       margin: 0;
@@ -1274,6 +1282,13 @@
                       <option value="viral_vietnam">✨ Be Vietnam Pro (tiếng Việt đẹp)</option>
                       <option value="none">🚫 Không chèn phụ đề</option>
                     </select>
+                    <div class="subtitle-preview-card" aria-live="polite">
+                      <div class="subtitle-preview-label">Xem trước kiểu subtitle</div>
+                      <div id="subtitle-preview" class="subtitle-preview subtitle-preview-hormozi_yellow">
+                        <span>THIS</span> <b>IS YOUR</b> <em>MOMENT</em>
+                      </div>
+                      <small id="subtitle-preview-caption">Hormozi Style · highlight vàng</small>
+                    </div>
                     <label class="lbl" style="margin-top:8px;">Căn chữ theo lời thoại</label>
                     <select id="subtitle_timing">
                       <option value="accurate" selected>🎯 Chính xác từng từ (audio, có cache)</option>
@@ -2119,6 +2134,25 @@
       // Activate clicked button or matching button
       if (btnEl) {
         btnEl.classList.add('active');
+      } else if (data && data.state === 'unavailable') {
+        if (pill) {
+          pill.style.background = 'rgba(245, 158, 11, 0.15)';
+          pill.style.borderColor = 'rgba(245, 158, 11, 0.4)';
+          pill.title = data.message || 'Chrome đang khóa cookie database';
+        }
+        if (icon) {
+          icon.className = 'bi bi-hourglass-split';
+          icon.style.color = '#fbbf24';
+        }
+        if (text) {
+          text.style.color = '#fcd34d';
+          text.innerText = 'YouTube: Chrome đang bận';
+        }
+        if (badge) {
+          badge.style.background = 'rgba(245, 158, 11, 0.3)';
+          badge.style.color = '#fcd34d';
+          badge.innerText = 'Đang kiểm tra';
+        }
       } else {
         var mBtn = document.querySelector('.nav-btn[data-pane="' + paneId + '"]');
         if (mBtn) mBtn.classList.add('active');
@@ -5913,6 +5947,28 @@
 
 
   // =========================================================================
+  function updateSubtitlePreview() {
+    const select = document.getElementById('subtitle_style');
+    const preview = document.getElementById('subtitle-preview');
+    const caption = document.getElementById('subtitle-preview-caption');
+    if (!select || !preview) return;
+    const labels = {
+      hormozi_yellow: 'Hormozi Style · highlight vàng', clean_white: 'Clean White · tối giản',
+      karaoke_cyan: 'Cyan Modern · phát sáng cyan', neon_green: 'Neon Green · phát sáng xanh',
+      viral_anton: 'Anton · đậm và gọn', viral_condensed: 'Barlow Condensed · hẹp và nhanh',
+      viral_vietnam: 'Be Vietnam Pro · tối ưu tiếng Việt', none: 'Không chèn phụ đề'
+    };
+    preview.className = 'subtitle-preview subtitle-preview-' + select.value;
+    if (caption) caption.textContent = labels[select.value] || select.value;
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    const subtitleSelect = document.getElementById('subtitle_style');
+    if (subtitleSelect) {
+      subtitleSelect.addEventListener('change', updateSubtitlePreview);
+      updateSubtitlePreview();
+    }
+  });
+
   // LOHA PAGE PIPELINE: NHÓM TRANG & LÊN LỊCH TỰ ĐỘNG + QUẢN LÝ BÀI ĐĂNG
   // =========================================================================
 

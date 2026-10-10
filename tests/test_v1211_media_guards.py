@@ -9,7 +9,7 @@ import pytest
 from src import job_store, long_transcription
 from src.download_process import DownloadStalled, run_download
 from src.media_quality_gate import clip_error, require_publishable
-from web.post_lineage import annotate_lineage
+from web.post_lineage import annotate_lineage, visible_posts
 from web.post_queries import select_posts
 from web.queue_readiness import schedule_readiness
 
@@ -63,6 +63,15 @@ def test_used_stock_is_hidden_and_old_post_points_to_real_replacement():
     assert old["replacement_post"]["page_id"] == "123"
     selected = select_posts(rows, bucket="other")
     assert [row["id"] for row in selected["items"]] == ["old"]
+
+
+def test_completed_replacement_is_removed_from_visible_posts_but_pending_stays():
+    published = [{"id": "old", "status": "superseded", "replacement_post_id": "new"},
+                 {"id": "new", "status": "published"}]
+    pending = [{"id": "old", "status": "superseded", "replacement_post_id": "new"},
+               {"id": "new", "status": "scheduled"}]
+    assert [row["id"] for row in visible_posts(published)] == ["new"]
+    assert [row["id"] for row in visible_posts(pending)] == ["old", "new"]
 
 
 def test_retry_preserves_published_clip_removed_after_upload(tmp_path):

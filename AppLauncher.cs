@@ -128,21 +128,23 @@ internal static class AppLauncher
         if (String.IsNullOrWhiteSpace(appUrl)) return;
         try
         {
-            string edge = FindEdgeExecutable();
-            if (!String.IsNullOrWhiteSpace(edge))
+            string chrome = FindChromeExecutable();
+            if (!String.IsNullOrWhiteSpace(chrome))
             {
-                string profile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "chrome_profile");
-                Directory.CreateDirectory(profile);
                 embeddedWindow = Process.Start(new ProcessStartInfo
                 {
-                    FileName = edge,
-                    Arguments = "--app=\"" + appUrl + "\" --user-data-dir=\"" + profile + "\" --no-first-run --no-default-browser-check",
+                    FileName = chrome,
+                    // Use the user's normal Chrome profile so its existing YouTube
+                    // session is visible to the app. Do not silently switch to Edge
+                    // or create a second, empty browser profile.
+                    Arguments = "--app=\"" + appUrl + "\" --profile-directory=Default --no-first-run --no-default-browser-check",
                     WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory,
                     UseShellExecute = true
                 });
                 return;
             }
-            Process.Start(new ProcessStartInfo(appUrl) { UseShellExecute = true });
+            MessageBox.Show("Google Chrome was not found. Please install Chrome to open the desktop app.",
+                "Highlight Desktop Test", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         catch (Exception ex)
         {
@@ -151,15 +153,15 @@ internal static class AppLauncher
         }
     }
 
-    private static string FindEdgeExecutable()
+    private static string FindChromeExecutable()
     {
         string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
         string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
         string[] candidates = {
-            Path.Combine(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
-            Path.Combine(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
-            Path.Combine(local, "Microsoft", "Edge", "Application", "msedge.exe")
+            Path.Combine(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+            Path.Combine(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+            Path.Combine(local, "Google", "Chrome", "Application", "chrome.exe")
         };
         foreach (string candidate in candidates) if (File.Exists(candidate)) return candidate;
         return null;

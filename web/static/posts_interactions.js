@@ -64,7 +64,7 @@ function supersededPostBadge(post) {
   const replacement = post.replacement_post;
   const label = post.video_recovery_stock_claim ? 'Clip kho đã dùng cho bài khác' : 'Bài cũ đã được thay thế';
   if (!replacement) return `<span>${label}</span><div>Chưa đọc được bài thay thế; bấm Làm mới.</div>`;
-  const statuses = {published: 'Đã đăng', scheduled: 'App giữ lịch', preparing: 'Đang chuẩn bị',
+  const statuses = {published: 'Đã đăng', success: 'Đã đăng', scheduled: 'App giữ lịch', preparing: 'Đang chuẩn bị',
     processing: 'Meta đang xử lý', meta_scheduled: 'Meta giữ lịch', failed: 'Cần xử lý lỗi'};
   return `<div class="posts-blocked"><b>${label}</b><div>${escapeHtml(replacement.page_name || '')}</div>`
     + `<div>Bài thay thế: ${escapeHtml(statuses[replacement.status] || replacement.status || '')}</div>`

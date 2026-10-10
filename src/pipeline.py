@@ -313,24 +313,41 @@ def get_ytdlp_transcript(video_id: str):
     return None
 
 CHROME_PROFILE_DIR = BASE_DIR / "chrome_profile"
+CHROME_USER_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))) / "Google" / "Chrome" / "User Data"
 
 
 def _chrome_cookie_specs():
-    """Return yt-dlp browser specs for app-owned Chrome profile directories.
+    """Return yt-dlp specs for the user's Chrome and the app-owned profile.
 
     yt-dlp expects the *profile directory* (for example ``.../Default``), not
     Chrome's user-data root (``.../chrome_profile``). The latter silently misses
-    cookies when the login lives under Default/Profile N.
+    cookies when the login lives under Default/Profile N. The desktop app opens
+    the user's real Chrome profile, so include it when using the normal runtime
+    value while keeping tests that patch ``CHROME_PROFILE_DIR`` isolated.
     """
-    if not CHROME_PROFILE_DIR.is_dir():
-        return []
-    profiles = ["Default", "Profile 1", "Profile 2", "Profile 3"]
-    return [
-        f"chrome:{CHROME_PROFILE_DIR / profile}"
-        for profile in profiles
-        if (CHROME_PROFILE_DIR / profile / "Network" / "Cookies").is_file()
-        or (CHROME_PROFILE_DIR / profile / "Cookies").is_file()
-    ]
+    roots = [CHROME_PROFILE_DIR]
+    if CHROME_PROFILE_DIR == BASE_DIR / "chrome_profile":
+        roots.append(CHROME_USER_DATA_DIR)
+    specs, seen = [], set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        profiles = ["Default", "Profile 1", "Profile 2", "Profile 3"]
+        try:
+            local_state = json.loads((root / "Local State").read_text(encoding="utf-8"))
+            cache = local_state.get("profile", {}).get("info_cache", {})
+            profiles.extend(cache.keys())
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        for profile in profiles:
+            profile_dir = root / str(profile)
+            if profile_dir in seen:
+                continue
+            if ((profile_dir / "Network" / "Cookies").is_file()
+                    or (profile_dir / "Cookies").is_file()):
+                specs.append(f"chrome:{profile_dir}")
+                seen.add(profile_dir)
+    return specs
 
 
 def download_video_and_audio(url: str, job_id: str, update_status=None):
