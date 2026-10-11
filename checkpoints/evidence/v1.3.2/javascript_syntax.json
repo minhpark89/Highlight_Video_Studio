@@ -1,0 +1,14 @@
+{
+  "success": true,
+  "inline_scripts_checked": 4,
+  "external_scripts_checked": [
+    "web\\static\\group_review.js",
+    "web\\static\\job_queue_controls.js",
+    "web\\static\\posts_interactions.js",
+    "web\\static\\recovery_tracking.js",
+    "web\\static\\scheduler_feedback.js",
+    "web\\static\\video_recovery.js",
+    "web/full_script.js"
+  ],
+  "templates_identical": true
+}

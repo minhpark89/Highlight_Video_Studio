@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "checks": [
+    "1264 jobs with 25 visible rows",
+    "error filter and counters",
+    "pagination and search",
+    "error message visible",
+    "polling preserves unsaved manual 4",
+    "manual 4 survives page reload",
+    "favicon link",
+    "no eager Jobs or gallery request"
+  ],
+  "page_errors": [],
+  "scope": "actual frontend with isolated Flask APIs"
+}

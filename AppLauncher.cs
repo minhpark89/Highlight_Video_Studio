@@ -5,6 +5,9 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Windows.Forms;
+using System.Drawing;
+using System.Runtime.InteropServices;
+using System.Text;
 
 internal static class AppLauncher
 {
@@ -14,12 +17,52 @@ internal static class AppLauncher
     private static Process ownedServer;
     private static Process embeddedWindow;
     private static Mutex instanceMutex;
+    private static Icon appIcon;
+    private static Icon smallAppIcon;
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(WindowVisitor visitor, IntPtr parameter);
+    private delegate bool WindowVisitor(IntPtr window, IntPtr parameter);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr window, StringBuilder text, int count);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessageTimeout(IntPtr window, uint message,
+        IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+
+    private static void ApplyApplicationIcon()
+    {
+        if (appIcon == null) return;
+        EnumWindows(delegate(IntPtr window, IntPtr parameter)
+        {
+            var title = new StringBuilder(256);
+            GetWindowText(window, title, title.Capacity);
+            if (title.ToString() == "Highlight Video Studio - AI Shorts & Viral Clips Cutter")
+            {
+                ApplyWindowIcon(window);
+            }
+            return true;
+        }, IntPtr.Zero);
+    }
+
+    private static void ApplyWindowIcon(IntPtr window)
+    {
+        if (appIcon == null || smallAppIcon == null) return;
+        IntPtr result;
+        SendMessageTimeout(window, 0x0080, new IntPtr(1), appIcon.Handle, 2, 200, out result);
+        SendMessageTimeout(window, 0x0080, IntPtr.Zero, smallAppIcon.Handle, 2, 200, out result);
+    }
 
     [STAThread]
     private static void Main()
     {
         string baseDir = AppDomain.CurrentDomain.BaseDirectory;
         Directory.SetCurrentDirectory(baseDir);
+        string iconFile = Path.Combine(baseDir, "app.ico");
+        if (File.Exists(iconFile))
+        {
+            appIcon = new Icon(iconFile, new Size(48, 48));
+            smallAppIcon = new Icon(iconFile, SystemInformation.SmallIconSize);
+        }
         bool created;
         instanceMutex = new Mutex(true, @"Local\HighlightDesktopTest", out created);
         if (!created)
@@ -201,7 +244,12 @@ internal static class AppLauncher
     {
         internal LauncherForm()
         {
-            Text = "Highlight Desktop Test v1.3.1";
+            if (appIcon != null) Icon = appIcon;
+            var iconTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+            iconTimer.Tick += delegate { ApplyApplicationIcon(); };
+            iconTimer.Start();
+            FormClosed += delegate { iconTimer.Dispose(); };
+            Text = "Highlight Desktop Test v1.3.2";
             Width = 410;
             Height = 175;
             StartPosition = FormStartPosition.CenterScreen;

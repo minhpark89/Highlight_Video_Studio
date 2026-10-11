@@ -73,16 +73,21 @@ try:
     RENDER_CONCURRENCY = max(1, min(4, int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT_RENDERS", str(_PROFILE_CONCURRENCY)))))
 except (TypeError, ValueError):
     RENDER_CONCURRENCY = 1
-RENDER_SEMAPHORE = threading.BoundedSemaphore(RENDER_CONCURRENCY)
+from multi_pc.concurrency import RenderLimiter, saved_concurrency
+_, RENDER_CONCURRENCY = saved_concurrency(BASE_DIR / "data" / "render_queue_state.json", RENDER_CONCURRENCY)
+RENDER_LIMITER = RenderLimiter(RENDER_CONCURRENCY)
+
+
+def set_render_concurrency(limit):
+    global RENDER_CONCURRENCY
+    RENDER_LIMITER.resize(limit)
+    RENDER_CONCURRENCY = RENDER_LIMITER.limit
 
 
 @contextmanager
 def render_slot():
-    RENDER_SEMAPHORE.acquire()
-    try:
+    with RENDER_LIMITER.slot():
         yield
-    finally:
-        RENDER_SEMAPHORE.release()
 
 
 def get_whisper_model_source():
@@ -673,7 +678,9 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
             vf = "split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=20[bg];[b]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2"
         else:
             # Crop 9:16 ở giữa khung hình (1080x1920)
-            vf = "scale=1080:1920:force_original_aspect_ratio=increase:force_divisible_by=2,crop=1080:1920"
+            # Crop at source resolution so the scaler only processes pixels
+            # retained by the final portrait frame (rather than a wide 3414px image).
+            vf = "crop=w='trunc(min(iw,ih*9/16)/2)*2':h='trunc(min(ih,iw*16/9)/2)*2',scale=1080:1920"
     elif aspect_ratio == "1:1":
         vf = "crop=min(in_w\\,in_h):min(in_w\\,in_h),scale=1080:1080"
     else:

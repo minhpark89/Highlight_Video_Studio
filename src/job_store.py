@@ -37,7 +37,7 @@ def _pending(path):
     return row[0] if row else None
 
 
-def load(path):
+def _snapshot(path):
     path = Path(path)
     with LOCK:
         pending = _pending(path)
@@ -49,7 +49,7 @@ def load(path):
         signature = (stat.st_size, stat.st_mtime_ns)
         cached = _CACHE.get(str(path.resolve()))
         if cached and cached[0] == signature:
-            return copy.deepcopy(cached[1])
+            return cached[1]
         with shared_reader(path) as stream:
             text = stream.read()
         # Parse after closing the handle. An unreadable ledger is never an empty queue.
@@ -57,7 +57,69 @@ def load(path):
         if not isinstance(rows, list):
             raise ValueError("Job ledger must be a JSON array")
         _CACHE[str(path.resolve())] = (signature, rows)
-        return copy.deepcopy(rows)
+        return rows
+
+
+def load(path):
+    with LOCK:
+        return copy.deepcopy(_snapshot(path))
+
+
+def get(path, job_id):
+    with LOCK:
+        return copy.deepcopy(next((row for row in _snapshot(path) if row.get("id") == job_id), None))
+
+
+def next_queued(path, excluded):
+    with LOCK:
+        return copy.deepcopy(next((row for row in _snapshot(path)
+                                   if row.get("status") == "queued" and row.get("id") not in excluded), None))
+
+
+def status_rows(path):
+    """Dashboard needs statuses only, never copied transcripts or clip metadata."""
+    with LOCK:
+        return [{"status": row.get("status")} for row in _snapshot(path)]
+
+
+def counts(path):
+    with LOCK:
+        result = {"queued": 0, "running": 0, "completed": 0, "error": 0}
+        rows = _snapshot(path)
+        for row in rows:
+            status = row.get("status", "queued")
+            if status in ("transcribing", "cutting"):
+                status = "running"
+            result[status] = result.get(status, 0) + 1
+        return {**result, "total": len(rows)}
+
+
+def page(path, *, status="all", query="", page=1, page_size=25):
+    """Return bounded summaries; transcripts and clip metadata stay in detail API."""
+    with LOCK:
+        rows = _snapshot(path)
+        totals = counts(path)
+        def matches(row):
+            state = row.get("status", "queued")
+            status_match = status == "all" or state == status or (
+                status == "running" and state in ("transcribing", "cutting"))
+            text = " ".join(str(row.get(key) or "") for key in
+                            ("id", "video_title", "youtube_url", "error")).casefold()
+            return status_match and (not query or query.casefold() in text)
+        filtered = [row for row in rows if matches(row)]
+        filtered.sort(key=lambda row: (str(row.get("created_at") or ""), str(row.get("id") or "")), reverse=True)
+        pages = max(1, (len(filtered) + page_size - 1) // page_size)
+        page = min(page, pages)
+        selected = filtered[(page - 1) * page_size:page * page_size]
+        fields = ("id", "video_title", "youtube_url", "duration", "aspect_ratio",
+                  "reframe_mode", "num_clips", "status", "created_at")
+        items = [{**{key: row.get(key) for key in fields},
+                  "clip_count": len(row.get("clips") or []),
+                  "error": str(row.get("error") or "")[:1000],
+                  "progress_msg": str(row.get("progress_msg") or "")[:500]} for row in selected]
+        return {"items": items, "counts": totals, "total": len(rows),
+                "filtered_total": len(filtered), "page": page, "page_size": page_size,
+                "pages": pages}
 
 
 def _write(path, payload):

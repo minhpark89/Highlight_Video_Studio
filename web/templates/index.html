@@ -8,6 +8,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Highlight Video Studio - AI Shorts & Viral Clips Cutter</title>
+  <link rel="icon" type="image/vnd.microsoft.icon" href="/favicon.ico?v={{ app_version }}">
+  <script src="/static/job_queue_controls.js?v={{ app_version }}" defer></script>
   <!-- Modern SaaS Fonts & Icons -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1195,14 +1197,14 @@
                   <button type="button" class="btn btn-secondary btn-sm text-danger" onclick="clearRenderQueue()" title="Hủy các link đang chờ"><i class="bi bi-stop-circle"></i> Hủy hàng chờ</button>
                 </div>
               </div>
-              <div id="queue-concurrency-controls" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin: 0 0 16px; padding: 10px 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px;">
+              <div id="queue-concurrency-controls" data-endpoint="/api/queue/concurrency" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin: 0 0 16px; padding: 10px 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px;">
                 <label for="queue-concurrency-mode" style="font-size:12px; color:var(--text-dim);">Job render đồng thời</label>
-                <select id="queue-concurrency-mode" onchange="onQueueConcurrencyModeChange()" style="min-width:110px;">
+                <select id="queue-concurrency-mode" onchange="onQueueConcurrencyModeChange(true)" style="min-width:110px;">
                   <option value="auto">Auto (khuyến nghị)</option>
                   <option value="manual">Tự chọn</option>
                 </select>
-                <input id="queue-concurrency-manual" type="number" min="1" max="4" step="1" value="1" disabled aria-label="Số job render đồng thời thủ công" style="width:72px;">
-                <button type="button" class="btn btn-secondary btn-sm" onclick="saveQueueConcurrency()">Áp dụng</button>
+                <input id="queue-concurrency-manual" type="number" min="1" max="4" step="1" value="1" oninput="onQueueConcurrencyModeChange(true)" disabled aria-label="Số job render đồng thời thủ công" style="width:72px;">
+                <button id="queue-concurrency-save" type="button" class="btn btn-secondary btn-sm" onclick="saveQueueConcurrency()">Áp dụng</button>
                 <span id="queue-concurrency-help" style="font-size:11px; color:var(--text-dim);">Auto dùng cấu hình phần cứng đã kiểm tra; không đổi 8 mảnh tải yt-dlp/job.</span>
               </div>
 
@@ -1503,7 +1505,7 @@
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
             <div class="panel-title" style="margin-bottom: 0;">
               <span class="pticon"><i class="bi bi-list-task"></i></span>
-              <span>Danh sách Jobs Highlight đã xử lý</span>
+              <span>Hàng đợi & lịch sử Jobs Highlight</span>
             </div>
             <button class="btn btn-warning btn-sm" id="btn-retry-failed" onclick="retryFailedJobs()" style="display:none; margin-right: 8px;">
               <i class="bi bi-arrow-repeat"></i> Chạy lại job lỗi (<span id="failed-jobs-count">0</span>)
@@ -1512,7 +1514,24 @@
               <i class="bi bi-arrow-clockwise"></i> Làm mới
             </button>
           </div>
-          <div class="table-responsive">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+            <label for="jobs-status-filter">Trạng thái</label>
+            <select id="jobs-status-filter" onchange="window.highlightJobs.reset()" style="width:auto;">
+              <option value="all">Tất cả</option>
+              <option value="error">Lỗi (error)</option>
+              <option value="queued">Đang chờ (queued)</option>
+              <option value="running">Đang chạy (running)</option>
+              <option value="completed">Hoàn tất (completed)</option>
+            </select>
+            <input id="jobs-search" type="search" placeholder="Tìm tên video, Job ID hoặc lỗi..." aria-label="Tìm Jobs" oninput="window.highlightJobs.search()" style="width:280px;max-width:100%;">
+            <label for="jobs-page-size">Số dòng</label>
+            <select id="jobs-page-size" onchange="window.highlightJobs.reset()" style="width:auto;">
+              <option value="25">25</option><option value="50">50</option><option value="100">100</option>
+            </select>
+          </div>
+          <div id="jobs-counts" aria-live="polite" style="font-size:12px;color:var(--text-muted);margin-bottom:12px;"></div>
+          <div id="jobs-load-error" role="alert" style="color:#f87171;margin-bottom:10px;"></div>
+          <div class="table-responsive" style="max-height:65vh;overflow:auto;">
             <table class="saas-table">
               <thead>
                 <tr>
@@ -1533,6 +1552,13 @@
                 </tr>
               </tbody>
             </table>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;">
+            <span id="jobs-page-summary" aria-live="polite"></span>
+            <div style="display:flex;gap:8px;">
+              <button id="jobs-prev" class="btn btn-secondary btn-sm" onclick="window.highlightJobs.turn(-1)" disabled>Trang trước</button>
+              <button id="jobs-next" class="btn btn-secondary btn-sm" onclick="window.highlightJobs.turn(1)" disabled>Trang sau</button>
+            </div>
           </div>
         </div>
       </section>
@@ -2299,58 +2325,8 @@
       }
     }
   }
-  async function loadJobsTable() {
-    try {
-      const res = await fetch('/api/jobs');
-      const jobs = await res.json();
-      document.getElementById('topbar-jobs-count').textContent = jobs.length;
-      const failedCount = jobs.filter(j => j.status === 'error').length;
-      const retryBtn = document.getElementById('btn-retry-failed');
-      const failedBadge = document.getElementById('failed-jobs-count');
-      if (retryBtn && failedBadge) {
-        failedBadge.textContent = failedCount;
-        retryBtn.style.display = failedCount > 0 ? 'inline-block' : 'none';
-      }
-      const tbody = document.getElementById('jobs-table-body');
-      if (!jobs || jobs.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-dim); padding: 24px;">Chưa có job nào trong hệ thống.</td></tr>';
-        return;
-      }
-      tbody.innerHTML = jobs.map(j => {
-        let badgeClass = 'badge-queued';
-        if (j.status === 'running') badgeClass = 'badge-running';
-        if (j.status === 'transcribing') badgeClass = 'badge-transcribing';
-        if (j.status === 'cutting') badgeClass = 'badge-cutting';
-        if (j.status === 'completed') badgeClass = 'badge-done';
-        if (j.status === 'error') badgeClass = 'badge-error';
-        return `
-          <tr>
-            <td><code style="color: #f472b6;">${j.id.substring(0, 8)}</code></td>
-            <td>
-              <div style="font-weight: 700; max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                ${escapeHtml(String(j.video_title || j.youtube_url || ''))}
-              </div>
-              <div style="font-size: 11px; color: var(--text-dim);">${j.duration ? Math.round(j.duration) + 's' : 'Đang tải...'}</div>
-            </td>
-            <td>
-              <span class="badge" style="background: #1e293b;">${j.aspect_ratio || '9:16'}</span>
-              <span class="badge" style="background: #1e293b;">${j.reframe_mode || 'Face Center'}</span>
-            </td>
-            <td><strong>${j.clips ? j.clips.length : 0}</strong> / ${j.num_clips || 3}</td>
-            <td><span class="badge ${badgeClass}">${j.status.toUpperCase()}</span></td>
-            <td style="font-size: 11.5px; color: var(--text-muted);">${j.created_at || ''}</td>
-            <td style="text-align: right;">
-              <button class="btn btn-secondary btn-sm" onclick="showJobDetail('${j.id}')" title="Xem chi tiết job"><i class="bi bi-eye"></i></button>
-              ${j.status === 'error' ? `<button class="btn btn-warning btn-sm me-1" onclick="retrySingleJob('${j.id}')" title="Chạy lại job này"><i class="bi bi-arrow-repeat"></i></button>` : ''}<button class="btn btn-secondary btn-sm text-danger" onclick="deleteJob('${j.id}')"><i class="bi bi-trash"></i></button>
-            </td>
-          </tr>
-        `;
-      }).join('');
-    } catch (e) {
-      console.error(e);
-    }
-  }
-    // ================= THƯ VIỆN CLIPS (TỐI ƯU NHẸ, PHÂN TRANG & QUẢN LÝ DUNG LƯỢNG) =================
+  function loadJobsTable() { return window.highlightJobs?.load(); }
+
   let cachedAllClips = [];
   let currentClipFilter = 'all'; // all | unposted | posted
   let currentClipPage = 1;
@@ -2601,9 +2577,7 @@
     await fetch('/api/jobs/' + id, { method: 'DELETE' });
     loadJobsTable();
   }
-  // Initial load
-  loadJobsTable();
-  loadClipsGallery();
+  // Lists load when their pane is opened; startup only loads the dashboard.
 
   // ================= RESEARCH VIDEO PERSISTENCE & HISTORY =================
   function renderResearchCards(results) {
@@ -5649,61 +5623,9 @@
     if (box) box.style.display = (val === 'custom') ? 'block' : 'none';
   }
 
-  // Poll Queue Status
-  async function updateQueueStatus() {
-    try {
-      const res = await fetch('/api/queue/status');
-      if (!res.ok) return;
-      const data = await res.json();
-      if (document.getElementById('q-stat-queued')) document.getElementById('q-stat-queued').textContent = data.queued || 0;
-      if (document.getElementById('q-stat-running')) document.getElementById('q-stat-running').textContent = data.running || 0;
-      if (document.getElementById('q-stat-completed')) document.getElementById('q-stat-completed').textContent = data.completed || 0;
-      const runningBadge = document.querySelector('#q-stat-running')?.parentElement;
-      if (runningBadge) runningBadge.innerHTML = `Đang render: <strong id="q-stat-running">${data.running || 0}</strong> / ${data.max_concurrent || 1}`;
-      const mode = document.getElementById('queue-concurrency-mode');
-      const manual = document.getElementById('queue-concurrency-manual');
-      if (mode && document.activeElement !== mode) mode.value = data.concurrency_mode || 'auto';
-      if (manual && document.activeElement !== manual) manual.value = data.max_concurrent || data.auto_concurrency || 1;
-      onQueueConcurrencyModeChange();
-
-      const btnPause = document.getElementById('btn-queue-pause');
-      const dot = document.getElementById('queue-status-dot');
-      if (data.is_paused) {
-        if (btnPause) {
-          btnPause.innerHTML = '<i class="bi bi-play-fill"></i> Tiếp tục chạy';
-          btnPause.className = 'btn btn-primary btn-sm';
-        }
-        if (dot) dot.className = 'status-dot err';
-      } else {
-        if (btnPause) {
-          btnPause.innerHTML = '<i class="bi bi-pause-fill"></i> Tạm dừng';
-          btnPause.className = 'btn btn-secondary btn-sm';
-        }
-        if (dot) dot.className = (data.running > 0) ? 'status-dot ok' : 'status-dot';
-      }
-    } catch(e){}
-  }
-  setInterval(updateQueueStatus, 3000);
-
-  function onQueueConcurrencyModeChange() {
-    const mode = document.getElementById('queue-concurrency-mode');
-    const manual = document.getElementById('queue-concurrency-manual');
-    const help = document.getElementById('queue-concurrency-help');
-    const isManual = mode && mode.value === 'manual';
-    if (manual) manual.disabled = !isManual;
-    if (help) help.textContent = isManual ? 'Cho 1–4 job đồng thời; giảm mức chỉ áp dụng cho job mới. Không đổi 8 mảnh tải yt-dlp/job.' : 'Auto dùng cấu hình phần cứng đã kiểm tra; không đổi 8 mảnh tải yt-dlp/job.';
-  }
-
-  async function saveQueueConcurrency() {
-    const mode = document.getElementById('queue-concurrency-mode')?.value || 'auto';
-    const manual = document.getElementById('queue-concurrency-manual')?.value;
-    try {
-      const res = await fetch('/api/queue/concurrency', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({mode, manual_concurrency: Number(manual)}) });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Không thể cập nhật số luồng');
-      await updateQueueStatus();
-    } catch (e) { alert('Lỗi: ' + e.message); }
-  }
+  function updateQueueStatus() { return window.highlightRenderQueue?.refresh(); }
+  function onQueueConcurrencyModeChange(dirty = false) { window.highlightRenderQueue?.edit(dirty); }
+  function saveQueueConcurrency() { return window.highlightRenderQueue?.save(); }
 
   async function toggleQueuePause() {
     const btn = document.getElementById('btn-queue-pause');

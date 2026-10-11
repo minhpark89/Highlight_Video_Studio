@@ -33,6 +33,7 @@ from multi_pc.concurrency import (
     HARD_MAX_CONCURRENT_RENDERS,
     bounded_concurrency,
     resolve_concurrency,
+    saved_concurrency,
 )
 from multi_pc.json_io import replace_with_retry
 from multi_pc.posting_schedule import paced_offsets_by_token, posting_schedule_recommendation
@@ -106,7 +107,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 
 @app.after_request
 def add_header(response):
@@ -466,14 +467,28 @@ AUTO_CONCURRENT_JOBS = max(1, min(
     HARD_MAX_CONCURRENT_RENDERS,
     int(os.environ.get("HIGHLIGHT_MAX_CONCURRENT_RENDERS", str(_profile_concurrency_default()))),
 ))
-# Keep the existing profile/env default as Auto. A manual choice is runtime-only,
-# bounded, and never changes the encoder or the persisted hardware profile.
-CONCURRENCY_MODE = "auto"
-MAX_CONCURRENT_JOBS = AUTO_CONCURRENT_JOBS
+RENDER_QUEUE_STATE_FILE = DATA_ROOT / "data" / "render_queue_state.json"
+CONCURRENCY_MODE, MAX_CONCURRENT_JOBS = saved_concurrency(RENDER_QUEUE_STATE_FILE, AUTO_CONCURRENT_JOBS)
 JOB_QUEUE = Queue()
 ACTIVE_JOB_IDS = set()
 CANCELLED_JOB_IDS = set()
-RENDER_QUEUE_STATE_FILE = DATA_ROOT / "data" / "render_queue_state.json"
+
+def _save_render_queue_state(updates):
+    # Caller holds QUEUE_LOCK; pause and concurrency share one atomic state file.
+    try:
+        state = json.loads(RENDER_QUEUE_STATE_FILE.read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            state = {}
+    except (OSError, ValueError):
+        state = {}
+    state.update(updates)
+    RENDER_QUEUE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = RENDER_QUEUE_STATE_FILE.with_name(f"render_queue_state.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(state), encoding="utf-8")
+        replace_with_retry(temporary, RENDER_QUEUE_STATE_FILE, timeout=1)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def load_render_queue_pause():
@@ -486,13 +501,7 @@ def load_render_queue_pause():
 def set_render_queue_pause(paused):
     global IS_QUEUE_PAUSED
     with QUEUE_LOCK:
-        RENDER_QUEUE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        temporary = RENDER_QUEUE_STATE_FILE.with_name(f"render_queue_state.{uuid.uuid4().hex}.tmp")
-        try:
-            temporary.write_text(json.dumps({"is_paused": bool(paused)}), encoding="utf-8")
-            replace_with_retry(temporary, RENDER_QUEUE_STATE_FILE)
-        finally:
-            temporary.unlink(missing_ok=True)
+        _save_render_queue_state({"is_paused": bool(paused)})
         IS_QUEUE_PAUSED = bool(paused)
 
 
@@ -541,12 +550,9 @@ def queue_worker_loop():
                 continue
 
             # Check jobs.json for any pending queued jobs
-            all_jobs = load_jobs()
-            next_job = None
-            for j in all_jobs:
-                if j.get("status") == "queued" and j.get("id") not in ACTIVE_JOB_IDS and j.get("id") not in CANCELLED_JOB_IDS:
-                    next_job = j
-                    break
+            with QUEUE_LOCK:
+                excluded = ACTIVE_JOB_IDS | CANCELLED_JOB_IDS
+            next_job = job_store.next_queued(JOBS_FILE, excluded)
 
             if next_job:
                 with QUEUE_LOCK:
@@ -583,16 +589,36 @@ _publisher_thread = start_worker_thread()
 def index():
     return render_template("index.html", app_version=APP_VERSION)
 
+@app.route("/favicon.ico")
+def favicon():
+    packaged = ROOT_DIR / "app.ico"
+    if packaged.is_file():
+        return send_from_directory(ROOT_DIR, "app.ico", mimetype="image/vnd.microsoft.icon")
+    return send_from_directory(ROOT_DIR / "assets", "highlight.ico", mimetype="image/vnd.microsoft.icon")
+
 @app.route("/api/jobs", methods=["GET"])
 def get_jobs():
+    if request.args:
+        status = request.args.get("status", "all")
+        if status not in {"all", "error", "queued", "completed", "running"}:
+            return jsonify({"error": "Invalid job status filter"}), 400
+        try:
+            page = int(request.args.get("page", "1"))
+            page_size = int(request.args.get("page_size", "25"))
+            if page < 1 or not 1 <= page_size <= 100:
+                raise ValueError()
+        except ValueError:
+            return jsonify({"error": "Page must be positive; page_size must be between 1 and 100"}), 400
+        return jsonify(repair_mojibake(job_store.page(
+            JOBS_FILE, status=status, query=request.args.get("q", "")[:200],
+            page=page, page_size=page_size)))
     return jsonify(repair_mojibake(load_jobs()))
 
 @app.route("/api/jobs/<job_id>", methods=["GET"])
 def get_job(job_id):
-    jobs = load_jobs()
-    for j in jobs:
-        if j["id"] == job_id:
-            return jsonify(repair_mojibake(j))
+    job = job_store.get(JOBS_FILE, job_id)
+    if job is not None:
+        return jsonify(repair_mojibake(job))
     return jsonify({"error": "Job not found"}), 404
 
 @app.route("/api/jobs", methods=["POST"])
@@ -1222,7 +1248,7 @@ def api_dashboard_summary():
         pages = page_manager.list_pages()
         tokens = token_vault.list_tokens(mask=True)
         groups = page_manager.list_groups()
-        jobs = load_jobs()
+        jobs = job_store.status_rows(JOBS_FILE)
         data = overview(read_posts_snapshot(), pages, tokens, groups, jobs)
         data["insights"] = page_insights_service.summary(pages)
         data["mapping_health"] = page_manager.mapping_health()
@@ -4950,8 +4976,15 @@ def api_queue_concurrency():
     # Changing the limit cannot cancel or duplicate work. Lowering it only
     # affects future leases; already-running jobs finish normally.
     with QUEUE_LOCK:
+        try:
+            _save_render_queue_state({"concurrency_mode": mode, "manual_concurrency": selected})
+        except OSError:
+            return jsonify({"success": False, "error": "Không lưu được cấu hình render; hãy kiểm tra quyền ghi thư mục dữ liệu."}), 500
         CONCURRENCY_MODE = mode
         MAX_CONCURRENT_JOBS = selected
+        pipeline = sys.modules.get("src.pipeline")
+        if pipeline is not None:
+            pipeline.set_render_concurrency(selected)
         active = len(ACTIVE_JOB_IDS)
     return jsonify({
         "success": True,
@@ -4966,11 +4999,7 @@ def api_queue_concurrency():
 
 @app.route("/api/queue/status", methods=["GET"])
 def api_queue_status():
-    all_jobs = load_jobs()
-    queued_count = sum(1 for j in all_jobs if j.get("status") == "queued")
-    running_count = sum(1 for j in all_jobs if j.get("status") == "running")
-    completed_count = sum(1 for j in all_jobs if j.get("status") == "completed")
-    error_count = sum(1 for j in all_jobs if j.get("status") == "error")
+    counts = job_store.counts(JOBS_FILE)
     return jsonify({
         "is_paused": IS_QUEUE_PAUSED,
         "max_concurrent": MAX_CONCURRENT_JOBS,
@@ -4978,11 +5007,7 @@ def api_queue_status():
         "auto_concurrency": AUTO_CONCURRENT_JOBS,
         "max_concurrent_allowed": HARD_MAX_CONCURRENT_RENDERS,
         "active": len(ACTIVE_JOB_IDS),
-        "queued": queued_count,
-        "running": running_count,
-        "completed": completed_count,
-        "error": error_count,
-        "total": len(all_jobs)
+        **counts,
     })
 
 @app.route("/api/queue/pause", methods=["POST"])

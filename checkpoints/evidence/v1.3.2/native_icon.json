@@ -1,0 +1,7 @@
+﻿{
+    "launcher_compiles":  true,
+    "big_icon_matches":  true,
+    "scope":  "Hidden isolated Win32 window using actual launcher code and app ICO",
+    "success":  true,
+    "small_icon_matches":  true
+}

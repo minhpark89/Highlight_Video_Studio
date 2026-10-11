@@ -45,7 +45,11 @@ def test_jobs_and_clip_api_repair_response_without_mutating_stored_records(tmp_p
     }
     good = {"id": "clean-job", "video_title": "Cảnh Sát", "clips": []}
     (tmp_path / "fixture.mp4").write_bytes(b"test")
-    with mock.patch.object(web_app, "load_jobs", return_value=[bad, good]), mock.patch.object(
+    jobs_file = tmp_path / "jobs.json"
+    web_app.job_store.save(jobs_file, [bad, good])
+    with mock.patch.object(web_app, "JOBS_FILE", jobs_file), mock.patch.object(
+        web_app, "IS_QUEUE_PAUSED", True
+    ), mock.patch.object(
         web_app, "OUTPUT_DIR", tmp_path
     ), mock.patch.object(web_app, "BASE_DIR", tmp_path):
         client = web_app.app.test_client()

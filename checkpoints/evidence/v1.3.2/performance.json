@@ -1,0 +1,63 @@
+{
+  "api": {
+    "legacy_full": {
+      "median_ms": 2067.963,
+      "payload_bytes": 10473497,
+      "samples_ms": [
+        2112.0171999791637,
+        2034.5166999613866,
+        2079.777400009334,
+        2051.297300029546,
+        2067.963199922815
+      ]
+    },
+    "paged_25": {
+      "median_ms": 3.632,
+      "payload_bytes": 5954,
+      "samples_ms": [
+        5.446200026199222,
+        3.631599945947528,
+        3.500899998471141,
+        3.6759000504389405,
+        3.585199941881001
+      ]
+    },
+    "queue_status": {
+      "median_ms": 0.775,
+      "payload_bytes": 190,
+      "samples_ms": [
+        0.9457999840378761,
+        0.775099964812398,
+        0.9031000081449747,
+        0.699699972756207,
+        0.6783000426366925
+      ]
+    },
+    "jobs": 1264
+  },
+  "render": {
+    "scale_then_crop": {
+      "median_seconds": 2.227,
+      "samples_seconds": [
+        2.2896652999334037,
+        2.03904349997174,
+        2.226523100049235
+      ],
+      "full_decode_validated": true
+    },
+    "crop_then_scale": {
+      "median_seconds": 1.755,
+      "samples_seconds": [
+        1.7994737999979407,
+        1.7554371999576688,
+        1.7316906999330968
+      ],
+      "full_decode_validated": true
+    },
+    "encoder": "libx264",
+    "input": "synthetic 1920x1080 30fps with audio 6 seconds",
+    "output": "1080x1920 30fps same encoder preset and quality",
+    "speedup": 1.268
+  },
+  "scope": "isolated synthetic fixture on this machine; not a universal speed guarantee"
+}
