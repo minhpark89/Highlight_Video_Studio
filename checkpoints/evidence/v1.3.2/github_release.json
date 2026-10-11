@@ -1,0 +1,31 @@
+{
+  "success": true,
+  "published": true,
+  "prerelease": true,
+  "release_id": 409509211,
+  "url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.3.2",
+  "source_commit": "ac2aa11ef89323a38252a812fb813e8b2271eb94",
+  "assets": [
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.3.2.exe",
+      "size": 683068928,
+      "digest": "sha256:682d5dc8750d559353eaedcda6d390c38abe60d6795dc6719a26a468142fe859",
+      "url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.3.2/Highlight_Desktop_Test_Setup_v1.3.2.exe"
+    },
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.3.2.sha256",
+      "size": 107,
+      "digest": "sha256:59c73ff4e79d6d415f54732ff908d96fc81618b28d0c407ec81d90f46e9adaaf",
+      "url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.3.2/Highlight_Desktop_Test_Setup_v1.3.2.sha256"
+    },
+    {
+      "name": "RELEASE_v1.3.2.md",
+      "size": 1274,
+      "digest": "sha256:fc99306bf7881471e1341a897a8efc5dee5efbf5027947a467aea5b17ba33ef4",
+      "url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.3.2/RELEASE_v1.3.2.md"
+    }
+  ],
+  "server_sha256_matches": true,
+  "download_http_status": 200,
+  "canonical_asset_urls_verified": true
+}

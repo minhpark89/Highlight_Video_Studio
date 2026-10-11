@@ -1,0 +1,22 @@
+{
+  "success": true,
+  "fresh_processes": [
+    {
+      "queue_limit": 4,
+      "render_limit": 4,
+      "paused": true,
+      "render_duration": 6.0,
+      "fps": 30.0,
+      "full_decode_validated": true
+    },
+    {
+      "queue_limit": 4,
+      "render_limit": 4,
+      "paused": true,
+      "render_duration": 6.0,
+      "fps": 30.0,
+      "full_decode_validated": true
+    }
+  ],
+  "scope": "isolated installation copy with actual app startup and actual FFmpeg render"
+}

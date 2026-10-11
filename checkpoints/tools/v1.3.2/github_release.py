@@ -97,6 +97,11 @@ def main():
         print(json.dumps({"uploaded":path.name, "size":asset["size"]}), flush=True)
     release = request("PATCH","/releases/" + str(release["id"]), json={"draft":False, "prerelease":True})
     assert release["draft"] is False and release["tag_name"] == TAG
+    canonical = {item["name"]:item for item in request("GET", "/releases/" + str(release["id"]) + "/assets")}
+    for recorded in delivered:
+        actual = canonical[recorded["name"]]
+        assert actual["digest"] == recorded["digest"]
+        recorded["url"] = actual["browser_download_url"]
     report = {"success":True, "published":True, "prerelease":True, "release_id":release["id"],
         "url":release["html_url"], "source_commit":source_commit, "assets":delivered,
         "server_sha256_matches":True}
