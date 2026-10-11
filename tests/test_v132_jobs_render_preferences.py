@@ -151,3 +151,22 @@ def test_dashboard_summary_never_copies_transcripts(api, monkeypatch):
     assert all(set(row) == {"status"} for row in summary)
     summary[0]["status"] = "changed"
     assert job_store.get(api.JOBS_FILE, "one")["status"] == "running"
+
+
+def test_preference_can_save_while_pipeline_is_still_importing(api, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    monkeypatch.setitem(sys.modules, "src.pipeline", SimpleNamespace())
+    response = api.app.test_client().post("/api/queue/concurrency", json={
+        "mode":"manual", "manual_concurrency":4})
+    assert response.status_code == 200
+    assert saved_concurrency(api.RENDER_QUEUE_STATE_FILE, 2) == ("manual", 4)
+
+
+def test_lazily_loaded_pipeline_uses_current_queue_limit(api, monkeypatch):
+    from src import pipeline
+    monkeypatch.setattr(api, "MAX_CONCURRENT_JOBS", 4)
+    monkeypatch.setattr(pipeline, "RENDER_LIMITER", RenderLimiter(2))
+    monkeypatch.setattr(pipeline, "RENDER_CONCURRENCY", 2)
+    assert len(api.get_pipeline_tools()) == 6
+    assert pipeline.RENDER_LIMITER.limit == pipeline.RENDER_CONCURRENCY == 4

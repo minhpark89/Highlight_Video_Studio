@@ -58,8 +58,12 @@ def get_pipeline_tools():
         transcribe_local_whisper,
         ask_llm_for_highlights,
         render_highlight_clip,
-        extract_video_id
+        extract_video_id,
+        set_render_concurrency,
     )
+    # Import finishes before synchronizing a lazily initialized pipeline.
+    with QUEUE_LOCK:
+        set_render_concurrency(MAX_CONCURRENT_JOBS)
     return download_video_and_audio, get_youtube_transcript, transcribe_local_whisper, ask_llm_for_highlights, render_highlight_clip, extract_video_id
 
 def search_videos(*args, **kwargs):
@@ -4983,8 +4987,9 @@ def api_queue_concurrency():
         CONCURRENCY_MODE = mode
         MAX_CONCURRENT_JOBS = selected
         pipeline = sys.modules.get("src.pipeline")
-        if pipeline is not None:
-            pipeline.set_render_concurrency(selected)
+        setter = getattr(pipeline, "set_render_concurrency", None)
+        if callable(setter):
+            setter(selected)
         active = len(ACTIVE_JOB_IDS)
     return jsonify({
         "success": True,

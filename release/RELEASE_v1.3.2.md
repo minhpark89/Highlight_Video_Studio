@@ -13,7 +13,7 @@ paginated, and preserves manual render concurrency after polling and restart.
 - Faster portrait center-crop rendering, with the existing quality and full
   decode checks preserved.
 
-Validation: 787 tests and 29 subtests passed, 4 skipped; browser interaction,
+Validation: 789 tests and 29 subtests passed, 4 skipped; browser interaction,
 native Windows icon and JavaScript checks passed. A six-second synthetic CPU
 render benchmark measured a 1.268 speed ratio; actual performance depends on
 hardware and input. A 1,264-job fixture returned a 25-row page in 3.632 ms.
