@@ -111,7 +111,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 
 @app.after_request
 def add_header(response):
@@ -439,6 +439,11 @@ def run_job_pipeline(job):
             "updated_at": now,
             "finished_at": now,
         })
+        try:
+            from src.storage_retention import cleanup_completed_sources
+            cleanup_completed_sources(DATA_ROOT, job_id=job_id)
+        except Exception as cleanup_error:
+            print(f"[Storage] Source cleanup deferred for {job_id}: {cleanup_error}")
 
     except Exception as e:
         now = datetime.now().isoformat(timespec="seconds")
@@ -926,8 +931,8 @@ def load_config():
 
 def save_config(cfg):
     try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        from src.storage_retention import _write
+        _write(CONFIG_FILE, cfg)
         return True
     except Exception:
         return False
@@ -935,6 +940,8 @@ def save_config(cfg):
 def public_config(cfg):
     """Return UI-safe settings without exposing saved credentials to browsers."""
     safe = json.loads(json.dumps(cfg or {}))
+    from src.storage_retention import DEFAULTS
+    safe['storage_retention'] = {**DEFAULTS, **safe.get('storage_retention', {})}
     llm = safe.get("llm")
     if isinstance(llm, dict):
         llm["has_api_key"] = bool(llm.get("api_key"))
@@ -1306,6 +1313,13 @@ def api_settings():
     if request.method == "POST":
         data = request.json or {}
         cfg = load_config()
+        if "storage_retention" in data:
+            from src.storage_retention import validate_settings
+            try:
+                options = validate_settings(data["storage_retention"])
+            except ValueError as exc:
+                return jsonify({"success": False, "error": str(exc)}), 400
+            cfg.setdefault("storage_retention", {}).update(options)
         if "llm" in data:
             llm_update = dict(data["llm"] or {})
             if "api_base" in llm_update:
@@ -1335,9 +1349,21 @@ def api_settings():
             cfg.setdefault("whisper", {}).update(data["whisper"])
         
         saved = save_config(cfg)
-        return jsonify({"success": saved, "config": cfg})
+        return jsonify({"success": saved, "config": public_config(cfg)})
     else:
         return jsonify({"success": True, "config": public_config(load_config())})
+
+
+@app.route("/api/storage/status", methods=["GET"])
+def api_storage_status():
+    from src.storage_retention import cleanup_statistics, settings
+    import shutil
+    try:
+        return jsonify(success=True, settings=settings(CONFIG_FILE.parent),
+                       statistics=cleanup_statistics(CONFIG_FILE.parent),
+                       free_bytes=shutil.disk_usage(CONFIG_FILE.parent).free)
+    except (OSError, ValueError, TypeError) as exc:
+        return jsonify(success=False, error=str(exc)), 503
 
 
 @app.route("/api/llm/models", methods=["POST"])
@@ -2962,12 +2988,9 @@ def api_publish_reel():
         page_manager.save_pages(pages)
     if not schedule_time and target_page_ids and len(results) == len(target_page_ids) and all(r.get("success") for r in results):
         try:
-            from web.scheduled_publisher import remove_posted_clip_file
+            from web.scheduled_publisher import cleanup_published_clip_files
             current_posts = load_posts()
-            if remove_posted_clip_file(clip_filename, current_posts):
-                for post in current_posts:
-                    if str(post.get("media_file") or "") == clip_filename and post.get("status") == "published":
-                        post["local_video_deleted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if cleanup_published_clip_files(current_posts, clip_filename=clip_filename)['deleted_count']:
                 save_posts(current_posts)
         except Exception:
             pass
@@ -5352,25 +5375,15 @@ def api_batch_assign_token():
 def api_purge_posted_clips():
     """Compatibility endpoint: remove only clips confirmed published."""
     try:
-        from web.scheduled_publisher import remove_posted_clip_file
+        from web.scheduled_publisher import cleanup_published_clip_files
     except ImportError:
-        from scheduled_publisher import remove_posted_clip_file
+        from scheduled_publisher import cleanup_published_clip_files
     posts = load_posts()
-    deleted_count = 0
-    total_freed_bytes = 0
-    for clip in sorted({str(p.get("media_file") or p.get("clip_filename") or "").strip() for p in posts}):
-        if not clip:
-            continue
-        candidate = Path(clip)
-        if not candidate.is_absolute():
-            candidate = OUTPUT_DIR / candidate
-        try:
-            size = candidate.stat().st_size if candidate.is_file() else 0
-        except OSError:
-            size = 0
-        if remove_posted_clip_file(clip, posts):
-            deleted_count += 1
-            total_freed_bytes += size
+    result = cleanup_published_clip_files(posts, respect_policy=False)
+    deleted_count = result['deleted_count']
+    total_freed_bytes = result['freed_bytes']
+    if deleted_count:
+        save_posts(posts)
     freed_mb = round(total_freed_bytes / (1024 * 1024), 2)
     return jsonify({"success": True, "deleted_count": deleted_count, "freed_mb": freed_mb,
                     "message": "Da don cac clip da xuat ban va da xac minh."})

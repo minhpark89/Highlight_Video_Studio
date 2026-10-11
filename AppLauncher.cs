@@ -249,7 +249,7 @@ internal static class AppLauncher
             iconTimer.Tick += delegate { ApplyApplicationIcon(); };
             iconTimer.Start();
             FormClosed += delegate { iconTimer.Dispose(); };
-            Text = "Highlight Desktop Test v1.3.2";
+            Text = "Highlight Desktop Test v1.3.3";
             Width = 410;
             Height = 175;
             StartPosition = FormStartPosition.CenterScreen;

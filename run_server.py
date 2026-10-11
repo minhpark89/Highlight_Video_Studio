@@ -56,6 +56,8 @@ if __name__ == "__main__":
     try:
         from src.content_packages import start_content_package_worker
         start_content_package_worker()
+        from src.storage_retention import start_storage_retention_worker
+        start_storage_retention_worker(ROOT_DIR)
         waitress.serve(app, host=bind_host, port=port, threads=8, channel_timeout=30)
     finally:
         server_lease.release()

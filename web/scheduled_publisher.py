@@ -360,17 +360,17 @@ def _record_posted_clip(clip_filename):
                 temp.unlink(missing_ok=True)
 
 
-def remove_posted_clip_file(clip_filename, posts):
+def remove_posted_clip_file(clip_filename, posts, *, respect_policy=True):
     """Remove only a confirmed published clip inside this installation output."""
     raw = str(clip_filename or "").strip()
     if not raw:
         return False
-    candidate = Path(raw)
-    if not candidate.is_absolute():
-        candidate = OUTPUT_DIR / candidate
-    candidate = candidate.resolve()
+    from src.storage_retention import active_packages, record_cleanup, safe_file, settings
+    if respect_policy and not settings(POSTS_FILE.parent)['delete_published_reels']:
+        return False
+    candidate = safe_file(raw, OUTPUT_DIR)
     root = OUTPUT_DIR.resolve()
-    if not candidate.is_relative_to(root) or not candidate.is_file():
+    if candidate is None:
         return False
     def same_clip(post):
         value = str(post.get("media_file") or post.get("clip_filename") or "").strip()
@@ -379,7 +379,8 @@ def remove_posted_clip_file(clip_filename, posts):
         path = Path(value)
         return (path if path.is_absolute() else OUTPUT_DIR / path).resolve() == candidate
     users = [post for post in posts if same_clip(post) and post.get("status") != "superseded"]
-    if not users or any(post.get("status") != "published" or not post.get("post_fb_id") for post in users):
+    if not users or any(post.get("status") != "published" or not post.get("post_fb_id")
+                        or post.get("outcome_unknown") for post in users):
         return False
     if any(post.get("auto_first_comment") and post.get("website_status") in ("pending_generation", "failed") for post in users):
         return False
@@ -388,7 +389,11 @@ def remove_posted_clip_file(clip_filename, posts):
             and str(post.get("website_video_url") or "").startswith("https://")) for post in users):
         return False
     from src import content_packages
-    for package in content_packages.list_packages():
+    try:
+        packages = active_packages(POSTS_FILE.parent, queue_file=content_packages.QUEUE_FILE)
+    except (OSError, ValueError):
+        return False
+    for package in packages:
         package_path = Path(str(package.get("clip_filename") or ""))
         package_path = (package_path if package_path.is_absolute() else root / package_path).resolve()
         same_hash = package.get("source_sha256") and any(package.get("source_sha256") == p.get("source_sha256") for p in users)
@@ -396,7 +401,7 @@ def remove_posted_clip_file(clip_filename, posts):
             return False
     # A producer must never replace/delete a path while an upload or content
     # worker consumes it. Render temporary files share this exact stem.
-    if any(root.glob(f".{candidate.stem}.rendering.*.mp4")):
+    if any(candidate.parent.glob(f".{candidate.stem}.rendering.*.mp4")):
         return False
     try:
         from src.job_store import load as load_job_rows
@@ -409,6 +414,7 @@ def remove_posted_clip_file(clip_filename, posts):
     except (ValueError, OSError):
         return False
     try:
+        _record_posted_clip(raw)
         if raw not in json.loads(POSTED_CLIPS_FILE.read_text(encoding="utf-8")):
             return False
     except (OSError, ValueError):
@@ -422,10 +428,43 @@ def remove_posted_clip_file(clip_filename, posts):
                 return False
             if not record_receipt(sha, users, POSTS_FILE.parent):
                 return False
+        size = candidate.stat().st_size
         candidate.unlink()
+        record_cleanup(POSTS_FILE.parent, 'published_reel', 1, size)
         return True
     except OSError:
         return False
+
+
+def cleanup_published_clip_files(posts, *, now=None, clip_filename=None, respect_policy=True):
+    """Delete eligible files and retain history for every alias of the same file."""
+    from src.storage_retention import safe_file
+    result = {'deleted_count': 0, 'freed_bytes': 0}
+    stamp = (now or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+    names = {str(p.get("media_file") or p.get("clip_filename") or "").strip()
+             for p in posts if p.get("status") == "published"}
+    for raw in sorted(names):
+        if not raw or (clip_filename is not None and raw != str(clip_filename)):
+            continue
+        try:
+            candidate = safe_file(raw, OUTPUT_DIR)
+            if candidate is None:
+                continue
+            size = candidate.stat().st_size
+            if not remove_posted_clip_file(raw, posts, respect_policy=respect_policy):
+                continue
+            result['deleted_count'] += 1
+            result['freed_bytes'] += size
+            for post in posts:
+                value = str(post.get("media_file") or post.get("clip_filename") or "").strip()
+                path = Path(value)
+                if value and (path if path.is_absolute() else OUTPUT_DIR / path).resolve() == candidate:
+                    if post.get("status") == "published":
+                        post.update(local_video_deleted_at=stamp, local_video_deleted_bytes=size,
+                                    local_video_deleted_reason='published')
+        except Exception as exc:
+            _safe_log("Local video cleanup deferred: " + sanitize_error(exc))
+    return result
 
 
 def _process_scheduled_posts_once(
@@ -602,6 +641,10 @@ def _process_scheduled_posts_once(
             except Exception as exc:
                 post["ledger_error"] = sanitize_error(exc)
             post.update({"status": "published", "published_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"), "meta_schedule_status": "published", "error": "", "retryable": False, "outcome_unknown": False})
+            save_posts(posts)
+            if cleanup_published_clip_files(posts, now=current_dt,
+                    clip_filename=post.get("media_file") or post.get("clip_filename"))['deleted_count']:
+                save_posts(posts)
             if post.get("first_comment") and post.get("first_comment_status") not in ("posted", "pending"):
                 try:
                     queued = enqueue_first_comment(
@@ -785,14 +828,18 @@ def _process_scheduled_posts_once(
         # every Page has a confirmed Meta result.
         posts = load_posts()
 
-    removed = 0
-    for published_post in posts:
-        if published_post.get("status") == "published" and not published_post.get("local_video_deleted_at"):
-            if remove_posted_clip_file(published_post.get("media_file") or published_post.get("clip_filename"), posts):
-                published_post["local_video_deleted_at"] = current_dt.strftime("%Y-%m-%d %H:%M:%S")
-                removed += 1
+    # Publication confirmation must be durable before any media is removed.
+    if reconciled or queue_result.get("changed"):
+        save_posts(posts)
+        posts = load_posts()
+    removed = cleanup_published_clip_files(posts, now=current_dt)['deleted_count']
     if claimed_posts or recovered or reconciled or queue_result.get("changed") or removed:
         save_posts(posts)
+    try:
+        from src.storage_retention import cleanup_completed_sources
+        cleanup_completed_sources(POSTS_FILE.parent)
+    except Exception as exc:
+        _safe_log("Source cleanup deferred: " + sanitize_error(exc))
     from web.meta_handoff import process_next_handoff
     # Processing is remote reconciliation, not an active local upload. Each
     # existing post keeps its duplicate fence; independent posts may proceed.
@@ -1022,6 +1069,12 @@ def _publish_claimed_post(post, posts, poster, current_dt, token_vault, page_man
             _record_posted_clip(clip_filename)
         except Exception as exc:
             post["ledger_error"] = sanitize_error(exc)
+        try:
+            fresh_posts = load_posts()
+            if cleanup_published_clip_files(fresh_posts, now=current_dt, clip_filename=clip_filename)['deleted_count']:
+                save_posts(fresh_posts)
+        except Exception as exc:
+            _safe_log("Local video cleanup deferred: " + sanitize_error(exc))
         if first_comment:
             try:
                 comment_result = poster.post_first_comment(facebook_id, page_token, first_comment,

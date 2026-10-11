@@ -1935,6 +1935,16 @@
         </div>
 
           <div class="col-12">
+            <div class="panel">
+              <div class="panel-title"><span class="pticon"><i class="bi bi-device-hdd"></i></span><span>Tự động dọn ổ</span></div>
+              <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;"><input type="checkbox" id="cfg_delete_published_reels" checked disabled style="width:auto;">Tự xóa video Reel sau khi đăng thành công</label>
+              <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;"><input type="checkbox" id="cfg_delete_completed_sources" checked disabled style="width:auto;">Xóa video gốc và audio khi job xử lý hoàn thành</label>
+              <p style="font-size:12.5px;color:var(--text-muted);">Clip chưa đăng hoặc còn lịch đăng sẽ được giữ. Lịch sử đăng và link Facebook vẫn còn sau khi dọn. Muốn cắt lại video đã dọn nguồn, bạn cần tải lại video gốc.</p>
+              <div id="cfg_storage_summary" style="font-size:12px;color:var(--text-muted);" role="status">Đang đọc trạng thái dọn ổ...</div>
+            </div>
+          </div>
+
+          <div class="col-12">
             <div class="panel" style="border: 1px solid rgba(236, 72, 153, 0.4); background: linear-gradient(145deg, #131d35, #0d1527);">
               <div class="panel-title">
                 <span class="pticon"><i class="bi bi-browser-chrome" style="color: #38bdf8;"></i></span>
@@ -3177,7 +3187,8 @@
         llm: { api_base, model, task_models },
         image_provider: { generation_url: image_generation_url, models_url: image_models_url, model: image_model },
         whisper: { prefer_youtube_transcript: whisper_mode === 'youtube_first' },
-        video_pipeline: { encoder, crf }
+        video_pipeline: { encoder, crf },
+        ...(window.storageRetentionPayload?.() || {})
       };
       if (api_key) payload.llm.api_key = api_key;
       if (image_api_key) payload.image_provider.api_key = image_api_key;
@@ -8340,5 +8351,6 @@
 <script src="/static/recovery_tracking.js"></script>
 <script src="/static/video_recovery.js"></script>
 <script src="/static/group_review.js"></script>
+<script src="/static/storage_retention.js"></script>
 </body>
 </html>
