@@ -1,0 +1,57 @@
+{
+  "success": true,
+  "published": true,
+  "draft": false,
+  "prerelease": true,
+  "url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/tag/v1.3.3",
+  "source_commit": "cd05886731711440810182d4b718fdcca0edfb0b",
+  "anonymous_release_metadata_verified": true,
+  "tag_matches_installer": true,
+  "github_sha256_matches_local": true,
+  "public_installer_link_http_status": 200,
+  "full_installer_download_verified": false,
+  "limitation": "Full installer re-download stopped after observed throughput of about 26 KB/s; GitHub SHA256, full asset size, public HTTP 200 and full small-asset downloads verified.",
+  "assets": [
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.3.3.exe",
+      "size": 683074560,
+      "digest": "sha256:5416bfffdd26b81eac108194fe7cf8edd0b064d50a6958693af5393cf0411791",
+      "url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.3.3/Highlight_Desktop_Test_Setup_v1.3.3.exe",
+      "anonymous_link_verified": true,
+      "http_status": 200,
+      "github_sha256_matches_local": true,
+      "full_installer_download_verified": false
+    },
+    {
+      "name": "Highlight_Desktop_Test_Setup_v1.3.3.sha256",
+      "size": 107,
+      "digest": "sha256:7b693e17706e990aacacad917f681c27f4f4effe1985d14b29dd8259c7ed390d",
+      "url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.3.3/Highlight_Desktop_Test_Setup_v1.3.3.sha256",
+      "anonymous_link_verified": true,
+      "http_status": 200,
+      "anonymous_full_asset_download_verified": true
+    },
+    {
+      "name": "RELEASE_v1.3.3.md",
+      "size": 1572,
+      "digest": "sha256:8cdf6005a258b0d3547279f46673807d8dbda57f9e912c0c6feb701699f19aa8",
+      "url": "https://github.com/minhpark89/Highlight_Video_Studio/releases/download/v1.3.3/RELEASE_v1.3.3.md",
+      "anonymous_link_verified": true,
+      "http_status": 200,
+      "anonymous_full_asset_download_verified": true
+    }
+  ],
+  "version": "1.3.3",
+  "validation": {
+    "required_release_groups": 14,
+    "tests_passed": 549,
+    "tests_skipped": 3,
+    "entire_repository_suite": false,
+    "matched_packaged_source_files": 91,
+    "source_dirty": false,
+    "portable_embedded_python_verified": true,
+    "portable_real_ffmpeg_render_and_decode_verified": true,
+    "portable_range_playback_verified": true,
+    "portable_retention_and_history_verified": true
+  }
+}
