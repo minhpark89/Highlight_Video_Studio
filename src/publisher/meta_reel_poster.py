@@ -83,15 +83,34 @@ class MetaReelPoster:
             publishing = status.get("publishing_phase") or {} if isinstance(status, dict) else {}
             published = str(publishing.get("publish_status") or "").lower() == "published"
             permalink = str(data.get("permalink_url") or "").strip()
-            if permalink.startswith("/reel/"):
-                permalink = "https://www.facebook.com" + permalink
+            permalink = self.public_video_permalink(permalink, candidate_id)
             if (str(data.get("id")) == str(candidate_id) and state in ("ready", "published")
-                    and published and permalink.startswith("https://www.facebook.com/reel/")):
+                    and published and permalink):
                 return {"verified": True, "video_id": str(candidate_id), "fb_url": permalink, "meta_observation": seen}
             return {"verified": False, "meta_observation": seen}
         except (requests.RequestException, ValueError, TypeError):
             pass
         return {"verified": False}
+
+    @staticmethod
+    def public_video_permalink(value, video_id):
+        """Accept Meta's Reel and Page/video links only for this exact object."""
+        from urllib.parse import parse_qs, urlsplit
+        value = str(value or "").strip()
+        if value.startswith("/") and not value.startswith("//"):
+            value = "https://www.facebook.com" + value
+        try:
+            url = urlsplit(value)
+            if url.scheme != "https" or url.hostname not in ("facebook.com", "www.facebook.com", "m.facebook.com"):
+                return ""
+            if url.username or url.password or url.port not in (None, 443):
+                return ""
+        except ValueError:
+            return ""
+        identifier = re.escape(str(video_id))
+        direct = re.fullmatch(r"/(?:reel|(?:[^/]+/)?videos)/" + identifier + r"/?", url.path)
+        watch = url.path in ("/watch", "/watch/") and parse_qs(url.query).get("v") == [str(video_id)]
+        return value if direct or watch else ""
 
     def inspect_reel(self, video_id, page_token, token_id=None):
         """Read one existing object and expose only diagnostic fields."""

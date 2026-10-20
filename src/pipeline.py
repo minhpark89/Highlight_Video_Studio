@@ -78,6 +78,21 @@ _, RENDER_CONCURRENCY = saved_concurrency(BASE_DIR / "data" / "render_queue_stat
 RENDER_LIMITER = RenderLimiter(RENDER_CONCURRENCY)
 
 
+def _select_render_encoder(configured: str = "", environment_override: str = "") -> str:
+    """Choose a verified hardware encoder without retrying a known-bad codec."""
+    override = str(environment_override or "").strip().lower()
+    if override in ENCODER_CODECS:
+        return override
+    saved = str(configured or "").strip().lower()
+    if saved in ("cpu", "libx264"):
+        return "cpu"
+    if _PROFILE_ENCODER in ENCODER_CODECS:
+        return _PROFILE_ENCODER
+    if saved in ENCODER_CODECS:
+        return saved
+    return "cpu"
+
+
 def set_render_concurrency(limit):
     global RENDER_CONCURRENCY
     RENDER_LIMITER.resize(limit)
@@ -192,6 +207,15 @@ if CONFIG_FILE.exists():
 LLM_BASE = str(config.get("llm", {}).get("api_base") or "").strip()
 LLM_KEY = str(config.get("llm", {}).get("api_key") or "").strip()
 LLM_MODEL = str(config.get("llm", {}).get("model") or "").strip()
+
+
+def _active_text_model():
+    """Use a currently advertised text model when the saved model was retired."""
+    try:
+        from src.content_builder import resolve_text_model
+        return resolve_text_model("article", model_override=LLM_MODEL) or LLM_MODEL
+    except Exception:
+        return LLM_MODEL
 
 def extract_video_id(url: str) -> str:
     patterns = [
@@ -535,8 +559,9 @@ def ask_llm_for_highlights(transcript_items, *args, num_clips=3, target_length="
         if not math.isfinite(video_duration) or video_duration <= 0:
             raise ValueError("Source video duration must be positive")
     """Gửi transcript vào LLM để phân tích và trích xuất các đoạn highlight đắt giá nhất"""
+    active_model = _active_text_model()
     if update_status:
-        update_status(f"AI ({LLM_MODEL}) đang phân tích kịch bản tìm {num_clips} highlight...")
+        update_status(f"AI ({active_model}) đang phân tích kịch bản tìm {num_clips} highlight...")
     
     lines = []
     for item in transcript_items:
@@ -578,7 +603,7 @@ Dưới đây là transcript có timestamp:
         "Content-Type": "application/json"
     }
     payload = {
-        "model": LLM_MODEL,
+        "model": active_model,
         "messages": [
             {"role": "user", "content": prompt}
         ],
@@ -658,7 +683,15 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
     if subtitle_style and subtitle_style != "none":
         segments = kwargs.get("all_segments")
         words = transcript_segments_to_words(segments, start_time, duration, exact_only=True)
-        timing = kwargs.get("subtitle_timing") or "accurate"
+        configured_timing = kwargs.get("subtitle_timing")
+        # Segment-only transcripts are already available from the ingest step.
+        # Avoid a fresh CPU Whisper pass for every clip unless callers request
+        # the higher-fidelity word-level alignment explicitly.
+        has_word_timing = any(
+            isinstance(segment, dict) and segment.get("words")
+            for segment in (segments or [])
+        )
+        timing = configured_timing or ("accurate" if has_word_timing else "fast")
         if not words and timing != "fast":
             words = get_word_level_transcription(source_video, start_time, duration, update_status=update_status)
         if not words:
@@ -703,9 +736,7 @@ def render_highlight_clip(source_video: str = None, audio_path: str = None, star
     configured = str(pipeline_cfg.get("encoder") or "auto").lower()
     vf += ",setsar=1,setpts=PTS-STARTPTS"
     env_encoder = os.environ.get("HIGHLIGHT_ENCODER", "").lower()
-    encoder = configured if configured in ENCODER_CODECS and configured != "auto" else (env_encoder or _PROFILE_ENCODER or "cpu")
-    if encoder not in ENCODER_CODECS:
-        encoder = "cpu"
+    encoder = _select_render_encoder(configured, env_encoder)
     codec = ENCODER_CODECS[encoder]
     crf = str(pipeline_cfg.get("crf") or 21)
 

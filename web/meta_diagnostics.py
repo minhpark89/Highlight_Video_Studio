@@ -51,6 +51,12 @@ def diagnose(post, seen=None):
         result.update(state="archived", message="Bài đã được xóa khỏi danh sách app",
                       detail="ID Meta được giữ trong lịch sử; app dừng thử đăng và comment.")
         return result
+    from web.unknown_publish_recovery import needs_operator_resolution
+    if needs_operator_resolution(post):
+        result.update(state="unknown_without_id", message="Lần đăng bị gián đoạn trước khi lưu Meta ID",
+                      detail="Tìm video trên đúng Page hoặc dán liên kết video đã đăng để app nối lại đối soát. "
+                             "Nếu đã kiểm tra cả video, bài đăng và lịch chờ mà chưa có bài, xác nhận chuyển về Draft để chọn lịch mới.")
+        return result
     def overdue():
         if post.get("meta_schedule_status") != "scheduled" and post.get("status") != "meta_scheduled":
             return False

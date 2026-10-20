@@ -66,20 +66,26 @@ class LongArticleFallbackTests(unittest.TestCase):
         self.assertNotIn("Invented", body)
         self.assertIn("How to examine the original sequence", body)
 
-    def test_portrait_original_rejected_even_when_crop_would_be_horizontal(self):
+    def test_portrait_video_remains_intact_inside_a_wide_article_frame(self):
         if not p.HAS_CV2:
-            self.skipTest("OpenCV unavailable; ffprobe landscape path verified separately")
-        capture = mock.Mock()
-        capture.isOpened.return_value = True
-        capture.get.side_effect = [720, 1280]
-        with tempfile.TemporaryDirectory() as folder, mock.patch.object(p, "HAS_CV2", True), mock.patch.object(
-            p.cv2, "VideoCapture", return_value=capture
-        ):
-            source = Path(folder) / "original.mp4"
-            source.write_bytes(b"fixture")
-            self.assertEqual(p.select_smart_video_frame(str(source)), "")
-        capture.read.assert_not_called()
-        capture.release.assert_called_once()
+            self.skipTest("OpenCV unavailable")
+        import numpy as np
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "portrait.avi"
+            frame = Path(folder) / "wide-frame.jpg"
+            writer = p.cv2.VideoWriter(str(source), p.cv2.VideoWriter_fourcc(*"MJPG"), 2, (180, 320))
+            self.assertTrue(writer.isOpened())
+            for index in range(8):
+                image = np.full((320, 180, 3), 80 + index * 10, dtype=np.uint8)
+                p.cv2.rectangle(image, (25, 40), (155, 280), (220, 90, 40), 5)
+                writer.write(image)
+            writer.release()
+            result = p.select_smart_video_frame(str(source), output_path=str(frame))
+            self.assertEqual(result, str(frame))
+            self.assertTrue(p._valid_image_file(result, landscape=True))
+            actual = p.cv2.imread(result)
+            self.assertEqual(actual.shape[:2], (720, 1280))
+            self.assertGreater(float(actual[:, 520:760].mean()), float(actual[:, :300].mean()))
 
     @unittest.skipUnless(p.HAS_CV2, "OpenCV unavailable")
     def test_synthetic_landscape_original_yields_real_wide_frame(self):

@@ -69,6 +69,32 @@ internal static class AppLauncher
         {
             appUrlFile = Path.Combine(baseDir, "run", "desktop_url.txt");
             try { appUrl = File.ReadAllText(appUrlFile).Trim(); } catch { appUrl = null; }
+            // A previous shell can outlive its server child after an abrupt
+            // backend failure. Do not reopen its dead URL forever: reclaim
+            // the stale shell and let a fresh instance acquire the mutex.
+            if (!ServerReady())
+            {
+                int currentPid = Process.GetCurrentProcess().Id;
+                foreach (Process other in Process.GetProcessesByName("Highlight_Desktop_Test"))
+                {
+                    if (other.Id == currentPid) continue;
+                    try { other.Kill(); other.WaitForExit(1500); } catch { }
+                    finally { other.Dispose(); }
+                }
+                try { instanceMutex.Close(); } catch { }
+                Thread.Sleep(250);
+                try
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = Application.ExecutablePath,
+                        WorkingDirectory = baseDir,
+                        UseShellExecute = true
+                    });
+                }
+                catch { }
+                return;
+            }
             OpenBrowser();
             return;
         }
@@ -249,7 +275,18 @@ internal static class AppLauncher
             iconTimer.Tick += delegate { ApplyApplicationIcon(); };
             iconTimer.Start();
             FormClosed += delegate { iconTimer.Dispose(); };
-            Text = "Highlight Desktop Test v1.3.3";
+            var healthTimer = new System.Windows.Forms.Timer { Interval = 2500 };
+            healthTimer.Tick += delegate
+            {
+                if (ownedServer != null && ownedServer.HasExited)
+                {
+                    healthTimer.Stop();
+                    Close();
+                }
+            };
+            healthTimer.Start();
+            FormClosed += delegate { healthTimer.Dispose(); };
+            Text = "Highlight Desktop Test v1.3.4";
             Width = 410;
             Height = 175;
             StartPosition = FormStartPosition.CenterScreen;

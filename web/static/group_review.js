@@ -75,13 +75,14 @@ async function loadGroupReview() {
       const ready = p.status === 'draft' && p.content_package_status === 'ready' && p.website_status === 'ready';
       const selectable = ['draft','preparing'].includes(p.status) && !p.content_frozen_at && !['meta_upload_video_id','meta_video_id','meta_post_id','post_fb_id','reel_id','outcome_unknown','publish_started_at','claimed_at'].some(k => p[k]);
       const error = p.schedule_error || p.website_error || p.content_package_error || '';
+      const websiteNeedsRetry = p.website_status === 'failed' || Boolean(p.website_error);
       const link = /^https?:\/\//i.test(p.article_url || '') ? `<a href="${escapeHtml(p.article_url)}" target="_blank" rel="noopener">Bài Website</a>` : 'Website đang chuẩn bị';
       return `<tr data-review-post-id="${escapeHtml(p.id)}">
         <td style="padding:12px;">${selectable ? `<input type="checkbox" data-draft-id="${escapeHtml(p.id)}" onchange="selectGroupDraft(this.dataset.draftId,this.checked)" aria-label="Chọn bài">` : ''}</td>
         <td style="padding:12px;max-width:300px;"><strong>${escapeHtml(p.title || p.media_file)}</strong><div style="font-size:11px;color:#94a3b8;">${escapeHtml(p.media_file)}<br>${escapeHtml(p.group_name || 'Page chọn riêng')}</div><a href="${escapeHtml(p.local_video_url || '')}" target="_blank" rel="noopener">Xem video</a> · ${link}</td>
         <td style="padding:12px;"><strong style="color:#60a5fa;">${escapeHtml(p.page_name || p.page_id)}</strong><div style="font-size:11px;color:#fbbf24;">${escapeHtml(p.token_display_name || p.token_id)}</div></td>
         <td style="padding:12px;font-size:12px;">${escapeHtml(p.scheduled_time || 'Chưa hẹn')}<div style="color:#38bdf8;">${p.requested_publish_mode === 'meta_scheduled' ? 'Meta giữ lịch' : 'App giữ lịch'}</div></td>
-        <td style="padding:12px;max-width:260px;"><strong style="color:${ready ? '#4ade80' : '#fbbf24'};">${ready ? 'Draft · sẵn sàng duyệt' : 'Đang chuẩn bị'}</strong><div style="font-size:11px;color:#fca5a5;white-space:normal;">${escapeHtml(error)}</div>${error ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(p.id)}" onclick="retryGroupWebsite(this.dataset.postId)">Thử lại Website</button>` : ''}</td>
+        <td style="padding:12px;max-width:260px;"><strong style="color:${ready ? '#4ade80' : '#fbbf24'};">${ready ? 'Draft · sẵn sàng duyệt' : 'Đang chuẩn bị'}</strong><div style="font-size:11px;color:#fca5a5;white-space:normal;">${escapeHtml(error)}</div>${websiteNeedsRetry ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(p.id)}" onclick="retryGroupWebsite(this.dataset.postId,this)">Thử lại Website</button>` : ''}</td>
         <td style="padding:12px;"><button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(p.id)}" onclick="openOutputDraft(this.dataset.postId)">Xem / sửa / duyệt</button>${ready ? `<button class="btn btn-primary btn-sm" data-post-id="${escapeHtml(p.id)}" onclick="approveGroupDrafts(this.dataset.postId)" style="margin-top:6px;">Duyệt & lên lịch</button>` : ''}</td>
       </tr>`;
     }).join('') || '<tr><td colspan="6" style="padding:25px;color:#94a3b8;text-align:center;">Chưa có bài cần duyệt trong nhóm này. Bật Post hàng ngày để nhận video mới từ kho.</td></tr>';
@@ -98,12 +99,21 @@ function selectGroupDraft(id, checked) {
 function selectAllGroupDrafts(checked) {
   document.querySelectorAll('[data-draft-id]').forEach(input => { input.checked = checked; selectGroupDraft(input.dataset.draftId, checked); });
 }
+function websiteRetryable(post) {
+  return post && (post.website_status === 'failed' || Boolean(post.website_error));
+}
 function updateGroupDraftSelection() {
   const button = document.getElementById('group-review-approve');
   const ready = groupReviewRows.filter(p => selectedDrafts.has(p.id) && p.status === 'draft' && p.content_package_status === 'ready' && p.website_status === 'ready');
+  const retryable = groupReviewRows.filter(p => selectedDrafts.has(p.id) && websiteRetryable(p));
   button.disabled = groupReviewBusy || !ready.length;
-  button.textContent = `Duyệt ${ready.length} Draft theo lịch đã lưu`;
+  button.textContent = 'Duyệt ' + ready.length + ' Draft theo lịch đã lưu';
   document.getElementById('group-review-today-selected').disabled = groupReviewBusy || !selectedDrafts.size;
+  const retryButton = document.getElementById('group-review-retry-website');
+  if (retryButton) {
+    retryButton.disabled = groupReviewBusy || !retryable.length;
+    retryButton.textContent = retryable.length ? 'Thử lại Website đã chọn (' + retryable.length + ')' : 'Thử lại Website đã chọn';
+  }
   const all = document.getElementById('group-review-select-all');
   const inputs = [...document.querySelectorAll('[data-draft-id]')];
   all.checked = inputs.length > 0 && inputs.every(i => i.checked);
@@ -206,14 +216,64 @@ async function applyGroupToday() {
   finally { groupReviewBusy = false; updateGroupDraftSelection(); }
 }
 
-async function retryGroupWebsite(postId) {
+async function retrySelectedGroupWebsites() {
+  if (groupReviewBusy) return;
+  const ids = groupReviewRows.filter(p => selectedDrafts.has(p.id) && websiteRetryable(p)).map(p => p.id);
+  const feedback = document.getElementById('group-review-result');
+  if (!ids.length) {
+    if (feedback) feedback.textContent = 'Chưa chọn bài Website lỗi.';
+    return;
+  }
+  groupReviewBusy = true;
+  updateGroupDraftSelection();
+  if (feedback) feedback.textContent = 'Đang xếp ' + ids.length + ' bài Website vào hàng đợi...';
   try {
-    const response = await fetch(`/api/posts/${encodeURIComponent(postId)}/retry-website`, {method:'POST'});
+    const response = await fetch('/api/posts/retry-website-batch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({post_ids: ids}),
+    });
     const data = await response.json();
     if (!response.ok || !data.success) throw new Error(data.error || 'Chưa thử lại được');
+    const failed = (data.results || []).filter(item => !item.success);
+    if (feedback) {
+      feedback.textContent = 'Đã xếp ' + (data.succeeded || 0) + '/' + ids.length + ' bài Website vào hàng đợi.' +
+        (failed.length ? ' ' + failed.length + ' bài lỗi: ' + failed.map(item => item.error || item.post_id).join('; ') : '');
+    }
+    showToast('Đã xếp ' + (data.succeeded || 0) + '/' + ids.length + ' bài Website để tạo lại.');
+    await Promise.all([loadGroupReview(), loadGroupReviewSummary()]);
+  } catch(error) {
+    if (feedback) feedback.textContent = error.message;
+    showToast(error.message);
+  } finally {
+    groupReviewBusy = false;
+    updateGroupDraftSelection();
+  }
+}
+async function retryGroupWebsite(postId, button = null) {
+  if (groupReviewBusy) return;
+  groupReviewBusy = true;
+  updateGroupDraftSelection();
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Đang xếp hàng...';
+  }
+  const feedback = document.getElementById('group-review-result');
+  if (feedback) feedback.textContent = 'Đang xếp bài Website vào hàng đợi...';
+  try {
+    const response = await fetch('/api/posts/' + encodeURIComponent(postId) + '/retry-website', {method: 'POST'});
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || 'Chưa thử lại được');
+    if (feedback) feedback.textContent = data.message || 'Đã xếp hàng kiểm tra Website';
     showToast(data.message || 'Đã xếp hàng kiểm tra Website');
-    await loadGroupReview();
-  } catch(error) { showToast(error.message); }
+    await Promise.all([loadGroupReview(), loadGroupReviewSummary()]);
+  } catch(error) {
+    if (feedback) feedback.textContent = error.message;
+    showToast(error.message);
+  } finally {
+    groupReviewBusy = false;
+    updateGroupDraftSelection();
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {

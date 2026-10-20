@@ -3,6 +3,7 @@ import re
 import json
 import time
 import requests
+import threading
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageOps
 from multi_pc.data_root import canonical_data_root
@@ -13,6 +14,20 @@ BASE_DIR = canonical_data_root()
 TEMP_DIR = BASE_DIR / "temp"
 OUTPUT_DIR = BASE_DIR / "output"
 CONFIG_FILE = BASE_DIR / "config.json"
+
+_MODEL_CATALOG_CACHE = {}
+_MODEL_CATALOG_LOCK = threading.RLock()
+_TEXT_MODEL_PREFERENCE = (
+    "gpt-oss-120b-medium",
+    "gemini-3-flash",
+    "gemini-3.6-flash-high",
+    "gemini-3.7-flash-high",
+    "gemini-3.1-pro-low",
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+    "minimax-m3",
+)
+_NON_TEXT_MODEL_MARKERS = ("image", "video", "imagine")
 
 def get_llm_candidates():
     cfg_file = CONFIG_FILE
@@ -51,6 +66,74 @@ def get_llm_candidates():
         "configured_base": configured_base
     }
 
+
+def _model_ids(api_base: str, api_key: str, *, refresh=False):
+    """Read the provider catalog and keep removed models out of runtime calls."""
+    base = str(api_base or "").rstrip("/")
+    if not base:
+        return []
+    now = time.monotonic()
+    with _MODEL_CATALOG_LOCK:
+        cached = _MODEL_CATALOG_CACHE.get(base)
+        if cached and not refresh and now - cached[0] < 300:
+            return list(cached[1])
+    try:
+        response = requests.get(
+            f"{base}/models",
+            headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
+            timeout=(3, 8),
+        )
+        response.raise_for_status()
+        payload = response.json()
+        ids = [str(row.get("id") or "").strip() for row in payload.get("data", []) if isinstance(row, dict)]
+        ids = [model for model in ids if model]
+    except (OSError, ValueError, TypeError, requests.RequestException):
+        return []
+    with _MODEL_CATALOG_LOCK:
+        _MODEL_CATALOG_CACHE[base] = (now, tuple(ids))
+    return ids
+
+
+def resolve_text_model(task: str = "", *, model_override: str = "", refresh=False,
+                       api_base: str = "", api_key: str = ""):
+    """Resolve a configured model against the live provider catalog."""
+    cfg = get_llm_candidates()
+    preferred = []
+    if model_override:
+        preferred.append(str(model_override).strip())
+    try:
+        root = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        llm = root.get("llm") if isinstance(root.get("llm"), dict) else {}
+        tasks = llm.get("task_models") if isinstance(llm.get("task_models"), dict) else {}
+        if task and tasks.get(task):
+            preferred.append(str(tasks[task]).strip())
+        if llm.get("model"):
+            preferred.append(str(llm["model"]).strip())
+    except (OSError, ValueError, TypeError):
+        pass
+    catalog_base = str(api_base or cfg["configured_base"] or "").strip()
+    catalog_key = str(api_key if api_key else cfg["api_key"] or "").strip()
+    ids = _model_ids(catalog_base, catalog_key, refresh=refresh)
+    if not ids:
+        fallback = next(
+            (model for model in preferred if model and not any(marker in model.casefold() for marker in _NON_TEXT_MODEL_MARKERS)),
+            "",
+        )
+        configured = str(cfg["model"] or "").strip()
+        return fallback or (configured if not any(marker in configured.casefold() for marker in _NON_TEXT_MODEL_MARKERS) else "")
+    available = set(ids)
+    for model in preferred:
+        if model in available:
+            return model
+    for model in _TEXT_MODEL_PREFERENCE:
+        if model in available:
+            return model
+    for model in ids:
+        lowered = model.casefold()
+        if not any(marker in lowered for marker in _NON_TEXT_MODEL_MARKERS):
+            return model
+    return ""
+
 def test_and_pick_active_llm(model_override: str = ""):
     """Tự động kiểm tra và bắt lấy endpoint 9router đang hoạt động trên máy này hoặc máy khác"""
     data = get_llm_candidates()
@@ -60,10 +143,17 @@ def test_and_pick_active_llm(model_override: str = ""):
         try:
             r = requests.get(f"{ep}/models", headers=headers, timeout=1.8)
             if r.status_code == 200:
+                selected = resolve_text_model(
+                    model_override=model_override,
+                    refresh=True,
+                    api_base=ep,
+                    api_key=data["api_key"],
+                )
                 return {
                     "api_base": ep,
                     "api_key": data["api_key"],
-                    "model": model_override or data["model"],
+                    "model": selected or model_override or data["model"],
+                    "available_models": _model_ids(ep, data["api_key"]),
                     "status": "connected"
                 }
         except Exception:
@@ -82,7 +172,8 @@ def _get_task_model(task: str) -> str:
         cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         llm_cfg = cfg.get("llm") if isinstance(cfg.get("llm"), dict) else {}
         task_models = llm_cfg.get("task_models") if isinstance(llm_cfg.get("task_models"), dict) else {}
-        return str(task_models.get(task) or llm_cfg.get("model") or "").strip()
+        configured = str(task_models.get(task) or llm_cfg.get("model") or "").strip()
+        return resolve_text_model(task, model_override=configured) or configured
     except Exception:
         return ""
 
@@ -99,7 +190,7 @@ def generate_viral_content(
     """
     from src.text_llm_diagnostics import chat_endpoint, chat_failure
     cfg = get_llm_candidates()
-    model = comment_model or _get_task_model("first_comment") or cfg["model"]
+    model = resolve_text_model("first_comment", model_override=comment_model) or _get_task_model("first_comment") or cfg["model"]
     base = cfg["configured_base"]
     if not base:
         raise RuntimeError("Text LLM api_base missing: configure llm.api_base for the text route")

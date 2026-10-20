@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.3.3",
+    [string]$Version = "1.3.4",
     [string]$PreviewRevision = "",
     [string]$BuildChannel = "desktop-test",
     [switch]$SkipTests,
@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 if ($BuildChannel -ne "desktop-test") { throw "Phase 1.5 permits only BUILD_CHANNEL=desktop-test" }
 $supportedVersions = @(
     "1.0.19", "1.1.6", "1.1.7", "1.1.8", "1.1.9", "1.2.0", "1.2.1", "1.2.2",
-    "1.2.3", "1.2.4", "1.2.5", "1.2.6", "1.2.7", "1.2.8", "1.2.9", "1.2.10", "1.2.11", "1.3.0", "1.3.1", "1.3.2", "1.3.3"
+    "1.2.3", "1.2.4", "1.2.5", "1.2.6", "1.2.7", "1.2.8", "1.2.9", "1.2.10", "1.2.11", "1.3.0", "1.3.1", "1.3.2", "1.3.3", "1.3.4"
 )
 if ($Version -notin $supportedVersions) { throw "Unsupported desktop-test APP_VERSION: $Version" }
 if ($Version -eq "1.0.19" -and -not $PreviewRevision) { throw "Legacy v1.0.19 builds require PreviewRevision" }
@@ -55,7 +55,7 @@ try {
             ,@("tests/test_release_guards.py"),
             @("tests/test_page_token_sync.py", "tests/test_parallel_publishing.py", "tests/test_posting_schedule.py"),
             @("tests/test_youtube_embed_publish.py", "tests/test_scheduling_publish_flow.py"),
-            @("tests/test_meta_native_handoff.py", "tests/test_meta_queue_handoff.py", "tests/test_meta_scheduling_profiles.py", "tests/test_fallback_comments.py", "tests/test_preview26_source_metadata.py", "tests/test_preview28_long_article_fallback.py"),
+            @("tests/test_meta_native_handoff.py", "tests/test_meta_queue_handoff.py", "tests/test_meta_scheduling_profiles.py", "tests/test_fallback_comments.py", "tests/test_preview26_source_metadata.py", "tests/test_preview28_long_article_fallback.py", "tests/test_scheduler_backlog_budget.py"),
             @("tests/test_first_comment_audit.py", "tests/test_whisper_lazy_fallback.py", "tests/test_installer_data_preservation.py", "tests/test_preview23_image_sources.py"),
             @("tests/test_content_studio_pipeline.py", "tests/test_website_ui_regression.py", "tests/test_output_pipeline.py"),
             @("tests/test_video_recovery.py", "tests/test_website_repair.py", "tests/test_english_public_content.py", "tests/test_group_review.py", "tests/test_schedule_today.py"),
@@ -64,7 +64,8 @@ try {
             ,@("tests/test_v1210_queue_recovery.py"),
             ,@("tests/test_v130_desktop_recovery_and_schedule.py"),
             @("tests/test_v132_jobs_render_preferences.py", "tests/test_render_concurrency.py", "tests/test_v1211_render_reliability.py"),
-            ,@("tests/test_storage_retention.py")
+            ,@("tests/test_storage_retention.py"),
+            @("tests/test_v134_meta_recovery.py", "tests/test_v134_navigation_browser.py")
         )
             foreach ($group in $testGroups) {
                 & python -m pytest @group -q --no-header

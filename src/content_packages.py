@@ -166,11 +166,12 @@ def record_llm_success():
 
 
 def _llm_package(title, summary, video_url="", article_url="", *, niche="", component=""):
-    from src.content_builder import get_llm_candidates, _get_task_model
+    from src.content_builder import get_llm_candidates, resolve_text_model, _get_task_model
 
     cfg = get_llm_candidates()
     endpoint = str(cfg.get("configured_base") or "").strip()
-    model = _get_task_model("first_comment" if component == "first_comment" else "article") or cfg.get("model")
+    task = "first_comment" if component == "first_comment" else "article"
+    model = resolve_text_model(task) or _get_task_model(task) or cfg.get("model")
     if not endpoint:
         raise RuntimeError("Text LLM api_base missing: configure llm.api_base for the text route")
     if not model or not cfg.get("api_key"):

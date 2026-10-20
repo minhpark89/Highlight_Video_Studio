@@ -165,6 +165,26 @@ def test_completed_sources_only_with_output_and_transcript_retained(tmp_path):
     assert job_store.get(tmp_path / 'jobs.json', 'job_123_abc')['source_media_deleted_at']
     assert retention.cleanup_completed_sources(tmp_path)['deleted_count'] == 0
 
+def test_failed_content_package_keeps_source_for_retry_until_terminal(tmp_path):
+    source_fixture(tmp_path)
+    write(tmp_path / 'data/content_packages.json', [{
+        'id': 'pkg-failed',
+        'status': 'failed',
+        'source_video_path': str(tmp_path / 'downloads/job_123_abc.mp4'),
+    }])
+    result = retention.cleanup_completed_sources(tmp_path)
+    assert result['deleted_count'] < 2
+    assert (tmp_path / 'downloads/job_123_abc.mp4').exists()
+
+    write(tmp_path / 'data/content_packages.json', [{
+        'id': 'pkg-completed',
+        'status': 'completed',
+        'source_video_path': str(tmp_path / 'downloads/job_123_abc.mp4'),
+    }])
+    result = retention.cleanup_completed_sources(tmp_path)
+    assert result['deleted_count'] >= 1
+    assert not (tmp_path / 'downloads/job_123_abc.mp4').exists()
+
 
 def test_source_setting_off_and_corrupt_consumer_state(tmp_path):
     source_fixture(tmp_path)

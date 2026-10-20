@@ -2154,6 +2154,8 @@
   // Global robust tab switcher
   window.switchTab = function(paneId, btnEl) {
     try {
+      var target = document.getElementById(paneId);
+      if (!target || !target.classList.contains('pane')) return false;
       console.log('[Tab] Switching to:', paneId);
       // Remove active from all nav-btn
       var btns = document.querySelectorAll('.nav-btn');
@@ -2170,32 +2172,12 @@
       // Activate clicked button or matching button
       if (btnEl) {
         btnEl.classList.add('active');
-      } else if (data && data.state === 'unavailable') {
-        if (pill) {
-          pill.style.background = 'rgba(245, 158, 11, 0.15)';
-          pill.style.borderColor = 'rgba(245, 158, 11, 0.4)';
-          pill.title = data.message || 'Chrome đang khóa cookie database';
-        }
-        if (icon) {
-          icon.className = 'bi bi-hourglass-split';
-          icon.style.color = '#fbbf24';
-        }
-        if (text) {
-          text.style.color = '#fcd34d';
-          text.innerText = 'YouTube: Chrome đang bận';
-        }
-        if (badge) {
-          badge.style.background = 'rgba(245, 158, 11, 0.3)';
-          badge.style.color = '#fcd34d';
-          badge.innerText = 'Đang kiểm tra';
-        }
       } else {
         var mBtn = document.querySelector('.nav-btn[data-pane="' + paneId + '"]');
         if (mBtn) mBtn.classList.add('active');
       }
 
       // Activate target pane & force display block
-      var target = document.getElementById(paneId);
       if (target) {
         target.classList.add('active');
         target.style.setProperty('display', 'block', 'important');
@@ -6785,7 +6767,7 @@
               <i class="bi bi-calendar3"></i> ${p.scheduled_time || 'Chưa hẹn'}
             </td>
             <td style="padding: 12px 14px; text-align: right;">
-              ${p.status === 'processing' || (p.status === 'failed' && (p.meta_upload_video_id || p.meta_video_id)) ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="openMetaDiagnosis(this.dataset.postId)" style="margin-bottom:6px;white-space:nowrap;">Kiểm tra Meta</button>` : ''}
+              ${p.status === 'processing' || (p.status === 'failed' && (p.meta_upload_video_id || p.meta_video_id || p.retry_stage === 'publish_outcome_unknown' || p.outcome_unknown)) ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="openMetaDiagnosis(this.dataset.postId)" style="margin-bottom:6px;white-space:nowrap;">Kiểm tra Meta / xử lý lỗi</button>` : ''}
               ${p.status === 'meta_scheduled' && p.meta_schedule_overdue ? `<button class="btn btn-primary btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="openMetaDiagnosis(this.dataset.postId)" style="margin-bottom:6px;white-space:nowrap;"><i class="bi bi-cloud-check"></i> Kiểm tra / đăng video đã giữ lịch</button>` : ''}
               ${p.status === 'failed' && p.retry_stage === 'invalid_media' ? `<button class="btn btn-outline btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="retryLocalMedia(this.dataset.postId)" style="margin-bottom:6px;white-space:nowrap;">Kiểm tra MP4 và thử lại</button>` : ''}
               ${p.can_replace_failed_video ? `<button class="btn btn-primary btn-sm" data-post-id="${escapeHtml(String(p.id))}" onclick="openMetaDiagnosis(this.dataset.postId)" style="margin-bottom:6px;white-space:nowrap;">Đăng lại MP4</button>` : ''}
@@ -7041,7 +7023,7 @@
       const failedOnly = document.getElementById('cs-status-filter')?.value === 'failed';
       const items = failedOnly ? allItems.filter(item => item.needs_attention) : allItems;
       const lc = data.llm_counts || {};
-      stats.innerHTML = `Đang chờ: <strong>${data.queued}</strong> · Đang xử lý: <strong>${data.running || 0}</strong> · Sẵn sàng: <strong>${data.ready}</strong> · LLM thành công: <strong style="color:#4ade80">${lc.success || 0}</strong> · Fallback: <strong style="color:#fbbf24">${lc.fallback || 0}</strong> · LLM lỗi: <strong style="color:#f87171">${lc.failed || 0}</strong> · LLM chưa chạy do Website lỗi: <strong style="color:#fbbf24">${lc.blocked_website || 0}</strong> · Cần xử lý: <strong>${data.needs_attention}</strong>`;
+      stats.innerHTML = `Đang chờ: <strong>${data.queued}</strong> · Đang xử lý: <strong>${data.running || 0}</strong> · Sẵn sàng: <strong>${data.ready}</strong> · LLM thành công: <strong style="color:#4ade80">${lc.success || 0}</strong> · LLM đang xử lý: <strong style="color:#93c5fd">${lc.pending || 0}</strong> · Fallback: <strong style="color:#fbbf24">${lc.fallback || 0}</strong> · LLM lỗi: <strong style="color:#f87171">${lc.failed || 0}</strong> · Website lỗi, LLM chưa chạy: <strong style="color:#fbbf24">${lc.blocked_website || 0}</strong> · Cần xử lý: <strong>${data.needs_attention}</strong>`;
       const c = data.circuit || {};
       circuit.textContent = c.open
         ? `Circuit breaker \u0110ANG M\u1ede \u2014 th\u1eed l\u1ea1i sau ${c.retry_after_seconds}s (l\u1ed7i quota).`
@@ -8260,6 +8242,7 @@
       extra.innerHTML=`<b>Quyền đang dùng:</b> ${escapeHtml(credential.owner_name || credential.token_id || '')} · ${escapeHtml(credential.status || 'Chưa xác minh')}<br>Mapping Page: ${credential.mapping_verified ? 'đã xác minh' : 'chưa xác minh'} · Quyền tạo nội dung: ${credential.can_create_content ? 'có' : 'chưa xác minh'}<br>${Number(data.read_checks || 0)} lần đọc trạng thái · ${Number(data.publish_attempts || 0)} lần thử đăng`;
       if(attempt.checked_at) extra.innerHTML+=`<br><b>Phản hồi đăng gần nhất:</b> ${escapeHtml(new Date(attempt.checked_at).toLocaleString('vi-VN'))} · HTTP ${Number(attempt.http_status || 0) || 'chưa nhận'}<br>${escapeHtml(attempt.method || '')} ${escapeHtml(attempt.endpoint || '')}<br>Token: ${escapeHtml(attempt.token_id || '')} · ${escapeHtml(attempt.state || '')}<br>Meta: ${escapeHtml(String(attempt.error_code ?? '—'))} / ${escapeHtml(String(attempt.error_subcode ?? '—'))} · Trace: ${escapeHtml(attempt.trace_id || '—')}`;
       body.appendChild(extra);
+      if (typeof mountPublishResolution === 'function') mountPublishResolution(body, data);
       if(diag.can_replace_failed_video){
         await mountRecoveryVideos(body, postId);
       }
@@ -8349,6 +8332,7 @@
 <script src="/static/posts_interactions.js"></script>
 <script src="/static/scheduler_feedback.js"></script>
 <script src="/static/recovery_tracking.js"></script>
+<script src="/static/publish_resolution.js?v={{ app_version }}"></script>
 <script src="/static/video_recovery.js"></script>
 <script src="/static/group_review.js"></script>
 <script src="/static/storage_retention.js"></script>

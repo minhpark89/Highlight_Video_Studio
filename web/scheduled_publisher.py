@@ -23,6 +23,10 @@ SCHEDULER_HEARTBEAT_FILE = BASE_DIR / "data" / "scheduler_heartbeat.json"
 
 _FILE_LOCK = threading.Lock()
 _cycle_lock = threading.Lock()
+_maintenance_lock = threading.Lock()
+_maintenance_stop = threading.Event()
+_maintenance_wake = threading.Event()
+_maintenance_thread = None
 _wake_event = threading.Event()
 _urgent_event = threading.Event()
 CYCLE_INTERVAL_SECONDS = 20
@@ -30,6 +34,9 @@ _active_posts = set()
 _active_posts_lock = threading.Lock()
 CLAIM_STALE_AFTER_SECONDS = 300
 OVERDUE_GRACE_SECONDS = 120
+FIRST_COMMENT_BATCH_SIZE = 4
+META_RECONCILE_BATCH_SIZE = 8
+MAINTENANCE_TIME_BUDGET_SECONDS = 20
 
 # A failed local publish is safe to retry only while no Meta object was created.
 # Once an upload ID exists, the reconciliation path below is the only authority.
@@ -92,6 +99,8 @@ def worker_status():
     snapshot["thread_alive"] = bool(_worker_thread and _worker_thread.is_alive())
     snapshot["waiting_for_lease"] = _worker_waiting_for_lease
     snapshot["cycle_active"] = _cycle_lock.locked()
+    snapshot["maintenance_active"] = _maintenance_lock.locked()
+    snapshot["maintenance_thread_alive"] = bool(_maintenance_thread and _maintenance_thread.is_alive())
     with _active_posts_lock:
         snapshot["active_posts"] = len(_active_posts)
     return snapshot
@@ -200,6 +209,16 @@ def _requeue_safe_failures(posts, now_ts, current_dt):
     """Return retryable local failures to the scheduler without touching Meta."""
     changed = False
     for post in posts:
+        if (not post.get("local_archived_at") and post.get("status") == "failed" and post.get("publish_error_code") == "non_english_content"
+                and not any(post.get(key) for key in ("meta_upload_video_id", "meta_video_id", "meta_post_id", "post_fb_id", "outcome_unknown"))):
+            try:
+                _repair_non_english_post(post, posts)
+                if _post_public_text_is_english(post):
+                    post.update(retryable=True, retry_stage="facebook_publish", publish_error_code="")
+                    post.pop("publish_started_at", None)
+                    post.pop("claimed_at", None)
+            except (ValueError, OSError) as exc:
+                post["error"] = sanitize_error(exc)
         if post.get("local_archived_at") or post.get("status") != "failed" or not post.get("retryable"):
             continue
         if any(post.get(key) for key in ("meta_upload_video_id", "meta_video_id", "meta_post_id", "post_fb_id", "outcome_unknown")):
@@ -467,39 +486,31 @@ def cleanup_published_clip_files(posts, *, now=None, clip_filename=None, respect
     return result
 
 
-def _process_scheduled_posts_once(
-    poster=None,
-    now=None,
-    website_publisher=None,
-    comment_generator=None,
-    force_due=False,
-):
-    """Process one deterministic cycle while preserving the pre-publish claim lock.
+def _resume_from_maintenance(*args, independent=False, **kwargs):
+    # New uploads and manual recovery retain their existing serialization.
+    # Reads can continue during a slow upload; recovery waits for a free turn.
+    if independent and not _cycle_lock.acquire(blocking=False):
+        return False
+    try:
+        return _resume_complete_upload(*args, **kwargs)
+    finally:
+        if independent:
+            _cycle_lock.release()
 
-    ``force_due`` lets an operator run overdue posts immediately from the UI when
-    the background worker missed a cycle; it never bypasses the claim/duplicate guards.
-    """
-    import sys
 
-    sys.path.insert(0, str(BASE_DIR))
+def _process_meta_maintenance(poster=None, now=None, independent=False):
     from src.publisher.first_comment_queue import enqueue_first_comment, process_due_first_comments
     from src.publisher.meta_reel_poster import MetaReelPoster
     from src.publisher.page_manager import PageManager
     from src.publisher.token_vault import TokenVault
     from src.publisher.meta_preflight import preflight_pages
-    from src.publisher.website_publisher import generate_curiosity_comment_with_llm, publish_clip_to_website_cms
-    from src.content_packages import scheduled_video_path
-
-    website_publisher = website_publisher or publish_clip_to_website_cms
-    comment_generator = comment_generator or generate_curiosity_comment_with_llm
     page_manager = PageManager(BASE_DIR)
     token_vault = TokenVault(BASE_DIR)
     poster = poster or MetaReelPoster(token_vault=token_vault)
     current_dt = now or datetime.now()
     now_ts = current_dt.timestamp()
-
+    force_due = False
     posts = load_posts()
-    _requeue_safe_failures(posts, now_ts, current_dt)
     posts_by_id = {post.get("id"): post for post in posts}
     def prepare_first_comment(item):
         linked_post = next((p for p in load_posts() if p.get("id") == item.get("post_id")), posts_by_id.get(item.get("post_id")))
@@ -527,147 +538,124 @@ def _process_scheduled_posts_once(
             return {"ready": False, "cancelled": True, "error": "Operator requested cancellation; comment paused."}
         return {"ready": bool(page_token), "page_token": page_token}
     queue_result = {"changed": False, "completed": 0, "outcomes": []}
-    if not force_due:
-        queue_result = process_due_first_comments(poster, now=int(current_dt.timestamp()), prepare=prepare_first_comment)
     reconciled = 0
-    for post in ([] if force_due else posts):
-        if post.get("status") not in ("processing", "meta_scheduled") or not (post.get("meta_video_id") or post.get("meta_upload_video_id") or post.get("meta_post_id")):
+    examined = 0
+    from web.meta_reconcile_policy import due_candidates, existing_object, needs_reconciliation, next_delay
+    from web.meta_reconcile_reader import read_candidates
+    reconciliation_candidates = due_candidates(posts, now_ts, META_RECONCILE_BATCH_SIZE)
+    for snapshot, credential, check in read_candidates(
+            reconciliation_candidates, page_manager, token_vault,
+            parallel=independent, time_budget=MAINTENANCE_TIME_BUDGET_SECONDS):
+        examined += 1
+        posts = load_posts()
+        post = next((row for row in posts if row.get("id") == snapshot.get("id")), None)
+        if not post or not needs_reconciliation(post) or existing_object(post) != existing_object(snapshot):
             continue
-        if post.get("meta_cancel_requested") or post.get("local_archived_at"):
-            continue
-        meta_scheduled = post.get("publish_mode") == "meta_scheduled" or bool(post.get("meta_scheduled_publish_time"))
-        if meta_scheduled:
-            publish_at = float(post.get("meta_scheduled_publish_time") or 0)
-            if post.get("status") == "meta_scheduled" and publish_at and now_ts < publish_at + 90:
-                continue
-            if now_ts < float(post.get("meta_next_check_at") or 0):
-                continue
         attempts = int(post.get("meta_reconcile_attempts") or 0)
-        if now_ts < float(post.get("meta_next_check_at") or 0) and post.get("meta_reconcile_version") == 2:
+        meta_scheduled = post.get("publish_mode") == "meta_scheduled" or bool(post.get("meta_scheduled_publish_time"))
+        post["meta_checked_at"] = datetime.now().astimezone().isoformat()
+        if not credential:
+            post["meta_reconcile_error"] = check.get("credential_error") or "Cần đồng bộ Token của đúng Page."
+            post["meta_reconcile_version"] = 2
+            post["meta_next_check_at"] = now_ts + 900
+            save_posts(posts)
             continue
-        # New records require the same exact Page/token mapping as publishing.
-        page = next((p for p in page_manager.list_pages() if str(p.get("page_id")) == str(post.get("page_id"))), None)
-        from web.meta_recovery import publishing_token_id
-        recovery_token_id = publishing_token_id(post)
-        exact_page = {**page, "token_id": recovery_token_id} if page and recovery_token_id else None
-        verdict = preflight_pages([exact_page], token_vault, page_manager, operation="read") if exact_page else {"ok": False}
-        if not verdict.get("ok"):
-            post["meta_reconcile_error"] = "Exact Page credential unavailable; read-only verification paused."
-            continue
-        credential = verdict["ready"][0]
-        from src.publisher.meta_reel_poster import MetaReelPoster as _MetaReelPoster
-        # Meta finish can return a post_id that rejects video-status fields.
-        # The upload video_id is the actual Reel object and is read first.
-        poster_for_check = _MetaReelPoster(token_vault=token_vault)
-        check = {"verified": False}
-        candidates = (post.get("meta_upload_video_id"), post.get("meta_video_id"))
-        # A Finish post_id can be a Post object: asking it for video.status
-        # returns deprecated singular-status API code 12. Keep real video
-        # phase evidence instead of overwriting it with that unrelated error.
-        if not any(candidates):
-            candidates = (post.get("meta_post_id"),)
-        for candidate in dict.fromkeys(candidates):
-            if candidate:
-                if meta_scheduled:
-                    check = poster_for_check.check_scheduled_reel(
-                        candidate, credential["token"], post.get("meta_scheduled_publish_time"), credential["token_id"]
-                    )
-                    if check.get("status") == "published" and not check.get("verified"):
-                        public_check = poster_for_check.check_processing_reel(
-                            candidate, credential["token"], credential["token_id"]
-                        )
-                        if public_check.get("verified"):
-                            check = {**public_check, "verified": True, "status": "published"}
-                else:
-                    check = poster_for_check.check_processing_reel(
-                        candidate, credential["token"], credential["token_id"]
-                    )
-                if check.get("verified") or ((check.get("meta_observation") or {}).get("id") == str(candidate)
-                        and (check.get("meta_observation") or {}).get("http_status") == 200):
-                    break
-        latest = next((p for p in load_posts() if p.get("id") == post.get("id")), None)
-        if latest is None or latest.get("meta_cancel_requested") or latest.get("local_archived_at"):
-            continue
-        post["meta_reconcile_attempts"] = (attempts + 1) if post.get("meta_reconcile_version") == 2 else 1
-        post["meta_reconcile_version"] = 2
-        post["meta_next_check_at"] = now_ts + (300 if meta_scheduled or attempts >= 5 else 60)
-        if isinstance(check.get("meta_observation"), dict):
-            from web.meta_diagnostics import diagnose
-            post["meta_observation"] = check["meta_observation"]
-            post["meta_diagnosis"] = diagnose(post)
-            from web.video_recovery import can_replace_failed_video
-            if can_replace_failed_video(post, check["meta_observation"]):
-                post.update(status="failed", meta_schedule_status="rejected", retryable=False,
-                            outcome_unknown=False, retry_stage="meta_video_rejected",
-                            error="Meta xác nhận video lỗi và chưa đăng. Kiểm tra MP4 rồi dùng Đăng lại hoặc xóa bài lỗi khỏi app.")
-                reconciled += 1
+        post.pop("meta_reconcile_error", None)
+        if post.get("status") == "failed":
+            post.update(status="processing", retryable=False, retry_stage="meta_processing")
+        poster_for_check = MetaReelPoster(token_vault=token_vault)
+        try:
+            latest = next((p for p in load_posts() if p.get("id") == post.get("id")), None)
+            if latest is None or latest.get("meta_cancel_requested") or latest.get("local_archived_at"):
                 continue
-            if _resume_complete_upload(
-                    post, check["meta_observation"], poster_for_check, credential, posts, current_dt,
-                    vault=token_vault, manager=page_manager):
-                reconciled += 1
-                continue
-        reconciled += 1
-        if check.get("verified"):
-            post["post_fb_id"] = check["video_id"]
-            if check.get("fb_url"):
-                post["fb_url"] = check["fb_url"]
-            if meta_scheduled and check.get("status") == "scheduled":
-                post.update({
-                    "status": "meta_scheduled",
-                    "meta_video_id": check["video_id"],
-                    "meta_schedule_status": "scheduled",
-                    "meta_schedule_verified_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                    "meta_scheduled_publish_time": check.get("publish_time") or post.get("meta_scheduled_publish_time"),
-                    "outcome_unknown": False,
-                    "error": "",
-                })
+            post["meta_reconcile_attempts"] = (attempts + 1) if post.get("meta_reconcile_version") == 2 else 1
+            post["meta_reconcile_version"] = 2
+            post["meta_next_check_at"] = now_ts + next_delay(post, check.get("meta_observation") or {}, now_ts)
+            if isinstance(check.get("meta_observation"), dict):
+                from web.meta_diagnostics import diagnose
+                post["meta_observation"] = check["meta_observation"]
+                post["meta_diagnosis"] = diagnose(post)
+                from web.video_recovery import can_replace_failed_video
+                if can_replace_failed_video(post, check["meta_observation"]):
+                    post.update(status="failed", meta_schedule_status="rejected", retryable=False,
+                                outcome_unknown=False, retry_stage="meta_video_rejected",
+                                error="Meta xác nhận video lỗi và chưa đăng. Kiểm tra MP4 rồi dùng Đăng lại hoặc xóa bài lỗi khỏi app.")
+                    reconciled += 1
+                    continue
+                if _resume_from_maintenance(
+                        post, check["meta_observation"], poster_for_check, credential, posts, current_dt,
+                        vault=token_vault, manager=page_manager, independent=independent):
+                    reconciled += 1
+                    continue
+            reconciled += 1
+            if check.get("verified"):
+                post["post_fb_id"] = check["video_id"]
+                if check.get("fb_url"):
+                    post["fb_url"] = check["fb_url"]
+                if meta_scheduled and check.get("status") == "scheduled":
+                    post.update({
+                        "status": "meta_scheduled",
+                        "meta_video_id": check["video_id"],
+                        "meta_schedule_status": "scheduled",
+                        "meta_schedule_verified_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                        "meta_scheduled_publish_time": check.get("publish_time") or post.get("meta_scheduled_publish_time"),
+                        "outcome_unknown": False,
+                        "error": "",
+                    })
+                    if post.get("first_comment") and post.get("first_comment_status") not in ("posted", "pending"):
+                        try:
+                            queued = enqueue_first_comment(
+                                check["video_id"], credential["token"], post["first_comment"],
+                                int(post["meta_scheduled_publish_time"]) + 30,
+                                token_id=credential["token_id"], post_id=post.get("id"),
+                            )
+                            post["first_comment_status"] = "pending" if queued.get("success") else "queue_failed"
+                            post["first_comment_queue_id"] = queued.get("queue_id") or ""
+                        except Exception as exc:
+                            post["first_comment_status"] = "queue_failed"
+                            post["first_comment_error"] = sanitize_error(exc)
+                    continue
+                # Ledger and post state must agree before displaying confirmed success.
+                try:
+                    _record_posted_clip(post.get("media_file") or post.get("clip_filename"))
+                except Exception as exc:
+                    post["ledger_error"] = sanitize_error(exc)
+                post.update({"status": "published", "published_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"), "meta_schedule_status": "published", "error": "", "retryable": False, "outcome_unknown": False})
+                save_posts(posts)
+                if cleanup_published_clip_files(posts, now=current_dt,
+                        clip_filename=post.get("media_file") or post.get("clip_filename"))['deleted_count']:
+                    save_posts(posts)
                 if post.get("first_comment") and post.get("first_comment_status") not in ("posted", "pending"):
                     try:
                         queued = enqueue_first_comment(
                             check["video_id"], credential["token"], post["first_comment"],
-                            int(post["meta_scheduled_publish_time"]) + 30,
-                            token_id=credential["token_id"], post_id=post.get("id"),
+                            int(now_ts) + 30, token_id=credential["token_id"], post_id=post.get("id"),
                         )
                         post["first_comment_status"] = "pending" if queued.get("success") else "queue_failed"
-                        post["first_comment_queue_id"] = queued.get("queue_id") or ""
                     except Exception as exc:
                         post["first_comment_status"] = "queue_failed"
                         post["first_comment_error"] = sanitize_error(exc)
-                continue
-            # Ledger and post state must agree before displaying confirmed success.
-            try:
-                _record_posted_clip(post.get("media_file") or post.get("clip_filename"))
-            except Exception as exc:
-                post["ledger_error"] = sanitize_error(exc)
-            post.update({"status": "published", "published_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"), "meta_schedule_status": "published", "error": "", "retryable": False, "outcome_unknown": False})
+            elif meta_scheduled and check.get("status") in ("error", "failed", "rejected", "schedule_mismatch"):
+                post.update({
+                    "status": "failed", "meta_schedule_status": "rejected" if check.get("status") != "schedule_mismatch" else "schedule_mismatch",
+                    "retryable": False, "retry_stage": "meta_schedule_rejected",
+                    "error": "Meta did not confirm the requested scheduled state; inspect the Meta object before taking action.",
+                })
+            elif meta_scheduled and check.get("status") == "scheduled":
+                post.update({
+                    "status": "meta_scheduled",
+                    "meta_schedule_status": "scheduled",
+                    "meta_schedule_verified_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "meta_next_check_at": max(now_ts + 60, float(post.get("meta_scheduled_publish_time") or now_ts) + 90),
+                })
+        finally:
             save_posts(posts)
-            if cleanup_published_clip_files(posts, now=current_dt,
-                    clip_filename=post.get("media_file") or post.get("clip_filename"))['deleted_count']:
-                save_posts(posts)
-            if post.get("first_comment") and post.get("first_comment_status") not in ("posted", "pending"):
-                try:
-                    queued = enqueue_first_comment(
-                        check["video_id"], credential["token"], post["first_comment"],
-                        int(now_ts) + 30, token_id=credential["token_id"], post_id=post.get("id"),
-                    )
-                    post["first_comment_status"] = "pending" if queued.get("success") else "queue_failed"
-                except Exception as exc:
-                    post["first_comment_status"] = "queue_failed"
-                    post["first_comment_error"] = sanitize_error(exc)
-        elif meta_scheduled and check.get("status") in ("error", "failed", "rejected", "schedule_mismatch"):
-            post.update({
-                "status": "failed", "meta_schedule_status": "rejected" if check.get("status") != "schedule_mismatch" else "schedule_mismatch",
-                "retryable": False, "retry_stage": "meta_schedule_rejected",
-                "error": "Meta did not confirm the requested scheduled state; inspect the Meta object before taking action.",
-            })
-        elif meta_scheduled and check.get("status") == "scheduled":
-            post.update({
-                "status": "meta_scheduled",
-                "meta_schedule_status": "scheduled",
-                "meta_schedule_verified_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                "meta_next_check_at": max(now_ts + 300, float(post.get("meta_scheduled_publish_time") or now_ts) + 90),
-            })
+    queue_result = process_due_first_comments(
+        poster, now=int(current_dt.timestamp()), prepare=prepare_first_comment,
+        max_items=FIRST_COMMENT_BATCH_SIZE, time_budget_seconds=MAINTENANCE_TIME_BUDGET_SECONDS,
+    )
+    posts = load_posts()
+    posts_by_id = {post.get("id"): post for post in posts}
     for outcome in queue_result.get("outcomes", []):
         post = posts_by_id.get(outcome.get("post_id"))
         if not post:
@@ -678,6 +666,77 @@ def _process_scheduled_posts_once(
         if outcome.get("comment_id"):
             post["comment_id"] = outcome["comment_id"]
 
+    save_posts(posts)
+    return {"examined": examined, "reconciled": reconciled,
+            "comments": queue_result.get("processed", 0), "queue": queue_result}
+
+
+def process_meta_maintenance_once(poster=None, now=None, independent=False):
+    if not _maintenance_lock.acquire(blocking=False):
+        return {"busy": True}
+    try:
+        result = _process_meta_maintenance(poster=poster, now=now, independent=independent)
+        with _heartbeat_lock:
+            _heartbeat["maintenance_last_cycle_at"] = datetime.now().isoformat(timespec="seconds")
+            _heartbeat["maintenance_last_error"] = ""
+            _heartbeat["maintenance_cycles"] = _heartbeat.get("maintenance_cycles", 0) + 1
+            _heartbeat["maintenance_last_batch"] = {key: value for key, value in result.items() if key != "queue"}
+        return result
+    finally:
+        _maintenance_lock.release()
+
+
+def meta_maintenance_worker_loop():
+    while not _maintenance_stop.is_set():
+        try:
+            process_meta_maintenance_once(independent=True)
+        except Exception as exc:
+            with _heartbeat_lock:
+                _heartbeat["maintenance_last_error"] = sanitize_error(exc)
+            _safe_log("[MetaMaintenance] " + sanitize_error(exc))
+        _maintenance_wake.wait(CYCLE_INTERVAL_SECONDS)
+        _maintenance_wake.clear()
+
+
+def _process_scheduled_posts_once(
+    poster=None,
+    now=None,
+    website_publisher=None,
+    comment_generator=None,
+    force_due=False,
+    skip_maintenance=False,
+):
+    """Process one deterministic cycle while preserving the pre-publish claim lock.
+
+    ``force_due`` lets an operator run overdue posts immediately from the UI when
+    the background worker missed a cycle; it never bypasses the claim/duplicate guards.
+    """
+    import sys
+
+    sys.path.insert(0, str(BASE_DIR))
+    from src.publisher.first_comment_queue import enqueue_first_comment, process_due_first_comments
+    from src.publisher.meta_reel_poster import MetaReelPoster
+    from src.publisher.page_manager import PageManager
+    from src.publisher.token_vault import TokenVault
+    from src.publisher.meta_preflight import preflight_pages
+    from src.publisher.website_publisher import generate_curiosity_comment_with_llm, publish_clip_to_website_cms
+    from src.content_packages import scheduled_video_path
+
+    website_publisher = website_publisher or publish_clip_to_website_cms
+    comment_generator = comment_generator or generate_curiosity_comment_with_llm
+    page_manager = PageManager(BASE_DIR)
+    token_vault = TokenVault(BASE_DIR)
+    poster = poster or MetaReelPoster(token_vault=token_vault)
+    current_dt = now or datetime.now()
+    now_ts = current_dt.timestamp()
+
+    maintenance = {}
+    if not force_due and not skip_maintenance:
+        maintenance = process_meta_maintenance_once(poster=poster, now=current_dt)
+    posts = load_posts()
+    _requeue_safe_failures(posts, now_ts, current_dt)
+    reconciled = maintenance.get("reconciled", 0)
+    queue_result = maintenance.get("queue", {"changed": False, "outcomes": []})
     # Recover records left in "publishing" by a crashed or killed cycle so they are
     # retried instead of hanging forever with a stale claim.
     recovered = 0
@@ -1108,12 +1167,15 @@ def _publish_claimed_post(post, posts, poster, current_dt, token_vault, page_man
                 except Exception:
                     post["first_comment_status"] = "queue_failed"
                 post["first_comment_error"] = sanitize_error(exc)
-    except Exception:
+    except Exception as exc:
+        has_upload = bool(post.get("meta_upload_video_id") or post.get("meta_video_id"))
         post.update({
-            "status": "failed",
+            "status": "processing" if has_upload else "failed",
             "retryable": False,
-            "retry_stage": "publish_outcome_unknown",
-            "error": "Publish started but outcome is unknown; reconcile on Facebook before retrying.",
+            "outcome_unknown": True,
+            "retry_stage": "meta_processing" if has_upload else "publish_outcome_unknown",
+            "meta_next_check_at": now_ts + 60,
+            "error": "Đang đối soát kết quả đăng trên Meta. " + sanitize_error(exc),
         })
 
     return post
@@ -1138,12 +1200,13 @@ def request_publish_cycle():
     start_worker_thread(restart_dead=True)
     _urgent_event.set()
     _wake_event.set()
+    _maintenance_wake.set()
     return {"success": True, "queued": True, "message": "Đã nhận yêu cầu; worker sẽ xử lý bài đủ điều kiện."}
 
 
 def scheduled_publisher_worker_loop():
     """Run publishing cycles continuously; all external calls remain in the cycle helper."""
-    global _worker_started, _worker_waiting_for_lease
+    global _worker_started, _worker_waiting_for_lease, _maintenance_thread
     _worker_waiting_for_lease = True
     while not _PROCESS_LEASE.acquire():
         time.sleep(5)
@@ -1156,6 +1219,9 @@ def scheduled_publisher_worker_loop():
     with _heartbeat_lock:
         _heartbeat["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _safe_log("[ScheduledPublisher] Background publisher worker started with Idempotent Claim Lock!")
+    _maintenance_stop.clear()
+    _maintenance_thread = threading.Thread(target=meta_maintenance_worker_loop, daemon=True, name="meta-maintenance")
+    _maintenance_thread.start()
     try:
         while True:
             _PROCESS_LEASE.touch()
@@ -1163,7 +1229,7 @@ def scheduled_publisher_worker_loop():
             try:
                 urgent = _urgent_event.is_set()
                 _urgent_event.clear()
-                result = process_scheduled_posts_once(force_due=urgent)
+                result = process_scheduled_posts_once(force_due=urgent, skip_maintenance=True)
                 if result.get("busy"):
                     # A manual run-due or a previous long cycle still holds the lock;
                     # do not touch the heartbeat or it would mask the real cycle result.
@@ -1180,6 +1246,8 @@ def scheduled_publisher_worker_loop():
             _wake_event.wait(1 if retry_soon else CYCLE_INTERVAL_SECONDS)
             _wake_event.clear()
     finally:
+        _maintenance_stop.set()
+        _maintenance_wake.set()
         _worker_started = False
         with _heartbeat_lock:
             _heartbeat["running"] = False

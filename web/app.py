@@ -111,7 +111,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.3.4"
 
 @app.after_request
 def add_header(response):
@@ -1487,6 +1487,22 @@ def api_llm_test():
         api_base = _normalise_llm_base(raw_base)
     except ValueError as exc:
         return jsonify({"success": False, "error": str(exc)}), 400
+    configured_model = model
+    available_models = []
+    try:
+        from src.content_builder import _model_ids, resolve_text_model
+        available_models = _model_ids(api_base, api_key, refresh=True)
+        if available_models and model not in available_models:
+            model = resolve_text_model(
+                model_override=model,
+                refresh=False,
+                api_base=api_base,
+                api_key=api_key,
+            ) or model
+    except Exception:
+        # The chat request remains the source of truth if catalog discovery is
+        # unavailable or the provider exposes a non-standard /models route.
+        available_models = []
     started = time.perf_counter()
     try:
         response = requests.post(
@@ -1513,6 +1529,9 @@ def api_llm_test():
                 "success": False,
                 "error": f"Model có trong danh sách nhưng gọi chat thất bại (HTTP {response.status_code}): {detail}",
                 "latency_ms": latency_ms,
+                "configured_model": configured_model,
+                "model": model,
+                "available_models": available_models,
             }), 502
         if chat_model_unavailable(response):
             return jsonify({"success": False, "error": "Model Text LLM đã ngừng hoạt động trên endpoint này; hãy chọn model khác.",
@@ -1527,6 +1546,8 @@ def api_llm_test():
             "success": True,
             "api_base": api_base,
             "model": model,
+            "configured_model": configured_model,
+            "available_models": available_models,
             "latency_ms": latency_ms,
             "sample": content[:80],
         })
@@ -3195,6 +3216,8 @@ def api_scheduler_status():
     status["blocked_count"] = sum(not item["actionable"] for item in overdue)
     status["actionable_count"] = sum(item["actionable"] for item in overdue)
     status["overdue_posts"] = overdue[:50]
+    from web.meta_reconcile_policy import queue_summary
+    status["meta_queue"] = queue_summary(posts, now_dt.timestamp())
     status["success"] = True
     from multi_pc.publishing_settings import load_publishing_settings, MAX_POSTING_THREADS
     status.update(load_publishing_settings(POSTS_FILE.parent))
@@ -3294,10 +3317,87 @@ def api_post_meta_diagnosis(post_id):
     return jsonify(_post_meta_diagnostic_payload(post, seen, mapping))
 
 
+@app.route("/api/posts/<post_id>/resolve-unknown", methods=["POST"])
+def api_resolve_unknown_publish(post_id):
+    from web.unknown_publish_recovery import (
+        needs_operator_resolution, find_candidates, read_owned_video, attach_existing, return_to_draft,
+    )
+    from web.meta_recovery import publishing_token_id
+    from web.scheduled_publisher import _cycle_lock, _maintenance_wake, sanitize_error
+    from web.posts_store import _LOCK as posts_lock
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify(success=False, error="Dữ liệu đối soát không hợp lệ."), 400
+    post = next((row for row in load_posts() if row.get("id") == post_id), None)
+    if not post:
+        return jsonify(success=False, error="Không tìm thấy bài."), 404
+    if not needs_operator_resolution(post):
+        return jsonify(success=False, error="Bài đã có Meta ID hoặc không còn cần đối soát thủ công."), 409
+    action = body.get("action")
+    try:
+        data = None
+        if action in ("search", "link_existing"):
+            token = token_vault.get_token_by_id(publishing_token_id(post))
+            mapping, reason = page_manager.resolve_verified_mapping(post.get("page_id"), token)
+            if reason or not mapping:
+                raise ValueError("Mở Quản lý Token và Sync đúng Page trước khi tìm video.")
+            if action == "search":
+                return jsonify(success=True, candidates=find_candidates(reel_poster, post, mapping),
+                               message="Tìm tối đa 150 video quanh lần đăng. Không có kết quả chưa đủ để kết luận chưa đăng.")
+            data = read_owned_video(reel_poster, post, mapping, body.get("video_id"))
+        elif action != "return_to_draft":
+            return jsonify(success=False, error="Chọn tìm video, gắn video hoặc chuyển về Draft sau đối soát."), 400
+        if not _cycle_lock.acquire(blocking=False):
+            return jsonify(success=False, busy=True, error="Worker đang ghi bài. Thử lại sau ít giây."), 409
+        try:
+            with posts_lock:
+                posts = load_posts()
+                current = next((row for row in posts if row.get("id") == post_id), None)
+                if not current or str(current.get("page_id")) != str(post.get("page_id")):
+                    raise ValueError("Bài hoặc Page đã thay đổi; tải lại danh sách.")
+                if action == "link_existing":
+                    attach_existing(current, posts, data)
+                else:
+                    return_to_draft(current, body.get("confirmed_absent"))
+                save_posts(posts)
+        finally:
+            _cycle_lock.release()
+        _maintenance_wake.set()
+        return jsonify(success=True, status=current["status"], message=(
+            "Đã gắn video. App tiếp tục đối soát đúng Meta ID." if action == "link_existing"
+            else "Đã chuyển về Draft. Chọn lịch mới và duyệt bài trong Chuẩn bị / Draft theo nhóm."
+        ))
+    except (ValueError, requests.RequestException) as exc:
+        return jsonify(success=False, error=sanitize_error(exc)), 409
+
+
+@app.route("/api/scheduler/check-meta", methods=["POST"])
+def api_request_meta_check():
+    from web.meta_reconcile_policy import needs_reconciliation
+    from web.scheduled_publisher import _maintenance_wake
+    from web.posts_store import _LOCK as posts_lock
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or ("post_ids" in body and not isinstance(body["post_ids"], list)):
+        return jsonify(success=False, error="Danh sách bài không hợp lệ."), 400
+    selected = set(str(value) for value in body.get("post_ids", []))
+    changed = 0
+    with posts_lock:
+        posts = load_posts()
+        for post in posts:
+            if needs_reconciliation(post) and (not selected or str(post.get("id")) in selected):
+                post["meta_next_check_at"] = 0
+                changed += 1
+        save_posts(posts)
+    _maintenance_wake.set()
+    return jsonify(success=True, queued=changed, message=f"Đã ưu tiên kiểm tra {changed} bài có Meta ID."), 202
+
+
 def _post_meta_diagnostic_payload(post, seen, mapping):
     from web.meta_diagnostics import diagnose, latest_publish_attempt
     from web.meta_recovery import can_retry_existing, can_refresh_existing, recovery_credentials, publishing_token_id
     diagnostic = diagnose(post, seen)
+    from web.unknown_publish_recovery import needs_operator_resolution
+    diagnostic["needs_operator_resolution"] = needs_operator_resolution(post)
     from web.video_recovery import can_replace_failed_video
     diagnostic["can_replace_failed_video"] = bool(mapping and can_replace_failed_video(post, seen))
     diagnostic["can_retry_existing"] = can_refresh_existing(post) and (
@@ -3315,6 +3415,8 @@ def _post_meta_diagnostic_payload(post, seen, mapping):
                     "last_publish_attempt": latest_publish_attempt(post),
                     "publish_attempts": int(post.get("auto_finish_attempts") or post.get("meta_finish_recovery_attempts") or 0),
                     "read_checks": int(post.get("meta_reconcile_attempts") or 0),
+                    "next_check_at": post.get("meta_next_check_at"),
+                    "reconcile_error": post.get("meta_reconcile_error") or "",
                     "credential_check": {"token_id": publishing_token_id(post), "status": selected_entry.get("status"),
                         "owner_name": selected_entry.get("owner_name") or selected_entry.get("name") or "",
                         "mapping_verified": bool(mapping), "can_create_content": bool(set(tasks).intersection(PUBLISH_TASKS))},
@@ -4332,15 +4434,15 @@ def api_cancel_meta_batch():
         _cycle_lock.release()
 
 
-@app.route("/api/posts/<post_id>/retry-website", methods=["POST"])
-def api_retry_post_website(post_id):
-    """Retry only CMS preparation; never publish or reschedule Facebook."""
-    posts = load_posts()
+def _retry_website_post_record(post_id, posts):
+    """Queue or run Website repair for one local post without touching Meta."""
     post = next((item for item in posts if item.get("id") == post_id), None)
     if not post:
-        return jsonify({"success": False, "error": "Không tìm thấy bài đã lên lịch"}), 404
+        return {"post_id": post_id, "success": False, "status_code": 404,
+                "error": "Không tìm thấy bài đã lên lịch"}
     if post.get("article_url") and post.get("website_status") == "ready":
-        return jsonify({"success": True, "already_ready": True})
+        return {"post_id": post_id, "success": True, "already_ready": True,
+                "status_code": 200}
 
     # The content worker repairs the same CMS URL and generates the dependent
     # comment. Do not bless a failed URL merely because it is already present.
@@ -4368,11 +4470,9 @@ def api_retry_post_website(post_id):
         if not post.get("first_comment_snapshot") and post.get("first_comment_status") != "posted":
             post["first_comment_status"] = "pending_generation"
             post["first_comment_error"] = ""
-        save_posts(posts)
-        start_content_package_worker()
-        return jsonify({"success": True, "queued": True, "package_id": package["id"],
-                        "article_url": post.get("article_url", ""),
-                        "message": "Đang sửa và xác minh bài Website tại URL hiện tại, sau đó tạo lại First Comment."}), 202
+        return {"post_id": post_id, "success": True, "queued": True, "status_code": 202,
+                "package_id": package["id"], "article_url": post.get("article_url", ""),
+                "message": "Đang sửa và xác minh bài Website tại URL hiện tại, sau đó tạo lại First Comment."}
 
     fields = prepare_website_article_for_schedule(
         post.get("media_file") or post.get("clip_filename"),
@@ -4384,10 +4484,55 @@ def api_retry_post_website(post_id):
     )
     post.update(fields)
     post["website_retried_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    save_posts(posts)
     if post.get("website_status") != "ready":
-        return jsonify({"success": False, "error": post.get("website_error"), "post": post}), 502
-    return jsonify({"success": True, "post": post})
+        return {"post_id": post_id, "success": False, "status_code": 502,
+                "error": post.get("website_error") or "Không tạo được bài Website"}
+    return {"post_id": post_id, "success": True, "status_code": 200, "post": post}
+
+
+@app.route("/api/posts/<post_id>/retry-website", methods=["POST"])
+def api_retry_post_website(post_id):
+    """Retry only CMS preparation; never publish or reschedule Facebook."""
+    posts = load_posts()
+    result = _retry_website_post_record(post_id, posts)
+    if result.get("status_code") == 404:
+        return jsonify({"success": False, "error": result["error"]}), 404
+    save_posts(posts)
+    if result.get("queued"):
+        start_content_package_worker()
+        return jsonify({key: value for key, value in result.items() if key != "status_code"}), 202
+    status_code = int(result.get("status_code") or 200)
+    return jsonify({key: value for key, value in result.items() if key != "status_code"}), status_code
+
+
+@app.route("/api/posts/retry-website-batch", methods=["POST"])
+def api_retry_website_batch():
+    """Retry Website preparation for selected local posts in one queue operation."""
+    body = request.get_json(silent=True) or {}
+    post_ids = body.get("post_ids") if isinstance(body, dict) else None
+    if (not isinstance(post_ids, list) or not 1 <= len(post_ids) <= 100 or
+            any(not isinstance(post_id, str) or not post_id.strip() for post_id in post_ids)):
+        return jsonify({"success": False, "error": "Chọn từ 1 đến 100 bài để thử lại Website"}), 400
+    posts = load_posts()
+    results = []
+    queued = False
+    for post_id in dict.fromkeys(post_ids):
+        try:
+            result = _retry_website_post_record(post_id, posts)
+        except Exception as exc:
+            result = {"post_id": post_id, "success": False, "status_code": 502,
+                      "error": sanitize_error(exc)}
+        queued = queued or bool(result.get("queued"))
+        results.append({key: value for key, value in result.items()
+                        if key not in ("status_code", "post")})
+    if any(item.get("success") or item.get("queued") for item in results):
+        save_posts(posts)
+    if queued:
+        start_content_package_worker()
+    succeeded = sum(1 for item in results if item.get("success"))
+    failed = len(results) - succeeded
+    return jsonify({"success": True, "requested": len(results), "queued": queued,
+                    "succeeded": succeeded, "failed": failed, "results": results}), (202 if queued else 200)
 
 
 @app.route("/api/posts/<post_id>/retry-publish", methods=["POST"])

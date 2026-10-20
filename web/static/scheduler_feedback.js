@@ -31,6 +31,21 @@ async function readSchedulerView() {
     const blocked = (state.overdue_posts || []).filter(post => post.blocked_reason);
     const ready = Number(state.actionable_count ?? state.overdue_count ?? 0);
     const messages = [];
+    const meta = state.meta_queue || {};
+    if (meta.pending) {
+      const checkTime = state.maintenance_last_cycle_at?.slice(11, 19) || '--:--:--';
+      messages.push(`<span>Đối soát Meta: ${Number(meta.pending)} bài · ${Number(meta.overdue_meta || 0)} lịch quá giờ · lần cuối ${escapeHtml(checkTime)}.</span>`);
+      messages.push(`<span>${state.maintenance_thread_alive ? 'Tự kiểm tra độc lập với upload.' : 'Luồng kiểm tra Meta cần khởi động lại app.'}</span>`);
+      messages.push('<button class="btn btn-outline btn-sm" onclick="requestMetaChecks(this)">Ưu tiên kiểm tra Meta</button>');
+    }
+    if (meta.credential_blocked) {
+      messages.push(`<span>${Number(meta.credential_blocked)} bài cần đồng bộ quyền Page.</span>`);
+      messages.push('<button class="btn btn-outline btn-sm" onclick="switchTab(\'pane-tokens\')">Mở Token</button>');
+    }
+    if (meta.unknown_without_id) {
+      messages.push(`<span>${Number(meta.unknown_without_id)} lần đăng chưa lưu Meta ID: mở Thất bại → Kiểm tra Meta / xử lý lỗi để đối soát.</span>`);
+    }
+    if (state.maintenance_last_error) messages.push(escapeHtml(state.maintenance_last_error));
     if (blocked.length) {
       messages.push(`<b>${state.blocked_count || blocked.length} bài cần xử lý</b>: `
         + escapeHtml(blocked[0].blocked_reason));
@@ -49,6 +64,25 @@ async function readSchedulerView() {
   } catch (error) {
     status.textContent = 'Không đọc được worker: ' + error.message;
     status.style.color = '#ef4444';
+  }
+}
+
+async function requestMetaChecks(button) {
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/scheduler/check-meta', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({})
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) throw new Error(result.error || 'Chưa gửi được yêu cầu kiểm tra');
+    showToast(result.message, 'info');
+    await refreshSchedulerView();
+  } catch (error) {
+    showToast(error.message, 'error');
+  } finally {
+    button.disabled = false;
   }
 }
 

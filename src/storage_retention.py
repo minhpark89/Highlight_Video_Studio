@@ -137,7 +137,10 @@ def cleanup_completed_sources(root, *, job_id=None, packages=None):
         if post.get('status') not in ('published', 'superseded', 'cancelled'):
             protected.update(_referenced_names(post))
     for package in active_packages(root) if packages is None else packages:
-        if package.get('status') in ('queued', 'running', 'retryable'):
+        # A failed package can be retried after a provider outage or an image
+        # fallback repair. Keep its source until the package reaches a durable
+        # terminal state; deleting it here made the next retry impossible.
+        if package.get('status') not in ('ready', 'published', 'completed', 'cancelled', 'superseded'):
             protected.update(_referenced_names(package))
     # Recovery provenance does not consume raw media. Active render requests do.
     for name in ('video_recovery_tasks.json', 'video_recovery_requests.json'):

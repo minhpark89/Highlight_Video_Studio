@@ -88,16 +88,28 @@ def cancel_first_comment(post_id=None, queue_id=None, object_id=None, *, blockin
     return {"cancelled": cancelled}
 
 
-def process_due_first_comments(poster, now=None, prepare=None):
+def process_due_first_comments(poster, now=None, prepare=None, *, max_items=None, time_budget_seconds=None):
+    """Process oldest due items within an optional soft network-work budget.
+
+    Readiness checks consume the budget too. A single in-flight request can
+    exceed the time budget; its outcome is persisted before returning.
+    """
     current = int(now or time.time())
+    started = time.monotonic()
+    examined = 0
     changed = False
     completed = 0
     outcomes = []
     with _LOCK:
         items = _load_unlocked()
-        for item in items:
+        for item in sorted(items, key=lambda entry: int(entry.get("due_at") or 0)):
             if item.get("status") != "pending" or int(item.get("due_at") or 0) > current:
                 continue
+            if max_items is not None and examined >= max_items:
+                break
+            if examined and time_budget_seconds is not None and time.monotonic() - started >= time_budget_seconds:
+                break
+            examined += 1
             if prepare is not None:
                 try:
                     readiness = prepare(item)
@@ -158,4 +170,4 @@ def process_due_first_comments(poster, now=None, prepare=None):
         ]
         if changed:
             _save_unlocked(items)
-    return {"processed": completed, "changed": changed, "outcomes": outcomes}
+    return {"processed": completed, "examined": examined, "changed": changed, "outcomes": outcomes}

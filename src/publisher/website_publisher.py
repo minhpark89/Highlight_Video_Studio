@@ -502,6 +502,28 @@ def _score_frame(frame) -> float:
     return 0.38 * sharpness + 0.22 * contrast + 0.20 * balanced + 0.20 * saturation
 
 
+def _landscape_frame(frame):
+    """Keep portrait footage intact while fitting it into the article's 16:9 slot."""
+    height, width = frame.shape[:2]
+    target_w, target_h = 1280, 720
+    if width <= 0 or height <= 0:
+        return frame
+    if width / height >= target_w / target_h:
+        crop_width = int(height * target_w / target_h)
+        return frame[:, max(0, (width - crop_width) // 2):][:, :crop_width]
+    scale = min(target_w / width, target_h / height)
+    foreground = cv2.resize(frame, (max(2, int(width * scale)) // 2 * 2,
+                                     max(2, int(height * scale)) // 2 * 2),
+                             interpolation=cv2.INTER_AREA)
+    background = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
+    background = cv2.GaussianBlur(background, (0, 0), 26)
+    background = (background * 0.46).astype("uint8")
+    y = (target_h - foreground.shape[0]) // 2
+    x = (target_w - foreground.shape[1]) // 2
+    background[y:y + foreground.shape[0], x:x + foreground.shape[1]] = foreground
+    return background
+
+
 def select_smart_video_frame(video_path: str, clip_start=None, clip_end=None, output_path: str = "") -> str:
     """Choose a sharp, balanced 16:9 frame from the original source video."""
     if not video_path or not os.path.exists(video_path):
@@ -518,7 +540,7 @@ def select_smart_video_frame(video_path: str, clip_start=None, clip_end=None, ou
             payload = json.loads(info.stdout)
             stream = (payload.get("streams") or [{}])[0]
             width, height = int(stream.get("width") or 0), int(stream.get("height") or 0)
-            if not height or width <= height:
+            if not height or not width:
                 return ""
             duration = float((payload.get("format") or {}).get("duration") or 0)
             start = float(clip_start) if clip_start is not None else duration * 0.35
@@ -529,7 +551,7 @@ def select_smart_video_frame(video_path: str, clip_start=None, clip_end=None, ou
             crop_width = min(width, int(height * 16 / 9)) // 2 * 2
             crop_height = min(height, int(width * 9 / 16)) // 2 * 2
             subprocess.run([ffmpeg, "-y", "-ss", str(timestamp), "-i", str(video_path),
-                "-vf", f"crop={crop_width}:{crop_height}",
+                 "-vf", f"scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
                 "-frames:v", "1", "-q:v", "2", str(destination)],
                 capture_output=True, timeout=45, check=True,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -541,18 +563,16 @@ def select_smart_video_frame(video_path: str, clip_start=None, clip_end=None, ou
     if not cap.isOpened():
         cap.release()
         return ""
-    # Reject a portrait source before cropping: a horizontal crop of a short
-    # vertical highlight must never masquerade as an original landscape frame.
     width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    if not height or width <= height:
+    if not height or not width:
         cap.release()
         return ""
     best = None
     for timestamp in _candidate_frame_times(video_path, clip_start, clip_end):
         cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000.0)
         ok, frame = cap.read()
-        if ok and frame.shape[1] > frame.shape[0]:
+        if ok:
             score = _score_frame(frame)
             if best is None or score > best[0]:
                 best = score, frame
@@ -560,14 +580,7 @@ def select_smart_video_frame(video_path: str, clip_start=None, clip_end=None, ou
     if best is None:
         return ""
     frame = best[1]
-    height, width = frame.shape[:2]
-    target = 16 / 9
-    if width / max(1, height) > target:
-        crop_width = int(height * target)
-        frame = frame[:, max(0, (width - crop_width) // 2):][:, :crop_width]
-    else:
-        crop_height = int(width / target)
-        frame = frame[max(0, (height - crop_height) // 2):][:crop_height, :]
+    frame = _landscape_frame(frame)
     destination = Path(output_path or (HVS_DIR / "temp" / "smart_hero_frame.jpg"))
     destination.parent.mkdir(parents=True, exist_ok=True)
     return str(destination) if cv2.imwrite(str(destination), frame, [cv2.IMWRITE_JPEG_QUALITY, 93]) and _valid_image_file(str(destination), landscape=True) else ""
@@ -773,13 +786,15 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str, *, m
     clip_path = Path(str(clip_filename or ""))
     if not clip_path.is_absolute():
         clip_path = _runtime_data_root() / "output" / clip_path
-    source_path = next((str(path) for path in (
+    original_source_path = next((str(path) for path in (
         meta.get("source_video_path"), meta.get("long_video_path")
     ) if path and Path(path).is_file() and Path(path).resolve() != clip_path.resolve()), "")
+    source_path = original_source_path or (str(clip_path) if clip_path.is_file() else "")
+    source_kind = "source_frame" if original_source_path else "clip_frame"
     images = []
+    frame_paths = []
     if source_path:
-        # Sample three different windows from the horizontal original video.
-        # The portrait Reel is deliberately excluded above.
+        # Sample three windows from the original source or rendered clip.
         try:
             clip_start = float(meta.get("clip_start"))
             clip_end = float(meta.get("clip_end"))
@@ -799,18 +814,42 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str, *, m
                 str(HVS_DIR / "temp" / f"source_frame_{Path(clip_filename).stem}_{index}.jpg"))
             if not frame or not _valid_image_file(frame, landscape=True):
                 continue
+            frame_paths.append(frame)
             try:
                 url = svc._presign_and_upload(sess, frame)
                 if url and url not in images:
                     images.append(url)
             except Exception as exc:
                 logger.warning("Original-source frame upload failed: %s", type(exc).__name__)
+    if len(images) < 2 and source_path != str(clip_path) and clip_path.is_file():
+        # Retention can remove the original before an old package retries.
+        # The rendered clip is still enough to make a verifiable article image.
+        source_path = str(clip_path)
+        source_kind = "clip_frame"
+        from src.media_validation import InvalidMedia, probe_video
+        try:
+            duration = probe_video(source_path)["duration"]
+        except InvalidMedia:
+            duration = 0
+        for index in range(3):
+            start, end = (duration * index / 3, duration * (index + 1) / 3) if duration else (0, 8)
+            frame = select_smart_video_frame(source_path, start, end,
+                str(HVS_DIR / "temp" / f"clip_frame_{Path(clip_filename).stem}_{index}.jpg"))
+            if not frame or not _valid_image_file(frame, landscape=True):
+                continue
+            frame_paths.append(frame)
+            try:
+                url = svc._presign_and_upload(sess, frame)
+                if url and url not in images:
+                    images.append(url)
+            except Exception as exc:
+                logger.warning("Rendered-clip frame upload failed: %s", type(exc).__name__)
     if len(images) < 2:
-        raise WebsiteServiceError("Cần 2 ảnh minh họa từ video dài gốc. Nguồn ngang 4:3 hoặc 16:9 đều hợp lệ; không dùng clip dọc.")
+        raise WebsiteServiceError("Cần 2 ảnh minh họa từ video; chưa tìm thấy clip hoặc nguồn video hợp lệ.")
     hero = images[0]
     image_config = get_image_provider_config()
     if metadata is not None:
-        metadata.update(image_source="source_frame", image_model="", image_fallback_reason="")
+        metadata.update(image_source=source_kind, image_model="", image_fallback_reason="")
     # Text fallback mode does not disable the independent hero image model.
     if str(image_config.get("model") or "") != "__video_frame__":
         try:
@@ -827,9 +866,23 @@ def extract_and_upload_article_assets(clip_filename: str, video_title: str, *, m
         except Exception as exc:
             logger.info("Article hero image model unavailable; using source frame (%s)", type(exc).__name__)
             if metadata is not None:
-                metadata["image_fallback_reason"] = "Model ảnh lỗi; dùng ảnh ngang từ video dài gốc."
+                metadata["image_fallback_reason"] = "Model ảnh lỗi; dùng frame video đã chuẩn hóa."
+    if hero == images[0] and len(images) < 3 and frame_paths:
+        overlay = render_local_title_overlay(
+            frame_paths[0], video_title,
+            str(HVS_DIR / "temp" / f"local_hook_{Path(clip_filename).stem}.jpg"),
+        )
+        if overlay and _valid_image_file(overlay, landscape=True):
+            try:
+                overlay_url = svc._presign_and_upload(sess, overlay)
+                if overlay_url and overlay_url not in images:
+                    hero = overlay_url
+                    if metadata is not None:
+                        metadata.update(image_source="local_overlay", image_fallback_reason="Model ảnh không khả dụng; dùng overlay cục bộ trên frame video.")
+            except Exception as exc:
+                logger.warning("Local overlay upload failed: %s", type(exc).__name__)
     if hero == images[0] and len(images) < 3:
-        raise WebsiteServiceError("Model ảnh chưa có ảnh hợp lệ; cần thêm frame thứ ba từ video dài gốc làm thumbnail dự phòng.")
+        raise WebsiteServiceError("Không tạo đủ ba ảnh minh họa hợp lệ cho bài viết.")
     if metadata is not None:
         metadata.update(hero_image_url=hero, body_image_urls=images[:2] if hero != images[0] else images[1:3])
     return hero, images[:2] if hero != images[0] else images[1:3]
