@@ -59,10 +59,13 @@ def due_candidates(posts, now, limit=8):
         eligible.append(post)
     eligible.sort(key=lambda post: timestamp(post.get("meta_next_check_at")))
     overdue = [post for post in eligible if native_due(post) and native_due(post) <= now - 90]
+    overdue.sort(key=lambda post: post.get("status") != "meta_scheduled")
     uncertain = [post for post in eligible if post.get("status") == "failed"]
     selected = []
     selected_ids = set()
+    lanes = []
     for lane, quota in ((overdue, max(1, limit // 2)), (uncertain, max(1, limit // 4)), (eligible, limit)):
+        lane_selected = []
         taken = 0
         for post in lane:
             if len(selected) >= limit or taken >= quota:
@@ -70,9 +73,18 @@ def due_candidates(posts, now, limit=8):
             if post.get("id") in selected_ids:
                 continue
             selected.append(post)
+            lane_selected.append(post)
             selected_ids.add(post.get("id"))
             taken += 1
-    return selected
+        lanes.append(lane_selected)
+    # A slow first wave can exhaust the network budget. Give every class a
+    # place in that first wave instead of placing all failures after overdue.
+    interleaved = []
+    while any(lanes):
+        for index in (0, 1, 2, 0):
+            if lanes[index]:
+                interleaved.append(lanes[index].pop(0))
+    return interleaved
 
 
 def next_delay(post, seen, now):

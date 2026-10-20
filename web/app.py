@@ -108,6 +108,8 @@ from core.text_encoding import repair_mojibake
 
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
+from web.research_thumbnails import register as register_research_thumbnails
+register_research_thumbnails(app)
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.

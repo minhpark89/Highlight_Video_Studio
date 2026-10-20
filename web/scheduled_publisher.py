@@ -622,7 +622,9 @@ def _process_meta_maintenance(poster=None, now=None, independent=False):
                     post["ledger_error"] = sanitize_error(exc)
                 post.update({"status": "published", "published_at": current_dt.strftime("%Y-%m-%d %H:%M:%S"), "meta_schedule_status": "published", "error": "", "retryable": False, "outcome_unknown": False})
                 save_posts(posts)
-                if cleanup_published_clip_files(posts, now=current_dt,
+                # The independent retention worker owns disk cleanup. Never
+                # wait for its long scan while reconciling a remote outcome.
+                if not independent and cleanup_published_clip_files(posts, now=current_dt,
                         clip_filename=post.get("media_file") or post.get("clip_filename"))['deleted_count']:
                     save_posts(posts)
                 if post.get("first_comment") and post.get("first_comment_status") not in ("posted", "pending"):
@@ -891,7 +893,7 @@ def _process_scheduled_posts_once(
     if reconciled or queue_result.get("changed"):
         save_posts(posts)
         posts = load_posts()
-    removed = cleanup_published_clip_files(posts, now=current_dt)['deleted_count']
+    removed = 0 if skip_maintenance else cleanup_published_clip_files(posts, now=current_dt)['deleted_count']
     if claimed_posts or recovered or reconciled or queue_result.get("changed") or removed:
         save_posts(posts)
     try:
@@ -1128,12 +1130,8 @@ def _publish_claimed_post(post, posts, poster, current_dt, token_vault, page_man
             _record_posted_clip(clip_filename)
         except Exception as exc:
             post["ledger_error"] = sanitize_error(exc)
-        try:
-            fresh_posts = load_posts()
-            if cleanup_published_clip_files(fresh_posts, now=current_dt, clip_filename=clip_filename)['deleted_count']:
-                save_posts(fresh_posts)
-        except Exception as exc:
-            _safe_log("Local video cleanup deferred: " + sanitize_error(exc))
+        # Cleanup runs after synchronous cycles or in the independent storage
+        # worker. A completed network publish must not wait for a disk scan.
         if first_comment:
             try:
                 comment_result = poster.post_first_comment(facebook_id, page_token, first_comment,

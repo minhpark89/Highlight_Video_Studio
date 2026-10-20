@@ -46,7 +46,9 @@ def test_failed_existing_upload_reconciles_while_upload_cycle_busy(installation)
     worker.POSTS_FILE.write_text(json.dumps([row]))
     with mock.patch.object(MetaReelPoster, "check_processing_reel", return_value={
         "verified": True, "video_id": "9001", "fb_url": "https://www.facebook.com/9901/videos/9001/",
-    }), mock.patch.object(MetaReelPoster, "publish_reel") as upload:
+    }), mock.patch.object(MetaReelPoster, "publish_reel") as upload, mock.patch.object(
+            worker, "cleanup_published_clip_files",
+            side_effect=AssertionError("Meta reconciliation must not wait for the disk cleanup worker")):
         assert worker._cycle_lock.acquire(blocking=False)
         try:
             result = worker.process_meta_maintenance_once(independent=True)
@@ -68,6 +70,7 @@ def test_overdue_schedules_and_failed_rows_do_not_starve_old_processing():
                "meta_upload_video_id": str(2000 + i)} for i in range(10)]
     selected = due_candidates(old + due + failed, now)
     assert [sum(p["id"].startswith(prefix) for p in selected) for prefix in ("due", "failed", "old")] == [4, 2, 2]
+    assert [sum(p["id"].startswith(prefix) for p in selected[:4]) for prefix in ("due", "failed", "old")] == [2, 1, 1]
     for row in selected:
         row["meta_next_check_at"] = now + 60
     following = due_candidates(old + due + failed, now)
