@@ -35,6 +35,12 @@ function Assert-BuildCleanupPath([string]$TargetPath) {
     }
 }
 
+function Copy-EmbeddedRuntime([string]$SourcePath, [string]$TargetPath) {
+    New-Item -ItemType Directory -Force -Path $TargetPath | Out-Null
+    robocopy $SourcePath $TargetPath /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NC /NS /XD __pycache__ /XF "*.pyc" | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "Cannot copy embedded runtime (robocopy $LASTEXITCODE)" }
+}
+
 if (-not (Test-Path -LiteralPath $csc)) { throw "C# compiler not found: $csc" }
 if (-not (Test-Path -LiteralPath $ToolSource)) { throw "Tool source folder not found: $ToolSource" }
 $ToolSource = (Resolve-Path -LiteralPath $ToolSource).Path
@@ -88,7 +94,7 @@ $expectedRequirements = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path 
 $cachedLockPath = Join-Path $lockedRuntime "requirements.lock.txt"
 $cachedLockMatches = (Test-Path -LiteralPath $cachedLockPath) -and ((Get-Content -LiteralPath $cachedLockPath -Raw).Contains("requirements=$expectedRequirements"))
 if ($cachedLockMatches) {
-    Copy-Item -LiteralPath $lockedRuntime -Destination $stageRuntime -Recurse -Force
+    Copy-EmbeddedRuntime $lockedRuntime $stageRuntime
     Write-Host "Reusing locked embedded runtime: $lockedRuntime"
 }
 elseif ($RuntimeSource) {
@@ -106,7 +112,7 @@ elseif ($RuntimeSource) {
             throw "RuntimeSource lock does not match requirements.txt"
         }
     }
-    Copy-Item -LiteralPath $sourceRuntime -Destination $stageRuntime -Recurse -Force
+    Copy-EmbeddedRuntime $sourceRuntime $stageRuntime
     Set-Content -LiteralPath (Join-Path $stageRuntime 'requirements.lock.txt') -Encoding ASCII -Value "python=3.11.7`nrequirements=$expectedRequirements"
     Write-Host "Using verified embedded runtime: $sourceRuntime"
 }
@@ -169,7 +175,7 @@ else {
         Assert-BuildCleanupPath $lockedRuntime
         Remove-Item -LiteralPath $lockedRuntime -Recurse -Force
     }
-    Copy-Item -LiteralPath $runtimeDir -Destination $lockedRuntime -Recurse -Force
+    Copy-EmbeddedRuntime $runtimeDir $lockedRuntime
 }
 
 if (-not (Test-Path -LiteralPath $WhisperModelSource)) { throw "Whisper model source missing: $WhisperModelSource" }
