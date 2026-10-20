@@ -286,7 +286,7 @@ internal static class AppLauncher
             };
             healthTimer.Start();
             FormClosed += delegate { healthTimer.Dispose(); };
-            Text = "Highlight Desktop Test v1.3.4";
+            Text = "Highlight Desktop Test v1.3.5";
             Width = 410;
             Height = 175;
             StartPosition = FormStartPosition.CenterScreen;

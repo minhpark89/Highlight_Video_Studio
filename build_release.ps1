@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.3.4",
+    [string]$Version = "1.3.5",
     [string]$PreviewRevision = "",
     [string]$BuildChannel = "desktop-test",
     [switch]$SkipTests,
@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 if ($BuildChannel -ne "desktop-test") { throw "Phase 1.5 permits only BUILD_CHANNEL=desktop-test" }
 $supportedVersions = @(
     "1.0.19", "1.1.6", "1.1.7", "1.1.8", "1.1.9", "1.2.0", "1.2.1", "1.2.2",
-    "1.2.3", "1.2.4", "1.2.5", "1.2.6", "1.2.7", "1.2.8", "1.2.9", "1.2.10", "1.2.11", "1.3.0", "1.3.1", "1.3.2", "1.3.3", "1.3.4"
+    "1.2.3", "1.2.4", "1.2.5", "1.2.6", "1.2.7", "1.2.8", "1.2.9", "1.2.10", "1.2.11", "1.3.0", "1.3.1", "1.3.2", "1.3.3", "1.3.4", "1.3.5"
 )
 if ($Version -notin $supportedVersions) { throw "Unsupported desktop-test APP_VERSION: $Version" }
 if ($Version -eq "1.0.19" -and -not $PreviewRevision) { throw "Legacy v1.0.19 builds require PreviewRevision" }
@@ -266,4 +266,3 @@ try {
 } catch { Write-Warning "Could not remove temporary stage: $stage" }
 Write-Host "Release built: $setup"
 Write-Host "SHA256: $hash"
-

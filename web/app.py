@@ -113,7 +113,7 @@ register_research_thumbnails(app)
 
 # This build identity is kept in code because upgrades intentionally preserve
 # the user's config.json, whose version field can therefore be missing/stale.
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.3.5"
 
 @app.after_request
 def add_header(response):

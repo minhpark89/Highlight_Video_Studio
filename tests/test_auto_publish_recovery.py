@@ -165,6 +165,50 @@ def test_foreign_legacy_social_text_gets_english_fallback_without_provider():
     provider.assert_not_called()
 
 
+def test_mixed_legacy_fields_are_validated_as_the_exact_reel_description(tmp_path, monkeypatch):
+    from src.english_text import assert_english
+    from src import content_packages
+
+    title = "“Ma'am, you have to leave” – Đối đầu căng thẳng ngay từ đầu"
+    caption = (
+        f"🔥 {title}\n\nA guide to reviewing the original video associated with {title}."
+        "\n\nWhat detail did you notice first?\n\n#highlight #viral #trending #mustwatch"
+    )
+    article_url = "https://example.test/original-video"
+    row = {
+        "id": "mixed", "status": "failed", "title": title, "content": caption,
+        "first_comment": f"See more of the original footage here: {article_url}",
+        "article_url": article_url, "content_package_id": "mixed-package",
+        "publish_error_code": "non_english_content", "retryable": False,
+        "publish_started_at": "2026-10-04 21:25:00",
+    }
+    package_path = tmp_path / "content-packages.json"
+    package_path.write_text(json.dumps([{
+        "id": "mixed-package", "result": {"hero_title": title, "caption": caption},
+        "article_url": article_url,
+    }]), encoding="utf-8")
+    monkeypatch.setattr(content_packages, "QUEUE_FILE", package_path)
+    assert_english(title)
+    assert_english(caption)
+    with pytest.raises(ValueError, match="non-English"):
+        assert_english(f"{title}\n\n{caption}")
+    assert not worker._post_public_text_is_english(row)
+    with mock.patch("src.content_packages.requests.post") as provider:
+        assert worker._requeue_safe_failures([row], NOW.timestamp(), NOW)
+    assert row["status"] == "scheduled"
+    assert row["english_repair"] == "deterministic_fallback"
+    assert row["legacy_source_title"] == title
+    assert row["article_url"] == article_url
+    assert row["first_comment"].count(article_url) == 1
+    assert "publish_started_at" not in row
+    assert_english(f"{row['title']}\n\n{row['content']}")
+    persisted = json.loads(package_path.read_text(encoding="utf-8"))[0]
+    assert persisted["result"]["hero_title"] == row["title"]
+    assert persisted["result"]["caption"] == row["content"]
+    assert persisted["article_url"] == article_url
+    provider.assert_not_called()
+
+
 def test_overdue_native_schedule_is_published_on_same_video(tmp_path, monkeypatch):
     row = queued()
     monkeypatch.setattr(worker, "POSTS_FILE", tmp_path / "posts.json")

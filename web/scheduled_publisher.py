@@ -143,6 +143,10 @@ def _post_public_text_is_english(post):
     try:
         for key in ("title", "content", "first_comment", "first_comment_snapshot"):
             assert_english(post.get(key, ""), key)
+        # Detection depends on the complete text. Individually accepted mixed
+        # fields can fail when combined into the actual Reel description.
+        description = f"{post.get('title', '')}\n\n{post.get('content', '')}"
+        assert_english(description, "Reel description")
     except ValueError:
         return False
     return True
