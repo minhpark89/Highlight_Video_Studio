@@ -3,3 +3,6 @@ src/data/english_heading_words.txt -text
 
 # Preserve byte-verified upstream font-license digests across Windows clones.
 web/static/fonts/*-OFL.txt -text
+
+# The embedded-runtime dependency lock hashes these exact bytes.
+requirements.txt text eol=lf
