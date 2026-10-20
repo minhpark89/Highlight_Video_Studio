@@ -94,8 +94,20 @@ if ($cachedLockMatches) {
 elseif ($RuntimeSource) {
     $sourceRuntime = (Resolve-Path -LiteralPath $RuntimeSource).Path
     $lockText = Get-Content -LiteralPath (Join-Path $sourceRuntime "requirements.lock.txt") -Raw
-    if (-not $lockText.Contains("requirements=$expectedRequirements")) { throw "RuntimeSource lock does not match requirements.txt" }
+    if (-not $lockText.Contains("requirements=$expectedRequirements")) {
+        # Older PC builds used mixed Windows line endings. Verify the old
+        # lock against its own requirements before accepting equivalent text.
+        $sourceRequirements = Join-Path (Split-Path -Parent $sourceRuntime) 'requirements.txt'
+        if (-not (Test-Path -LiteralPath $sourceRequirements)) { throw "RuntimeSource requirements unavailable" }
+        $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceRequirements).Hash.ToLowerInvariant()
+        $sourceText = [IO.File]::ReadAllText($sourceRequirements).Replace("`r`n", "`n")
+        $targetText = [IO.File]::ReadAllText((Join-Path $root 'requirements.txt')).Replace("`r`n", "`n")
+        if (-not $lockText.Contains("requirements=$sourceHash") -or $sourceText -cne $targetText) {
+            throw "RuntimeSource lock does not match requirements.txt"
+        }
+    }
     Copy-Item -LiteralPath $sourceRuntime -Destination $stageRuntime -Recurse -Force
+    Set-Content -LiteralPath (Join-Path $stageRuntime 'requirements.lock.txt') -Encoding ASCII -Value "python=3.11.7`nrequirements=$expectedRequirements"
     Write-Host "Using verified embedded runtime: $sourceRuntime"
 }
 
